@@ -4,17 +4,22 @@ Takes a city, ordered stops, start time, and mode. Returns a flat timeline.
 Reordering on the frontend just re-POSTs the new order; this endpoint is
 stateless.
 
-Days 3-8 will replace the fixture body with the real geocoder → chain →
-Routes API pipeline.
+Days 5-6: geocode_cached + stay_defaults wired in. Legs are still 15-min
+stubs — Routes API replaces them in Days 7-8.
 """
 
 from datetime import timedelta
+from typing import Literal
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
+from app.core.config import settings
 from app.models.request import PlanRequest
 from app.models.response import LegItem, Plan, StopItem
+from app.services.geocache import geocode_cached
+from app.services.geocoder import GeocodedPlace, GeocoderError
+from app.services.stay_defaults import lookup_stay_minutes
 
 router = APIRouter(prefix="/api", tags=["plan"])
 
@@ -23,23 +28,42 @@ router = APIRouter(prefix="/api", tags=["plan"])
 async def plan(req: PlanRequest) -> Plan:
     """Generate a timeline from the user's ordered stops.
 
-    **Stubbed** until day 7. Returns a deterministic fixture that mirrors
-    the real shape so the frontend can wire against it from day 1.
+    Phase 1: geocode every stop (cache-first via SQLite).
+    Phase 2: build timeline — real names/coords from geocoder, stay
+             durations from type table or user override, legs still stubbed.
     """
-    return _fixture_plan(req)
+    # Phase 1: geocode all stops sequentially before building the timeline
+    # so that leg to_name can use the resolved name of the next stop.
+    # Parallelising with asyncio.gather is a straightforward Day 7-8 upgrade
+    # once we have real latency data; the cache absorbs repeated lookups.
+    places: list[GeocodedPlace] = []
+    for stop in req.stops:
+        try:
+            place = await geocode_cached(
+                stop.query,
+                req.city,
+                settings.cache_db_path,
+                settings.cache_ttl_days,
+            )
+        except GeocoderError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not geocode stop: {stop.query!r}",
+            ) from exc
+        places.append(place)
 
-
-def _fixture_plan(req: PlanRequest) -> Plan:
-    """Deterministic fixture timeline. Echoes the user-supplied order with
-    naive 15-minute legs and the user-supplied (or 60-min default) stay
-    durations.
-    """
+    # Phase 2: build alternating Stop / Leg timeline.
     timeline: list[StopItem | LegItem] = []
     cursor = req.start_time
 
-    for i, stop in enumerate(req.stops):
-        stay = stop.stay_minutes if stop.stay_minutes is not None else 60
-        stay_source = "user" if stop.stay_minutes is not None else "default"
+    for i, (stop, place) in enumerate(zip(req.stops, places)):
+        stay_source: Literal["user", "default"]
+        if stop.stay_minutes is not None:
+            stay = stop.stay_minutes
+            stay_source = "user"
+        else:
+            stay, _ = lookup_stay_minutes(place.primary_type, place.types)
+            stay_source = "default"
 
         arrive_at = cursor
         depart_at = cursor + timedelta(minutes=stay)
@@ -47,9 +71,9 @@ def _fixture_plan(req: PlanRequest) -> Plan:
         timeline.append(
             StopItem(
                 query=stop.query,
-                name=stop.query,  # real geocoder fills this in later
-                lat=0.0,
-                lng=0.0,
+                name=place.name,
+                lat=place.lat,
+                lng=place.lng,
                 arrive_at=arrive_at,
                 depart_at=depart_at,
                 stay_minutes=stay,
@@ -58,21 +82,19 @@ def _fixture_plan(req: PlanRequest) -> Plan:
             )
         )
 
-        # Append a leg if this isn't the last stop.
         if i < len(req.stops) - 1:
             leg_depart = depart_at
             leg_arrive = depart_at + timedelta(minutes=15)
-            next_query = req.stops[i + 1].query
             timeline.append(
                 LegItem(
-                    from_name=stop.query,
-                    to_name=next_query,
+                    from_name=place.name,
+                    to_name=places[i + 1].name,
                     mode=req.mode,
                     duration_seconds=15 * 60,
                     depart_at=leg_depart,
                     arrive_at=leg_arrive,
                     summary=f"Fixture: 15 min via {req.mode}",
-                    map_url=_dir_url(stop.query, next_query, req.city, req.mode),
+                    map_url=_dir_url(stop.query, req.stops[i + 1].query, req.city, req.mode),
                 )
             )
             cursor = leg_arrive
