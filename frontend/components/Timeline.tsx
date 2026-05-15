@@ -7,15 +7,16 @@ interface Props {
 }
 
 export default function Timeline({ plan }: Props) {
-  // Build a Set of leg indices that have a degraded warning.
-  // affects_stop_index on a warning equals the leg index (leg i runs from
-  // stop[i] to stop[i+1], so its index matches the originating stop index).
+  const totalStops = plan.timeline.filter((i) => i.item_type === "stop").length;
+
+  // Leg indices that have a degraded-schedule warning.
   const degradedLegs = new Set(
     plan.warnings
       .filter((w) => w.affects_stop_index !== null)
       .map((w) => w.affects_stop_index as number)
   );
 
+  let stopIndex = 0;
   let legIndex = 0;
 
   return (
@@ -32,20 +33,29 @@ export default function Timeline({ plan }: Props) {
         </a>
       </div>
 
-      <ol>
+      {/*
+        Dotted vertical line: single pseudo on <ol> at left-[3.5rem].
+        3rem (w-12 time col) + 0.5rem (centre of w-4 dot col) = 3.5rem.
+        overflow-hidden clips the line flush with the list bounds.
+      */}
+      <ol className="relative overflow-hidden before:absolute before:bottom-4 before:left-[3.5rem] before:top-4 before:border-l before:border-dashed before:border-zinc-200">
         {plan.timeline.map((item, idx) => {
           if (item.item_type === "stop") {
+            const si = stopIndex;
+            stopIndex += 1;
             return (
               <li key={idx}>
-                <StopCard stop={item} />
+                <StopCard
+                  stop={item}
+                  isFirst={si === 0}
+                  isLast={si === totalStops - 1}
+                />
               </li>
             );
           }
 
-          // LegItem — capture and increment before JSX so closures are consistent
           const li = legIndex;
           legIndex += 1;
-
           return (
             <li key={idx}>
               <LegCard
