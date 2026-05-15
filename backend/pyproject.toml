@@ -87,4 +87,4 @@ disallow_untyped_defs = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-ra --strict-markers --cov=app --cov-report=term-missing"
+addopts = "-ra --strict-markers"
