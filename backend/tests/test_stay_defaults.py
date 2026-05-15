@@ -74,6 +74,17 @@ def test_transit_station_short_default() -> None:
     assert source == "train_station"
 
 
+def test_lodging_returns_zero() -> None:
+    # Hotels are departure anchors, not destinations — 0 min stay so the
+    # frontend renders no stay chip for them.
+    minutes, source = lookup_stay_minutes(
+        primary_type="lodging",
+        types=["lodging", "point_of_interest", "establishment"],
+    )
+    assert minutes == 0
+    assert source == "lodging"
+
+
 def test_guinness_storehouse_shape() -> None:
     # Realistic primary/types for Guinness Storehouse.
     # Even if the primary type is "tourist_attraction" (60), the array's

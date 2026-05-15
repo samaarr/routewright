@@ -98,6 +98,9 @@ DURATION_BY_TYPE: Final[dict[str, int]] = {
     "clothing_store": 30,
     "gift_shop": 20,
     "store": 20,
+    # Accommodation — used as departure anchors, not tourist destinations
+    "lodging": 0,
+    "hotel": 0,
     # Transit (a stop, not a destination)
     "train_station": 10,
     "subway_station": 10,
