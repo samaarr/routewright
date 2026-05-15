@@ -14,6 +14,7 @@ Design choices:
 
 import json
 import time
+from pathlib import Path
 
 import aiosqlite
 
@@ -79,6 +80,7 @@ async def put_cached(
     db_path: str,
 ) -> None:
     """Write a GeocodedPlace to the cache, creating the DB/table if needed."""
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(db_path) as db:
         await db.execute(_CREATE_TABLE_SQL)
         await db.execute(

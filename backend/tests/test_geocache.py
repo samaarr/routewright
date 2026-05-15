@@ -153,11 +153,28 @@ async def test_geocode_cached_writes_to_cache_after_api_call(db_path: str) -> No
 
 
 # ---------------------------------------------------------------------------
-# Test 6: upsert overwrites a stale entry
+# Test 6: put_cached creates nested parent directories (regression: 500 when
+#          ../cache/ didn't exist and put_cached had no mkdir guard)
 # ---------------------------------------------------------------------------
 
 
-async def test_put_cached_overwrites_existing_entry(db_path: str) -> None:
+async def test_put_cached_creates_parent_directories(tmp_path: Path) -> None:
+    nested_db = str(tmp_path / "a" / "b" / "cache.db")
+    key = _make_key("Guinness Storehouse", "Dublin, Ireland")
+    # Must not raise even though a/b/ doesn't exist yet.
+    await put_cached(key, _PLACE, nested_db)
+    assert Path(nested_db).exists()
+    result = await get_cached(key, nested_db, ttl_days=30)
+    assert result is not None
+    assert result.place_id == _PLACE.place_id
+
+
+# ---------------------------------------------------------------------------
+# Test 7: upsert overwrites a stale entry
+# ---------------------------------------------------------------------------
+
+
+async def test_put_cached_overwrites_existing_entry(db_path: str) -> None:  # test 7
     key = _make_key("Guinness Storehouse", "Dublin, Ireland")
 
     old_place = GeocodedPlace(
