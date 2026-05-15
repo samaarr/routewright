@@ -1,66 +1,66 @@
-// Mirrors backend/app/models/response.py.
-// Update both files together — there's no codegen yet.
+// Mirrors backend/app/models/response.py and request.py exactly.
+// Update both files together — there is no codegen yet.
 
-export type TransportMode = "transit" | "walking" | "driving" | "mixed";
-export type LegMode = "transit" | "walking" | "driving";
-export type ConflictSeverity = "info" | "warning" | "error";
+export type TransportMode = "transit" | "walking" | "driving";
+export type StaySource = "user" | "default";
+export type WarningSeverity = "info" | "warning" | "error";
 
-export interface Place {
-  place_id: string;
-  name: string;
-  address?: string | null;
-  lat: number;
-  lng: number;
-  opening_hours?: string[] | null;
+// ---- Request ---------------------------------------------------------
+
+export interface StopInput {
+  query: string;
+  stay_minutes?: number;
 }
 
-export interface Stop {
-  place_id: string;
+export interface PlanRequest {
+  city: string;
+  stops: StopInput[];
+  start_time: string; // ISO 8601, timezone-aware
+  mode: TransportMode;
+}
+
+// ---- Response --------------------------------------------------------
+
+export interface StopItem {
+  item_type: "stop";
+  query: string;
+  name: string;
+  address: string | null;
+  lat: number;
+  lng: number;
   arrive_at: string; // ISO 8601
   depart_at: string;
   stay_minutes: number;
-}
-
-export interface Leg {
-  from_place_id: string;
-  to_place_id: string;
-  mode: LegMode;
-  duration_seconds: number;
-  distance_meters?: number | null;
-  depart_at: string;
-  arrive_at: string;
+  stay_source: StaySource;
   map_url: string;
 }
 
-export interface Conflict {
-  severity: ConflictSeverity;
-  place_id?: string | null;
-  message: string;
+export interface LegItem {
+  item_type: "leg";
+  from_name: string;
+  to_name: string;
+  mode: TransportMode;
+  duration_seconds: number;
+  distance_meters: number | null;
+  depart_at: string;
+  arrive_at: string;
+  summary: string; // verbatim from Routes API, e.g. "Take the 47, 18 min"
+  map_url: string;
 }
+
+export interface PlanWarning {
+  severity: WarningSeverity;
+  message: string;
+  affects_stop_index: number | null;
+}
+
+export type TimelineItem = StopItem | LegItem;
 
 export interface Plan {
-  plan_id: string;
   generated_at: string;
+  city: string;
   mode: TransportMode;
+  timeline: TimelineItem[];
   overview_map_url: string;
-  overview_map_urls_overflow: string[];
-  places: Place[];
-  stops: Stop[];
-  legs: Leg[];
-  conflicts: Conflict[];
-  notes: string[];
-}
-
-export interface GenerateRequest {
-  text: string;
-  start_time: string;
-  mode?: TransportMode;
-  city_hint?: string;
-}
-
-export interface RecalculateRequest {
-  plan_id: string;
-  start_time: string;
-  mode?: TransportMode;
-  ordered_stops: { place_id: string; stay_minutes: number }[];
+  warnings: PlanWarning[];
 }
