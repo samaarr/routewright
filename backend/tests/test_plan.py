@@ -73,3 +73,70 @@ def test_plan_rejects_missing_city(client: TestClient, mock_geocode: None) -> No
     del payload["city"]
     response = client.post("/api/plan", json=payload)
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Day 6: assertions that verify geocoder + stay_defaults are actually wired
+# ---------------------------------------------------------------------------
+
+
+def test_plan_stop_name_comes_from_geocoder(client: TestClient, mock_geocode: None) -> None:
+    """StopItem.name is the resolved place name, not the raw user query."""
+    response = client.post("/api/plan", json=_valid_payload())
+    stops = [item for item in response.json()["timeline"] if item["item_type"] == "stop"]
+
+    assert stops[0]["name"] == "Trinity College Dublin"
+    assert stops[0]["query"] == "Trinity College"  # raw query preserved separately
+    assert stops[1]["name"] == "Temple Bar"
+    assert stops[2]["name"] == "Guinness Storehouse"
+
+
+def test_plan_stop_lat_lng_come_from_geocoder(client: TestClient, mock_geocode: None) -> None:
+    """StopItem lat/lng are geocoded coordinates, not 0.0/0.0."""
+    response = client.post("/api/plan", json=_valid_payload())
+    stops = [item for item in response.json()["timeline"] if item["item_type"] == "stop"]
+
+    assert stops[0]["lat"] == pytest.approx(53.3440)
+    assert stops[0]["lng"] == pytest.approx(-6.2546)
+    assert stops[0]["lat"] != 0.0
+    assert stops[0]["lng"] != 0.0
+
+
+def test_plan_default_stay_uses_type_table(client: TestClient, mock_geocode: None) -> None:
+    """Stops without a user override get stay_minutes from the place-type table.
+
+    Guinness Storehouse has no stay_minutes in this payload — but its mock
+    primaryType is 'brewery', which maps to 90 min in the defaults table.
+    Contrast with Trinity/Temple Bar (tourist_attraction → 60 min).
+    """
+    payload = _valid_payload()
+    # Remove the explicit stay override from Guinness so it falls through to defaults.
+    payload["stops"][2] = {"query": "Guinness Storehouse"}
+
+    response = client.post("/api/plan", json=payload)
+    stops = [item for item in response.json()["timeline"] if item["item_type"] == "stop"]
+
+    assert stops[0]["stay_minutes"] == 60   # tourist_attraction default
+    assert stops[0]["stay_source"] == "default"
+    assert stops[1]["stay_minutes"] == 60   # tourist_attraction default
+    assert stops[1]["stay_source"] == "default"
+    assert stops[2]["stay_minutes"] == 90   # brewery default
+    assert stops[2]["stay_source"] == "default"
+
+
+def test_plan_geocoder_error_returns_400(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stop that fails to geocode returns HTTP 400, not 500."""
+    from app.services.geocoder import GeocoderError
+
+    async def _always_fail(
+        query: str, city: str, db_path: str, ttl_days: int, client: object = None
+    ) -> None:
+        raise GeocoderError(f"place not found: {query!r}")
+
+    monkeypatch.setattr("app.routers.plan.geocode_cached", _always_fail)
+
+    response = client.post("/api/plan", json=_valid_payload())
+    assert response.status_code == 400
+    assert "geocode" in response.json()["detail"].lower()
