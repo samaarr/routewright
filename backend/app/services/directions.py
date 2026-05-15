@@ -36,9 +36,7 @@ _MODE_MAP: dict[str, str] = {
 # Field mask: only what we use. Keeps SKU costs at the Pro tier minimum and
 # response payloads small. Order matters in transit responses (legs.steps
 # are returned only if transit-specific fields are requested).
-_FIELD_MASK_COMMON = (
-    "routes.duration,routes.distanceMeters,routes.legs.startLocation,routes.legs.endLocation"
-)
+_FIELD_MASK_COMMON = "routes.duration,routes.distanceMeters"
 _FIELD_MASK_TRANSIT = (
     _FIELD_MASK_COMMON
     + ",routes.legs.steps.transitDetails.stopDetails.departureTime"
