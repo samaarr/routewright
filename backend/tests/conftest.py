@@ -1,11 +1,13 @@
 """Shared pytest fixtures."""
 
 from collections.abc import Iterator
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services.directions import LegResult
 from app.services.geocoder import GeocodedPlace
 
 
@@ -62,6 +64,35 @@ _FALLBACK_PLACE = GeocodedPlace(
     primary_type="tourist_attraction",
     types=["tourist_attraction"],
 )
+
+
+@pytest.fixture
+def mock_directions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patch fetch_leg in the plan router with a predictable 20-min result.
+
+    Uses 20 min (not 15) so any test that accidentally runs against the old
+    15-min stub will fail immediately — it acts as a canary.
+    """
+
+    async def _fake_fetch_leg(
+        origin_lat: float,
+        origin_lng: float,
+        destination_lat: float,
+        destination_lng: float,
+        depart_at: datetime,
+        mode: str,
+        client: object = None,
+    ) -> LegResult:
+        return LegResult(
+            duration_seconds=20 * 60,
+            distance_meters=2000,
+            depart_at=depart_at,
+            arrive_at=depart_at + timedelta(seconds=20 * 60),
+            summary=f"Mock: 20 min via {mode}",
+            transit_line=None,
+        )
+
+    monkeypatch.setattr("app.routers.plan.fetch_leg", _fake_fetch_leg)
 
 
 @pytest.fixture
