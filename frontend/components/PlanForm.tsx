@@ -1,10 +1,10 @@
-import type { PlanRequest, TransportMode } from "@/lib/types";
+import type { FormState, TransportMode } from "@/lib/types";
 import StopList from "./StopList";
 
 interface Props {
-  form: PlanRequest;
-  onChange: (form: PlanRequest) => void;
-  onSubmit: (form: PlanRequest) => void;
+  form: FormState;
+  onChange: (form: FormState) => void;
+  onSubmit: (form: FormState) => void;
   isLoading: boolean;
 }
 

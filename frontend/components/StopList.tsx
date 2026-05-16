@@ -1,8 +1,13 @@
-import type { StopInput } from "@/lib/types";
+// WHY uuid keys: using array index as key causes React to cross-wire inputs
+// when a stop is removed from the middle. Using query string as key causes
+// React and dnd-kit to treat two stops with the same query as the same
+// element — dragging one would "tag along" the other and multiply entries
+// in the timeline. Stable UUIDs that never derive from user input fix both.
+import type { StopDraft } from "@/lib/types";
 
 interface Props {
-  stops: StopInput[];
-  onChange: (stops: StopInput[]) => void;
+  stops: StopDraft[];
+  onChange: (stops: StopDraft[]) => void;
 }
 
 export default function StopList({ stops, onChange }: Props) {
@@ -11,7 +16,7 @@ export default function StopList({ stops, onChange }: Props) {
   }
 
   function addStop() {
-    onChange([...stops, { query: "" }]);
+    onChange([...stops, { id: crypto.randomUUID(), query: "" }]);
   }
 
   function removeStop(index: number) {
@@ -21,7 +26,7 @@ export default function StopList({ stops, onChange }: Props) {
   return (
     <div className="space-y-2">
       {stops.map((stop, i) => (
-        <div key={i} className="flex items-center gap-2">
+        <div key={stop.id} className="flex items-center gap-2">
           <span className="w-4 flex-shrink-0 text-right text-xs text-zinc-400">
             {i + 1}
           </span>

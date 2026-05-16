@@ -23,24 +23,26 @@ import LegCard from "./LegCard";
 
 interface Props {
   plan: Plan;
-  onReorder: (newQueries: string[]) => void;
+  // UUIDs parallel to plan.timeline stop items (stopIds[i] ↔ i-th stop in
+  // timeline). Never derived from query strings — fixes the duplicate-drag
+  // bug where two stops with the same query shared a dnd-kit id.
+  stopIds: string[];
+  onReorder: (newIds: string[]) => void;
   onLegRefresh: (legTimelineIndex: number) => void;
   isReordering: boolean;
   refreshingLegIdx: number | null;
 }
 
 // --- SortableStopRow ---
-// Thin dnd-kit wrapper around StopCard. Handles transform/transition CSS and
-// passes only the drag handle listeners to the gripper button so that clicks
-// on names, links, and other interactive children still work.
 
 interface SortableStopRowProps {
+  id: string;
   stop: StopItemType;
   isFirst: boolean;
   isLast: boolean;
 }
 
-function SortableStopRow({ stop, isFirst, isLast }: SortableStopRowProps) {
+function SortableStopRow({ id, stop, isFirst, isLast }: SortableStopRowProps) {
   const {
     attributes,
     listeners,
@@ -48,7 +50,7 @@ function SortableStopRow({ stop, isFirst, isLast }: SortableStopRowProps) {
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: stop.query });
+  } = useSortable({ id });
 
   return (
     <li
@@ -74,6 +76,7 @@ function SortableStopRow({ stop, isFirst, isLast }: SortableStopRowProps) {
 
 export default function Timeline({
   plan,
+  stopIds,
   onReorder,
   onLegRefresh,
   isReordering,
@@ -89,9 +92,12 @@ export default function Timeline({
       .map((w) => w.affects_stop_index as number)
   );
 
-  const stopQueries = plan.timeline
-    .filter((i): i is StopItemType => i.item_type === "stop")
-    .map((s) => s.query);
+  // Build a UUID → StopItem map so DragOverlay can find the active stop
+  // without relying on query-string lookups (which break on duplicates).
+  const stops = plan.timeline.filter(
+    (i): i is StopItemType => i.item_type === "stop"
+  );
+  const idToStop = new Map(stopIds.map((id, i) => [id, stops[i]]));
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
@@ -110,19 +116,15 @@ export default function Timeline({
     setActiveId(null);
     if (!over || active.id === over.id) return;
 
-    const oldIndex = stopQueries.indexOf(active.id as string);
-    const newIndex = stopQueries.indexOf(over.id as string);
+    const oldIndex = stopIds.indexOf(active.id as string);
+    const newIndex = stopIds.indexOf(over.id as string);
     if (oldIndex === -1 || newIndex === -1) return;
 
-    onReorder(arrayMove(stopQueries, oldIndex, newIndex));
+    // arrayMove on UUIDs — no ambiguity even with duplicate query strings.
+    onReorder(arrayMove(stopIds, oldIndex, newIndex));
   }
 
-  const activeStop = activeId
-    ? plan.timeline.find(
-        (i): i is StopItemType =>
-          i.item_type === "stop" && i.query === activeId
-      ) ?? null
-    : null;
+  const activeStop = activeId ? (idToStop.get(activeId) ?? null) : null;
 
   let stopIndex = 0;
   let legIndex = 0;
@@ -147,7 +149,7 @@ export default function Timeline({
           </a>
         </div>
 
-        <SortableContext items={stopQueries} strategy={verticalListSortingStrategy}>
+        <SortableContext items={stopIds} strategy={verticalListSortingStrategy}>
           {/*
             Vertical dotted line sits at left-[5rem]:
             w-6 (gripper, 1.5rem) + w-12 (time, 3rem) + ½×w-4 (dot centre, 0.5rem) = 5rem
@@ -163,10 +165,12 @@ export default function Timeline({
               {plan.timeline.map((item, idx) => {
                 if (item.item_type === "stop") {
                   const si = stopIndex;
+                  const id = stopIds[si] ?? `stop-${si}`;
                   stopIndex += 1;
                   return (
                     <SortableStopRow
-                      key={item.query}
+                      key={id}
+                      id={id}
                       stop={item}
                       isFirst={si === 0}
                       isLast={si === totalStops - 1}
@@ -178,7 +182,7 @@ export default function Timeline({
                 const lti = idx;
                 legIndex += 1;
                 return (
-                  <li key={idx}>
+                  <li key={`leg-${idx}`}>
                     <LegCard
                       leg={item}
                       isFirstLeg={li === 0}
@@ -195,7 +199,6 @@ export default function Timeline({
         </SortableContext>
       </div>
 
-      {/* Floating ghost of the stop being dragged */}
       <DragOverlay dropAnimation={null}>
         {activeStop ? (
           <div className="rounded border border-blue-200 bg-white shadow-lg">

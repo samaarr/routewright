@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { Plan, PlanRequest, StopItem } from "@/lib/types";
+import type { FormState, Plan, PlanRequest, StopItem } from "@/lib/types";
 import { postPlan, postRefreshLeg } from "@/lib/api";
 import PlanForm from "./PlanForm";
 import Timeline from "./Timeline";
@@ -11,15 +11,30 @@ type Refreshing =
   | { kind: "reorder" }
   | { kind: "leg"; legTimelineIndex: number };
 
-const DEFAULT_FORM: PlanRequest = {
-  city: "",
-  stops: [{ query: "" }, { query: "" }],
-  start_time: "",
-  mode: "transit",
-};
+// Initialiser function so crypto.randomUUID() runs on the client at mount,
+// not at module-load time (which would run on the server during SSR).
+function makeDefaultForm(): FormState {
+  return {
+    city: "",
+    stops: [
+      { id: crypto.randomUUID(), query: "" },
+      { id: crypto.randomUUID(), query: "" },
+    ],
+    start_time: "",
+    mode: "transit",
+  };
+}
+
+// Strip the frontend-only id field before sending to the backend.
+function toPayload(form: FormState): PlanRequest {
+  return {
+    ...form,
+    stops: form.stops.map(({ id: _, ...rest }) => rest),
+  };
+}
 
 export default function PlannerPage() {
-  const [form, setForm] = useState<PlanRequest>(DEFAULT_FORM);
+  const [form, setForm] = useState<FormState>(makeDefaultForm);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -27,12 +42,12 @@ export default function PlannerPage() {
   // Reorder/refresh errors sit near the timeline, not above the form.
   const [timelineError, setTimelineError] = useState<string | null>(null);
 
-  async function handleSubmit(req: PlanRequest) {
+  async function handleSubmit(formState: FormState) {
     setStatus("loading");
     setErrorMsg(null);
     setTimelineError(null);
     try {
-      const result = await postPlan(req);
+      const result = await postPlan(toPayload(formState));
       setPlan(result);
       setStatus("idle");
     } catch (err) {
@@ -41,25 +56,24 @@ export default function PlannerPage() {
     }
   }
 
-  async function handleReorder(newQueries: string[]) {
+  // newIds: UUIDs in the new stop order — parallel to form.stops.
+  async function handleReorder(newIds: string[]) {
     if (!plan) return;
-    // Snapshot so we can revert on failure.
     const prevStops = form.stops;
 
-    // Build reordered stops preserving any user-set stay_minutes.
-    const queryToStop = new Map(prevStops.map((s) => [s.query, s]));
-    const newStops = newQueries.map((q) => queryToStop.get(q) ?? { query: q });
+    // Reorder by UUID so identical query strings don't cross-wire.
+    const idToStop = new Map(prevStops.map((s) => [s.id, s]));
+    const newStops = newIds.map((id) => idToStop.get(id)!);
     const newForm = { ...form, stops: newStops };
 
     setForm(newForm);
     setRefreshing({ kind: "reorder" });
     setTimelineError(null);
     try {
-      const result = await postPlan(newForm);
+      const result = await postPlan(toPayload(newForm));
       setPlan(result);
       setRefreshing({ kind: "none" });
     } catch (err) {
-      // Revert to previous stop order.
       setForm({ ...form, stops: prevStops });
       setRefreshing({ kind: "none" });
       setTimelineError(
@@ -71,13 +85,10 @@ export default function PlannerPage() {
   async function handleLegRefresh(legTimelineIndex: number) {
     if (!plan) return;
 
-    // Find the stops on either side of this leg.
     const timeline = plan.timeline;
     const legItem = timeline[legTimelineIndex];
     if (!legItem || legItem.item_type !== "leg") return;
 
-    // The stop before the leg is at legTimelineIndex - 1,
-    // the stop after is at legTimelineIndex + 1.
     const fromStop = timeline[legTimelineIndex - 1] as StopItem | undefined;
     const toStop = timeline[legTimelineIndex + 1] as StopItem | undefined;
     if (!fromStop || fromStop.item_type !== "stop") return;
@@ -96,7 +107,6 @@ export default function PlannerPage() {
         mode: form.mode,
         city: form.city,
       });
-      // Splice the refreshed leg into the existing plan — stops stay unchanged.
       const newTimeline = [...timeline];
       newTimeline[legTimelineIndex] = refreshed;
       setPlan({ ...plan, timeline: newTimeline });
@@ -113,11 +123,15 @@ export default function PlannerPage() {
   const refreshingLegIdx =
     refreshing.kind === "leg" ? refreshing.legTimelineIndex : null;
 
+  // Parallel array: form.stops[i].id corresponds to the i-th StopItem in
+  // plan.timeline. Passed to Timeline so it can use UUIDs for dnd-kit ids
+  // and React keys instead of query strings.
+  const stopIds = form.stops.map((s) => s.id);
+
   return (
     <main className="mx-auto max-w-lg px-4 py-10">
       <h1 className="mb-8 text-2xl font-bold text-zinc-900">RouteWright</h1>
 
-      {/* Form-level errors: bad stop names, geocode failures */}
       {status === "error" && errorMsg && (
         <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {errorMsg}
@@ -139,7 +153,6 @@ export default function PlannerPage() {
 
       {plan !== null && (
         <div className="mt-8">
-          {/* Timeline-level errors: transient reorder/refresh failures */}
           {timelineError && (
             <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
               <span className="flex-1">{timelineError}</span>
@@ -156,6 +169,7 @@ export default function PlannerPage() {
 
           <Timeline
             plan={plan}
+            stopIds={stopIds}
             onReorder={handleReorder}
             onLegRefresh={handleLegRefresh}
             isReordering={isReordering}

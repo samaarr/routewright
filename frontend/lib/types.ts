@@ -19,6 +19,24 @@ export interface PlanRequest {
   mode: TransportMode;
 }
 
+// Frontend-only: StopInput extended with a stable client-generated UUID.
+// The id is stripped before any network call. Never derived from user
+// input so two stops with identical query strings stay distinguishable
+// by React and dnd-kit. See the duplicate-drag bug fix for history.
+export interface StopDraft extends StopInput {
+  id: string;
+}
+
+// Form state that flows through PlanForm / StopList. Uses StopDraft so
+// the id is threaded all the way to the sortable list without touching
+// the backend contract.
+export interface FormState {
+  city: string;
+  stops: StopDraft[];
+  start_time: string;
+  mode: TransportMode;
+}
+
 // ---- Response --------------------------------------------------------
 
 export interface StopItem {
