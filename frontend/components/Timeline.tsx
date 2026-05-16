@@ -101,6 +101,10 @@ export default function Timeline({
     setActiveId(event.active.id as string);
   }
 
+  function handleDragCancel() {
+    setActiveId(null);
+  }
+
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     setActiveId(null);
@@ -128,6 +132,7 @@ export default function Timeline({
       sensors={sensors}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
     >
       <div>
         <div className="mb-5 flex items-center justify-between">
