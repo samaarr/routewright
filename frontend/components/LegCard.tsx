@@ -1,14 +1,41 @@
 import type { LegItem } from "@/lib/types";
 
+function RefreshIcon({ spinning }: { spinning: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      aria-hidden="true"
+      className={`h-3.5 w-3.5 ${spinning ? "animate-spin" : ""}`}
+    >
+      <path d="M13.5 8a5.5 5.5 0 1 1-1.39-3.65" />
+      <polyline points="13.5 2 13.5 5.5 10 5.5" />
+    </svg>
+  );
+}
+
 interface Props {
   leg: LegItem;
   isFirstLeg: boolean;
   isDegraded: boolean;
+  legTimelineIndex: number;
+  onRefresh: (legTimelineIndex: number) => void;
+  isRefreshing: boolean;
 }
 
-export default function LegCard({ leg, isFirstLeg, isDegraded }: Props) {
+export default function LegCard({
+  leg,
+  isFirstLeg,
+  isDegraded,
+  legTimelineIndex,
+  onRefresh,
+  isRefreshing,
+}: Props) {
   return (
-    <div className="py-1 pl-16">
+    <div className="py-1 pl-20">
       <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
         <span className="text-zinc-400">↓</span>
         <span className={`text-sm ${isDegraded ? "text-amber-700" : "text-zinc-600"}`}>
@@ -24,6 +51,16 @@ export default function LegCard({ leg, isFirstLeg, isDegraded }: Props) {
         >
           Get directions ↗
         </a>
+        <span className="text-zinc-300">·</span>
+        <button
+          type="button"
+          onClick={() => onRefresh(legTimelineIndex)}
+          disabled={isRefreshing}
+          aria-label="Refresh this leg with current transit times"
+          className="text-zinc-400 hover:text-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <RefreshIcon spinning={isRefreshing} />
+        </button>
       </div>
 
       {isDegraded && (
