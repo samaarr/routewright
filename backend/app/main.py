@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.models.response import ErrorResponse
-from app.routers import health, plan
+from app.routers import health, plan, refresh_leg
 
 logging.basicConfig(level=settings.log_level)
 log = logging.getLogger("routewright")
@@ -36,6 +36,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(plan.router)
+app.include_router(refresh_leg.router)
 
 
 @app.exception_handler(RequestValidationError)
