@@ -10,8 +10,10 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 
 from app.core.config import settings
+from app.core.limiter import limiter
 from app.models.response import ErrorResponse
 from app.routers import health, plan, refresh_leg
 
@@ -25,6 +27,7 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url=None,
 )
+app.state.limiter = limiter
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,6 +40,15 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(plan.router)
 app.include_router(refresh_leg.router)
+
+async def _rate_limit_handler(_request: Request, _exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={"error": "rate_limit_exceeded", "detail": "Daily limit reached — try again tomorrow."},
+    )
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
 
 @app.exception_handler(RequestValidationError)

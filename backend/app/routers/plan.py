@@ -14,9 +14,10 @@ from datetime import datetime, timedelta
 from typing import Any, Literal
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.core.config import settings
+from app.core.limiter import limiter
 from app.models.request import PlanRequest
 from app.models.response import LegItem, Plan, StopItem
 from app.models.response import Warning as PlanWarning
@@ -31,7 +32,8 @@ _FALLBACK_LEG_SECONDS = 15 * 60
 
 
 @router.post("/plan", response_model=Plan)
-async def plan(req: PlanRequest) -> Plan:
+@limiter.limit("20/day")
+async def plan(request: Request, req: PlanRequest) -> Plan:
     """Generate a timeline from the user's ordered stops.
 
     Phase 1: geocode every stop (cache-first via SQLite).

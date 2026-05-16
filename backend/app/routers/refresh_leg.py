@@ -11,9 +11,10 @@ meaningful: "if I left right now, how long would this leg take?"
 from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.core.limiter import limiter
 from app.models.request import TransportMode
 from app.models.response import LegItem
 from app.services.directions import DirectionsError, fetch_leg
@@ -33,7 +34,8 @@ class RefreshLegRequest(BaseModel):
 
 
 @router.post("/refresh-leg", response_model=LegItem)
-async def refresh_leg(req: RefreshLegRequest) -> LegItem:
+@limiter.limit("60/day")
+async def refresh_leg(request: Request, req: RefreshLegRequest) -> LegItem:
     """Fetch a single leg using the current wall-clock time as departure.
 
     Returns a LegItem in the same shape as the items in a Plan.timeline,
