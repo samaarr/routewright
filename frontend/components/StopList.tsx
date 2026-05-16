@@ -52,7 +52,7 @@ export default function StopList({ stops, onChange }: Props) {
             onClick={() => removeStop(i)}
             disabled={stops.length <= 2}
             aria-label={`Remove stop ${i + 1}`}
-            className="text-lg leading-none text-zinc-400 hover:text-zinc-700 disabled:cursor-not-allowed disabled:opacity-30"
+            className="-m-2 p-2 text-lg leading-none text-zinc-400 hover:text-zinc-700 disabled:cursor-not-allowed disabled:opacity-30"
           >
             ×
           </button>

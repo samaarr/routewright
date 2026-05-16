@@ -56,7 +56,7 @@ export default function LegCard({
           onClick={() => onRefresh(legTimelineIndex)}
           disabled={isRefreshing}
           aria-label="Refresh this leg with current transit times"
-          className="ml-1.5 text-zinc-400 hover:text-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
+          className="-m-2 p-2 text-zinc-400 hover:text-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <RefreshIcon spinning={isRefreshing} />
         </button>
