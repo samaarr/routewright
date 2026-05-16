@@ -11,14 +11,19 @@ type Refreshing =
   | { kind: "reorder" }
   | { kind: "leg"; legTimelineIndex: number };
 
-// Initialiser function so crypto.randomUUID() runs on the client at mount,
-// not at module-load time (which would run on the server during SSR).
+function uid(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
 function makeDefaultForm(): FormState {
   return {
     city: "",
     stops: [
-      { id: crypto.randomUUID(), query: "" },
-      { id: crypto.randomUUID(), query: "" },
+      { id: uid(), query: "" },
+      { id: uid(), query: "" },
     ],
     start_time: "",
     mode: "transit",

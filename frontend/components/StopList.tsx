@@ -5,6 +5,15 @@
 // in the timeline. Stable UUIDs that never derive from user input fix both.
 import type { StopDraft } from "@/lib/types";
 
+// crypto.randomUUID requires a secure context (HTTPS or localhost). Fall back
+// to a random string so the button works when accessing via a LAN IP in dev.
+function uid(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
 interface Props {
   stops: StopDraft[];
   onChange: (stops: StopDraft[]) => void;
@@ -16,7 +25,7 @@ export default function StopList({ stops, onChange }: Props) {
   }
 
   function addStop() {
-    onChange([...stops, { id: crypto.randomUUID(), query: "" }]);
+    onChange([...stops, { id: uid(), query: "" }]);
   }
 
   function removeStop(index: number) {
@@ -54,7 +63,7 @@ export default function StopList({ stops, onChange }: Props) {
         type="button"
         onClick={addStop}
         disabled={stops.length >= 12}
-        className="text-sm text-blue-600 hover:text-blue-800 disabled:cursor-not-allowed disabled:opacity-40"
+        className="py-2 text-sm text-blue-600 hover:text-blue-800 disabled:cursor-not-allowed disabled:opacity-40"
       >
         + Add stop
       </button>
