@@ -5,7 +5,7 @@ generation and reorder/edit, since the only persistent state v1 has is the
 geocoding cache — the client always sends the full ordered list.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -64,3 +64,13 @@ class PlanRequest(BaseModel):
         default="transit",
         description="Transport mode for all legs. v1 uses a single mode globally.",
     )
+
+    @field_validator("start_time")
+    @classmethod
+    def start_time_not_stale(cls, v: datetime) -> datetime:
+        if v.tzinfo is None:
+            raise ValueError("start_time must be timezone-aware (include Z or offset)")
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        if v < cutoff:
+            raise ValueError("start_time must not be more than 30 days in the past")
+        return v

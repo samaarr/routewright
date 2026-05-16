@@ -30,6 +30,11 @@ router = APIRouter(prefix="/api", tags=["plan"])
 
 _FALLBACK_LEG_SECONDS = 15 * 60
 
+# Words that appear in both neighbourhood names and venue names; triggers a
+# disambiguation warning when the geocoder returns a food/drink place type.
+_AMBIGUOUS_NEIGHBOURHOOD_TOKENS = {"bar", "quarter", "village", "yard"}
+_FOOD_PLACE_TYPES = {"bar", "pub", "restaurant", "cafe", "bakery", "meal_takeaway", "night_club", "food"}
+
 
 @router.post("/plan", response_model=Plan)
 @limiter.limit("20/day")
@@ -60,6 +65,39 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
                 detail=f"Could not geocode stop: {stop.query!r}",
             ) from exc
         places.append(place)
+
+    # Post-geocode warnings — checked before any routing.
+    warnings: list[PlanWarning] = []
+    for i in range(len(places) - 1):
+        if places[i].place_id == places[i + 1].place_id:
+            warnings.append(
+                PlanWarning(
+                    severity="warning",
+                    message=(
+                        f"Stop {i + 1} and stop {i + 2} both resolve to the same "
+                        f"location ({places[i].name}). The leg between them will "
+                        "have near-zero duration."
+                    ),
+                    affects_stop_index=i,
+                )
+            )
+    for stop, place in zip(req.stops, places):
+        tokens = {t.lower().strip("',.-") for t in stop.query.split()}
+        if (
+            tokens & _AMBIGUOUS_NEIGHBOURHOOD_TOKENS
+            and place.primary_type in _FOOD_PLACE_TYPES
+        ):
+            warnings.append(
+                PlanWarning(
+                    severity="info",
+                    message=(
+                        f"'{stop.query}' resolved to a {place.primary_type} "
+                        f"({place.name}). If you meant the neighbourhood, try "
+                        "adding a street or landmark for clarity."
+                    ),
+                    affects_stop_index=None,
+                )
+            )
 
     # Phase 2: resolve stay_minutes for every stop.
     stays: list[int] = []
@@ -98,7 +136,6 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
     raw_results: list[Any] = list(await asyncio.gather(*leg_tasks, return_exceptions=True))
 
     # Phase 5: walk forward with real leg durations; degrade any failed leg.
-    warnings: list[PlanWarning] = []
     timeline: list[StopItem | LegItem] = []
     cursor = req.start_time
 
