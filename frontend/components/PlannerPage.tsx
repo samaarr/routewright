@@ -130,7 +130,12 @@ export default function PlannerPage() {
 
   return (
     <main className="mx-auto max-w-lg px-4 py-10">
-      <h1 className="mb-8 text-2xl font-bold text-zinc-900">RouteWright</h1>
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold text-zinc-900">RouteWright</h1>
+        <p className="mt-1 text-base text-zinc-600">
+          Multi-stop transit planning that Google Maps doesn&apos;t do.
+        </p>
+      </div>
 
       {status === "error" && errorMsg && (
         <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -177,6 +182,17 @@ export default function PlannerPage() {
           />
         </div>
       )}
+      <p className="mt-12 text-center text-sm text-zinc-400">
+        Made in Dublin &middot;{" "}
+        <a
+          href="https://github.com/samaarr/routewright"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline underline-offset-2 hover:text-zinc-600"
+        >
+          github.com/samaarr/routewright
+        </a>
+      </p>
     </main>
   );
 }
