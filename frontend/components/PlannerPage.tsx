@@ -30,11 +30,16 @@ function makeDefaultForm(): FormState {
   };
 }
 
-// Strip the frontend-only id field before sending to the backend.
+// Strip the frontend-only id field and convert the naive datetime-local string
+// to a UTC ISO 8601 string before sending to the backend.
+// new Date("2026-05-17T19:10") interprets the value in the browser's local
+// timezone; .toISOString() converts to UTC with a trailing Z — the backend
+// validator requires timezone-aware datetimes.
 function toPayload(form: FormState): PlanRequest {
   return {
     ...form,
     stops: form.stops.map(({ id: _, ...rest }) => rest),
+    start_time: new Date(form.start_time).toISOString(),
   };
 }
 

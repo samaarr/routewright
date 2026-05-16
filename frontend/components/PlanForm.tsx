@@ -13,13 +13,9 @@ const MODES: TransportMode[] = ["transit", "walking", "driving"];
 export default function PlanForm({ form, onChange, onSubmit, isLoading }: Props) {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    // datetime-local gives "YYYY-MM-DDTHH:MM" — append seconds + Z so the
-    // backend receives a timezone-aware ISO 8601 string. Taking only the
-    // first 16 chars guards against browsers that include seconds.
-    const startTime = form.start_time
-      ? form.start_time.slice(0, 16) + ":00Z"
-      : "";
-    onSubmit({ ...form, start_time: startTime });
+    // start_time conversion (naive → UTC ISO) happens in toPayload() in
+    // PlannerPage so both the initial submit and reorder paths are covered.
+    onSubmit(form);
   }
 
   return (
