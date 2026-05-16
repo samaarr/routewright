@@ -4,11 +4,17 @@ All environment variables are read here and nowhere else.
 Import `settings` from this module to access them.
 """
 
+import os
 from functools import lru_cache
 from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Only read a .env file in local development. In production (APP_ENV=production)
+# env vars are injected directly by the platform (Railway) — reading a .env file
+# there would let a stale file shadow the real platform values.
+_env_file = ".env" if os.getenv("APP_ENV", "development") != "production" else None
 
 
 class Settings(BaseSettings):
@@ -18,7 +24,7 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_env_file,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -38,7 +44,7 @@ class Settings(BaseSettings):
     max_requests_per_ip_per_day: int = 20
 
     # --- Cache ---
-    cache_db_path: str = "../cache/places_cache.db"
+    cache_db_path: str = "./cache/places_cache.db"
     cache_ttl_days: int = 30
 
     # --- Models ---

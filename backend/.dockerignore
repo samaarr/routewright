@@ -1,0 +1,29 @@
+# Secrets and local config — must never enter the image
+.env
+.env.local
+.env.*.local
+*.env
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Local cache that shouldn't ship
+cache/*.db
+cache/*.sqlite*
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Tests don't run in prod
+tests/
