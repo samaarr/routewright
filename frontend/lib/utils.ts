@@ -1,11 +1,12 @@
-/**
- * Extract HH:MM from an ISO 8601 string without timezone conversion.
- * Slices directly rather than using `new Date()` so the displayed time
- * always matches the planned city time, regardless of the user's browser
- * timezone.
- */
+// Render an ISO 8601 UTC string as HH:MM in the browser's local timezone.
+// The payload converts the user's typed local time to UTC before sending;
+// converting back here restores the time the user originally picked.
 export function fmtTime(iso: string): string {
-  return iso.slice(11, 16);
+  return new Date(iso).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 export function fmtDuration(seconds: number): string {
