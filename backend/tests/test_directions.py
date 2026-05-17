@@ -10,9 +10,12 @@ from datetime import datetime, timezone
 import httpx
 import pytest
 
+from datetime import timedelta
+
 from app.services.directions import (
     DirectionsError,
     _build_request_body,
+    _extract_scheduled_times,
     _extract_transit_line_name,
     _format_duration,
     _parse_duration,
@@ -224,3 +227,86 @@ async def test_fetch_leg_rejects_bad_mode() -> None:
             depart_at=datetime.now(timezone.utc),
             mode="cycling",  # type: ignore[arg-type]
         )
+
+
+# --- Scheduled time extraction ---
+
+
+def test_extract_scheduled_times_uses_transit_step_times() -> None:
+    depart_at = datetime(2026, 5, 18, 12, 3, tzinfo=timezone.utc)
+    route = {
+        "legs": [
+            {
+                "steps": [
+                    {"travelMode": "WALK"},
+                    {
+                        "travelMode": "TRANSIT",
+                        "transitDetails": {
+                            "stopDetails": {
+                                "departureTime": "2026-05-18T12:14:00Z",
+                                "arrivalTime": "2026-05-18T12:35:00Z",
+                            }
+                        },
+                    },
+                    {"travelMode": "WALK"},
+                ]
+            }
+        ]
+    }
+    actual_depart, actual_arrive = _extract_scheduled_times(route, depart_at, 1260)
+    assert actual_depart == datetime(2026, 5, 18, 12, 14, tzinfo=timezone.utc)
+    assert actual_arrive == datetime(2026, 5, 18, 12, 35, tzinfo=timezone.utc)
+
+
+def test_extract_scheduled_times_falls_back_without_transit_steps() -> None:
+    depart_at = datetime(2026, 5, 18, 12, 3, tzinfo=timezone.utc)
+    route = {"legs": [{"steps": [{"travelMode": "WALK"}]}]}
+    actual_depart, actual_arrive = _extract_scheduled_times(route, depart_at, 600)
+    assert actual_depart == depart_at
+    assert actual_arrive == depart_at + timedelta(seconds=600)
+
+
+@pytest.mark.asyncio
+async def test_fetch_leg_transit_uses_scheduled_times() -> None:
+    """leg.depart_at and arrive_at reflect scheduled bus times, not computed times."""
+    payload = {
+        "routes": [
+            {
+                "duration": "1260s",
+                "distanceMeters": 3800,
+                "legs": [
+                    {
+                        "steps": [
+                            {"travelMode": "WALK"},
+                            {
+                                "travelMode": "TRANSIT",
+                                "transitDetails": {
+                                    "transitLine": {"nameShort": "23"},
+                                    "stopDetails": {
+                                        "departureTime": "2026-05-18T12:14:00Z",
+                                        "arrivalTime": "2026-05-18T12:35:00Z",
+                                    },
+                                },
+                            },
+                            {"travelMode": "WALK"},
+                        ]
+                    }
+                ],
+            }
+        ]
+    }
+    transport = _mock_transport_returning(payload)
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await fetch_leg(
+            origin_lat=53.34,
+            origin_lng=-6.26,
+            destination_lat=53.35,
+            destination_lng=-6.27,
+            depart_at=datetime(2026, 5, 18, 12, 3, tzinfo=timezone.utc),
+            mode="transit",
+            client=client,
+        )
+
+    assert result.depart_at == datetime(2026, 5, 18, 12, 14, tzinfo=timezone.utc)
+    assert result.arrive_at == datetime(2026, 5, 18, 12, 35, tzinfo=timezone.utc)
+    assert result.transit_line == "23"

@@ -40,6 +40,7 @@ _FIELD_MASK_COMMON = "routes.duration,routes.distanceMeters"
 _FIELD_MASK_TRANSIT = (
     _FIELD_MASK_COMMON
     + ",routes.legs.steps.transitDetails.stopDetails.departureTime"
+    + ",routes.legs.steps.transitDetails.stopDetails.arrivalTime"
     + ",routes.legs.steps.transitDetails.transitLine.name"
     + ",routes.legs.steps.transitDetails.transitLine.nameShort"
     + ",routes.legs.steps.transitDetails.transitLine.vehicle.type"
@@ -155,27 +156,32 @@ def _parse_response(response_json: dict[str, Any], depart_at: datetime, mode: st
     # Format is "<seconds>s" — e.g. "180s". Defensive parse.
     duration_seconds = _parse_duration(duration_str)
     distance_meters = int(route.get("distanceMeters", 0))
-    arrive_at = depart_at + timedelta(seconds=duration_seconds)
 
     transit_line = None
     summary = _format_duration(duration_seconds)
 
     if mode == "transit":
         transit_line = _extract_transit_line_name(route)
+        # Use Google's actual scheduled times; fall back to computed times if
+        # the response has no transitDetails (e.g. walking-only transit leg).
+        actual_depart, actual_arrive = _extract_scheduled_times(route, depart_at, duration_seconds)
         if transit_line:  # noqa: SIM108  (if/else clearer than ternary here)
             summary = f"Take the {transit_line}, {summary}"
         else:
             summary = f"{summary} (transit)"
-    elif mode == "walking":
-        summary = f"{summary} walk"
     else:
-        summary = f"{summary} drive"
+        actual_depart = depart_at
+        actual_arrive = depart_at + timedelta(seconds=duration_seconds)
+        if mode == "walking":
+            summary = f"{summary} walk"
+        else:
+            summary = f"{summary} drive"
 
     return LegResult(
         duration_seconds=duration_seconds,
         distance_meters=distance_meters,
-        depart_at=depart_at,
-        arrive_at=arrive_at,
+        depart_at=actual_depart,
+        arrive_at=actual_arrive,
         summary=summary,
         transit_line=transit_line,
     )
@@ -204,6 +210,37 @@ def _format_duration(seconds: int) -> str:
     if mins == 0:
         return f"{hours} hr"
     return f"{hours} hr {mins} min"
+
+
+def _extract_scheduled_times(
+    route: dict[str, Any], depart_at: datetime, duration_seconds: int
+) -> tuple[datetime, datetime]:
+    """Return (depart_at, arrive_at) from scheduled transit stop times.
+
+    Scans all TRANSIT steps: the first boarding step's departureTime becomes
+    leg.depart_at; the last alighting step's arrivalTime becomes leg.arrive_at.
+    Falls back to (depart_at, depart_at + duration_seconds) when the response
+    has no transitDetails — this covers pure-walking transit legs and any API
+    response where scheduled times are absent.
+    """
+    first_depart: datetime | None = None
+    last_arrive: datetime | None = None
+
+    for leg in route.get("legs", []):
+        for step in leg.get("steps", []):
+            if step.get("travelMode") != "TRANSIT":
+                continue
+            stop_details = (step.get("transitDetails") or {}).get("stopDetails") or {}
+            dep_str = stop_details.get("departureTime")
+            arr_str = stop_details.get("arrivalTime")
+            if dep_str and first_depart is None:
+                first_depart = datetime.fromisoformat(dep_str.replace("Z", "+00:00"))
+            if arr_str:
+                last_arrive = datetime.fromisoformat(arr_str.replace("Z", "+00:00"))
+
+    if first_depart is not None and last_arrive is not None:
+        return first_depart, last_arrive
+    return depart_at, depart_at + timedelta(seconds=duration_seconds)
 
 
 def _extract_transit_line_name(route: dict[str, Any]) -> str | None:
