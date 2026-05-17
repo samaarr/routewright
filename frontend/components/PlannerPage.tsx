@@ -60,6 +60,12 @@ export default function PlannerPage() {
       const result = await postPlan(toPayload(formState));
       setPlan(result);
       setStatus("idle");
+      setTimeout(() => {
+        document.getElementById("timeline-anchor")?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }, 100);
     } catch (err) {
       setStatus("error");
       setErrorMsg(err instanceof Error ? err.message : "Something went wrong.");

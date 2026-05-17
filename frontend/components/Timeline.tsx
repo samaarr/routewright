@@ -137,6 +137,7 @@ export default function Timeline({
       onDragCancel={handleDragCancel}
     >
       <div>
+        <div id="timeline-anchor" />
         <div className="mb-5 flex items-center justify-between">
           <p className="text-sm font-medium text-zinc-500">{plan.city}</p>
           <a
