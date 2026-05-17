@@ -1,18 +1,4 @@
 import type { LegItem } from "@/lib/types";
-import { fmtTime, fmtDuration } from "@/lib/utils";
-
-// "Take the H2, 11 min" → "Take the H2, 12:36 → 12:47 (11 min)"
-// Fallback for non-standard summaries: "8 min (transit) — 12:36 → 12:44"
-function formatLegSummary(leg: LegItem): string {
-  const depart = fmtTime(leg.depart_at);
-  const arrive = fmtTime(leg.arrive_at);
-  const duration = fmtDuration(leg.duration_seconds);
-  const match = leg.summary.match(/^(.+?),\s*\d+\s*min$/);
-  if (match) {
-    return `${match[1]}, ${depart} → ${arrive} (${duration})`;
-  }
-  return `${leg.summary} — ${depart} → ${arrive}`;
-}
 
 function RefreshIcon({ spinning }: { spinning: boolean }) {
   return (
@@ -54,7 +40,7 @@ export default function LegCard({
         <span className="text-zinc-400">↓</span>
         <span className={`text-sm ${isDegraded ? "text-amber-700" : "text-zinc-600"}`}>
           {isDegraded && "⚠ "}
-          {formatLegSummary(leg)}
+          {leg.summary}
         </span>
         <span className="text-zinc-300">·</span>
         <a
