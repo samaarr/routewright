@@ -117,10 +117,48 @@ def test_plan_default_stay_uses_type_table(
     payload["stops"][2] = {"query": "Guinness Storehouse"}  # remove explicit override
     response = client.post("/api/plan", json=payload)
     stops = [i for i in response.json()["timeline"] if i["item_type"] == "stop"]
-    assert stops[0]["stay_minutes"] == 60   # tourist_attraction
+    assert stops[0]["stay_minutes"] == 0    # first stop — anchor, type lookup skipped
     assert stops[0]["stay_source"] == "default"
-    assert stops[2]["stay_minutes"] == 90   # brewery
+    assert stops[1]["stay_minutes"] == 60   # tourist_attraction (Temple Bar, middle)
+    assert stops[1]["stay_source"] == "default"
+    assert stops[2]["stay_minutes"] == 0    # last stop — anchor, type lookup skipped
     assert stops[2]["stay_source"] == "default"
+
+
+# ---------------------------------------------------------------------------
+# First/last anchor defaults
+# ---------------------------------------------------------------------------
+
+
+def test_first_stop_default_stay_is_zero(
+    client: TestClient, mock_geocode: None, mock_directions: None
+) -> None:
+    response = client.post("/api/plan", json=_valid_payload())
+    stops = [i for i in response.json()["timeline"] if i["item_type"] == "stop"]
+    assert stops[0]["stay_minutes"] == 0
+    assert stops[0]["stay_source"] == "default"
+
+
+def test_last_stop_default_stay_is_zero(
+    client: TestClient, mock_geocode: None, mock_directions: None
+) -> None:
+    payload = _valid_payload()
+    payload["stops"][-1] = {"query": "Guinness Storehouse"}  # no user override
+    response = client.post("/api/plan", json=payload)
+    stops = [i for i in response.json()["timeline"] if i["item_type"] == "stop"]
+    assert stops[-1]["stay_minutes"] == 0
+    assert stops[-1]["stay_source"] == "default"
+
+
+def test_user_override_on_first_stop_honored(
+    client: TestClient, mock_geocode: None, mock_directions: None
+) -> None:
+    payload = _valid_payload()
+    payload["stops"][0] = {"query": "Trinity College", "stay_minutes": 30}
+    response = client.post("/api/plan", json=payload)
+    stops = [i for i in response.json()["timeline"] if i["item_type"] == "stop"]
+    assert stops[0]["stay_minutes"] == 30
+    assert stops[0]["stay_source"] == "user"
 
 
 def test_plan_geocoder_error_returns_400(

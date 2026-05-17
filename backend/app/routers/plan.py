@@ -100,12 +100,19 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
             )
 
     # Phase 2: resolve stay_minutes for every stop.
+    # First and last stops are anchors — default stay is 0 so the chain starts
+    # and ends cleanly. Middle stops use the type-lookup table. A user-supplied
+    # stay_minutes always wins regardless of position.
     stays: list[int] = []
     stay_sources: list[Literal["user", "default"]] = []
-    for stop, place in zip(req.stops, places):
+    n_stops = len(req.stops)
+    for i, (stop, place) in enumerate(zip(req.stops, places)):
         if stop.stay_minutes is not None:
             stays.append(stop.stay_minutes)
             stay_sources.append("user")
+        elif i == 0 or i == n_stops - 1:
+            stays.append(0)
+            stay_sources.append("default")
         else:
             minutes, _ = lookup_stay_minutes(place.primary_type, place.types)
             stays.append(minutes)
