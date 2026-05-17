@@ -60,16 +60,20 @@ export default function PlannerPage() {
       const result = await postPlan(toPayload(formState));
       setPlan(result);
       setStatus("idle");
-      setTimeout(() => {
-        document.getElementById("timeline-anchor")?.scrollIntoView({
-          behavior: "smooth",
-          block: "start",
-        });
-      }, 100);
+      scrollToTimeline();
     } catch (err) {
       setStatus("error");
       setErrorMsg(err instanceof Error ? err.message : "Something went wrong.");
     }
+  }
+
+  function scrollToTimeline() {
+    setTimeout(() => {
+      document.getElementById("timeline-anchor")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 100);
   }
 
   // newIds: UUIDs in the new stop order — parallel to form.stops.
@@ -89,12 +93,34 @@ export default function PlannerPage() {
       const result = await postPlan(toPayload(newForm));
       setPlan(result);
       setRefreshing({ kind: "none" });
+      scrollToTimeline();
     } catch (err) {
       setForm({ ...form, stops: prevStops });
       setRefreshing({ kind: "none" });
       setTimelineError(
         "Couldn't update — your previous order is restored. Try again?"
       );
+    }
+  }
+
+  async function handleStayEdit(stopId: string, minutes: number) {
+    if (!plan) return;
+    const prevStops = form.stops;
+    const newStops = prevStops.map((s) =>
+      s.id === stopId ? { ...s, stay_minutes: minutes } : s
+    );
+    const newForm = { ...form, stops: newStops };
+    setForm(newForm);
+    setRefreshing({ kind: "reorder" });
+    setTimelineError(null);
+    try {
+      const result = await postPlan(toPayload(newForm));
+      setPlan(result);
+      setRefreshing({ kind: "none" });
+    } catch (err) {
+      setForm({ ...form, stops: prevStops });
+      setRefreshing({ kind: "none" });
+      setTimelineError("Couldn't update stay duration. Try again?");
     }
   }
 
@@ -193,6 +219,7 @@ export default function PlannerPage() {
             stopIds={stopIds}
             onReorder={handleReorder}
             onLegRefresh={handleLegRefresh}
+            onStayEdit={handleStayEdit}
             isReordering={isReordering}
             refreshingLegIdx={refreshingLegIdx}
           />

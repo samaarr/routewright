@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { StopItem } from "@/lib/types";
 import { fmtTime } from "@/lib/utils";
 
@@ -10,6 +11,7 @@ interface Props {
   isFirst: boolean;
   isLast: boolean;
   dragHandleProps?: DragHandleProps;
+  onStayEdit?: (minutes: number) => void;
 }
 
 function GripIcon() {
@@ -31,8 +33,27 @@ function GripIcon() {
   );
 }
 
-export default function StopCard({ stop, isFirst, isLast, dragHandleProps }: Props) {
+export default function StopCard({ stop, isFirst, isLast, dragHandleProps, onStayEdit }: Props) {
   const showStayInfo = !isFirst && !isLast && stop.stay_minutes > 0;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  function startEdit() {
+    setDraft(stop.stay_minutes.toString());
+    setEditing(true);
+  }
+
+  function commit() {
+    const val = parseInt(draft, 10);
+    if (!isNaN(val) && val >= 0 && val <= 480) {
+      onStayEdit?.(val);
+    }
+    setEditing(false);
+  }
+
+  function cancel() {
+    setEditing(false);
+  }
 
   return (
     <div className="flex items-start py-2.5">
@@ -64,7 +85,44 @@ export default function StopCard({ stop, isFirst, isLast, dragHandleProps }: Pro
 
           {showStayInfo && (
             <span className="flex-shrink-0 text-sm text-zinc-400">
-              · stay {stop.stay_minutes} min · leave {fmtTime(stop.depart_at)}
+              {editing ? (
+                <>
+                  {"· stay "}
+                  <input
+                    type="number"
+                    min={0}
+                    max={480}
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onBlur={commit}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") e.currentTarget.blur();
+                      if (e.key === "Escape") cancel();
+                    }}
+                    autoFocus
+                    className="w-12 rounded border border-blue-400 bg-white px-1 text-center text-sm text-zinc-900 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  {" min"}
+                </>
+              ) : (
+                <>
+                  {"· "}
+                  {onStayEdit ? (
+                    <button
+                      type="button"
+                      onClick={startEdit}
+                      title="Tap to edit"
+                      className={`-mx-0.5 rounded px-0.5 hover:text-zinc-600 ${stop.stay_source === "user" ? "font-medium text-zinc-600" : ""}`}
+                    >
+                      stay {stop.stay_minutes} min
+                    </button>
+                  ) : (
+                    <>stay {stop.stay_minutes} min</>
+                  )}
+                  {" · leave "}
+                  {fmtTime(stop.depart_at)}
+                </>
+              )}
             </span>
           )}
         </div>

@@ -29,6 +29,7 @@ interface Props {
   stopIds: string[];
   onReorder: (newIds: string[]) => void;
   onLegRefresh: (legTimelineIndex: number) => void;
+  onStayEdit: (stopId: string, minutes: number) => void;
   isReordering: boolean;
   refreshingLegIdx: number | null;
 }
@@ -40,9 +41,10 @@ interface SortableStopRowProps {
   stop: StopItemType;
   isFirst: boolean;
   isLast: boolean;
+  onStayEdit: (stopId: string, minutes: number) => void;
 }
 
-function SortableStopRow({ id, stop, isFirst, isLast }: SortableStopRowProps) {
+function SortableStopRow({ id, stop, isFirst, isLast, onStayEdit }: SortableStopRowProps) {
   const {
     attributes,
     listeners,
@@ -67,6 +69,7 @@ function SortableStopRow({ id, stop, isFirst, isLast }: SortableStopRowProps) {
         isFirst={isFirst}
         isLast={isLast}
         dragHandleProps={listeners as Parameters<typeof StopCard>[0]["dragHandleProps"]}
+        onStayEdit={(m) => onStayEdit(id, m)}
       />
     </li>
   );
@@ -79,6 +82,7 @@ export default function Timeline({
   stopIds,
   onReorder,
   onLegRefresh,
+  onStayEdit,
   isReordering,
   refreshingLegIdx,
 }: Props) {
@@ -175,6 +179,7 @@ export default function Timeline({
                       stop={item}
                       isFirst={si === 0}
                       isLast={si === totalStops - 1}
+                      onStayEdit={onStayEdit}
                     />
                   );
                 }
