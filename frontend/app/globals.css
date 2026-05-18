@@ -12,23 +12,23 @@
 
 :root {
   /* --- Surfaces --------------------------------------------------------- */
-  --color-bg-base:     250 250 250; /* zinc-50  — page canvas (body)        */
-  --color-bg-elevated: 255 255 255; /* white    — cards, dots, floating els  */
+  --color-bg-base:     250 249 247; /* stone-50  — warm off-white canvas     */
+  --color-bg-elevated: 255 254 252; /* stone-25  — warm white for cards      */
 
   /* --- Text ------------------------------------------------------------- */
-  --color-text-primary:   24  24  27; /* zinc-900 — headings, key data        */
-  --color-text-secondary: 82  82  91; /* zinc-600 — body copy, leg summaries  */
+  --color-text-primary:   28  25  23; /* stone-900 — warm near-black          */
+  --color-text-secondary: 87  83  78; /* stone-600 — warm mid-gray body copy  */
   --color-text-tertiary:  113 113 122; /* zinc-500 — supporting labels        */
   --color-text-muted:     161 161 170; /* zinc-400 — captions, icons          */
   --color-text-ghost:     212 212 216; /* zinc-300 — drag handle, separators  */
   --color-text-label:     63  63  70;  /* zinc-700 — form field labels        */
 
   /* --- Borders ---------------------------------------------------------- */
-  --color-border-subtle:  228 228 231; /* zinc-200 — timeline dotted line     */
-  --color-border-default: 212 212 216; /* zinc-300 — input borders            */
+  --color-border-subtle:  231 229 228; /* stone-200 — warm timeline divider    */
+  --color-border-default: 214 211 209; /* stone-300 — warm input borders       */
 
   /* --- Accent (blue) ---------------------------------------------------- */
-  --color-accent:          37  99 235; /* blue-600 — buttons, primary actions  */
+  --color-accent:          59 111 213; /* blue-ish — desaturated, Notion-tone  */
   --color-accent-hover:    29  78 216; /* blue-700 — hover state for bg        */
   --color-accent-strong:   30  64 175; /* blue-800 — hover state for text links*/
   --color-accent-emphasis: 59 130 246; /* blue-500 — dot border, focus rings   */
@@ -48,11 +48,11 @@
 
   /* --- Border radius ---------------------------------------------------- */
   --radius-sm: 0.25rem;  /*  4px — inline / small elements (≈ Tailwind rounded)    */
-  --radius-md: 0.375rem; /*  6px — inputs, buttons       (≈ Tailwind rounded-md)   */
-  --radius-lg: 0.5rem;   /*  8px — larger containers     (≈ Tailwind rounded-lg)   */
+  --radius-md: 0.5rem;   /*  8px — inputs, buttons (macOS standard)                */
+  --radius-lg: 0.625rem; /* 10px — larger containers                               */
 
   /* --- Shadows ---------------------------------------------------------- */
-  --shadow-subtle:   none;
+  --shadow-subtle:   0 1px 3px 0 rgb(0 0 0 / 0.04), 0 1px 2px -1px rgb(0 0 0 / 0.04);
   --shadow-raised:   0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
   --shadow-floating: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
 
@@ -66,8 +66,8 @@
    ========================================================================== */
 
 @layer components {
-  .text-display    { @apply text-3xl font-bold; }          /* page title           */
-  .text-body       { @apply text-sm; }                     /* default body copy    */
+  .text-display    { @apply text-3xl font-bold tracking-tight; } /* page title    */
+  .text-body       { @apply text-sm leading-relaxed; }     /* default body copy    */
   .text-body-strong { @apply text-sm font-medium; }        /* emphasised body      */
   .text-caption    { @apply text-xs; }                     /* captions, hint text  */
   .text-time       { @apply text-sm font-semibold tabular-nums; } /* clock values  */
