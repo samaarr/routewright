@@ -17,6 +17,7 @@ const config: Config = {
         // Surfaces
         "bg-base":     "rgb(var(--color-bg-base)     / <alpha-value>)",
         "bg-elevated": "rgb(var(--color-bg-elevated) / <alpha-value>)",
+        "pane-bg":     "rgb(var(--color-pane-bg)     / <alpha-value>)",
 
         // Text
         "text-primary":   "rgb(var(--color-text-primary)   / <alpha-value>)",
@@ -29,6 +30,7 @@ const config: Config = {
         // Borders
         "border-subtle":  "rgb(var(--color-border-subtle)  / <alpha-value>)",
         "border-default": "rgb(var(--color-border-default) / <alpha-value>)",
+        "border-strong":  "rgb(var(--color-border-strong)  / <alpha-value>)",
 
         // Accent
         "accent":           "rgb(var(--color-accent)          / <alpha-value>)",
@@ -37,6 +39,7 @@ const config: Config = {
         "accent-emphasis":  "rgb(var(--color-accent-emphasis) / <alpha-value>)",
         "accent-border":    "rgb(var(--color-accent-border)   / <alpha-value>)",
         "accent-faint":     "rgb(var(--color-accent-faint)    / <alpha-value>)",
+        "accent-soft":      "rgb(var(--color-accent-soft)     / <alpha-value>)",
 
         // States
         "error-bg":       "rgb(var(--color-error-bg)       / <alpha-value>)",

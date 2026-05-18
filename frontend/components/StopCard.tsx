@@ -56,7 +56,7 @@ export default function StopCard({ stop, isFirst, isLast, dragHandleProps, onSta
   }
 
   return (
-    <div className="flex items-start py-2.5">
+    <div className="group flex items-start py-3">
       {/* Drag handle — w-6 column, 44px tall touch target via py-2 */}
       <button
         type="button"
@@ -69,63 +69,59 @@ export default function StopCard({ stop, isFirst, isLast, dragHandleProps, onSta
       </button>
 
       {/* Arrival time — right-aligned in fixed column */}
-      <span className="w-12 flex-shrink-0 pt-0.5 text-right text-time text-text-primary">
+      <span className="w-12 flex-shrink-0 pt-0.5 text-right text-time-chip">
         {fmtTime(stop.arrive_at)}
       </span>
 
       {/* Dot — centred over the dotted vertical line (line is at left-[5rem]) */}
-      <div className="flex w-4 flex-shrink-0 justify-center pt-1">
-        <div className="relative z-10 h-2.5 w-2.5 rounded-full border-2 border-accent-emphasis bg-bg-elevated" />
+      <div className="flex w-4 flex-shrink-0 justify-center pt-1.5">
+        <div
+          className="relative z-10 h-3 w-3 rounded-full bg-accent transition-shadow duration-150 group-hover:shadow-[0_0_0_4px_rgba(30,64,175,0.15)]"
+        />
       </div>
 
-      {/* Content — name + optional stay/leave info. min-w-0 enables truncate. */}
+      {/* Content — name + optional stay chip. min-w-0 enables truncate. */}
       <div className="ml-2 min-w-0 flex-1">
-        <div className="flex flex-col sm:flex-row sm:items-baseline sm:gap-2">
-          <span className="truncate font-medium text-text-primary">{stop.name}</span>
+        <span className="block truncate text-body-strong">{stop.name}</span>
 
-          {showStayInfo && (
-            <span className="flex-shrink-0 text-body text-text-muted">
-              {editing ? (
-                <>
-                  {"· stay "}
-                  <input
-                    type="number"
-                    min={0}
-                    max={480}
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onBlur={commit}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") e.currentTarget.blur();
-                      if (e.key === "Escape") cancel();
-                    }}
-                    autoFocus
-                    className="w-12 rounded border border-accent-border bg-bg-elevated px-1 text-center text-body text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-emphasis"
-                  />
-                  {" min"}
-                </>
-              ) : (
-                <>
-                  {"· "}
-                  {onStayEdit ? (
-                    <button
-                      type="button"
-                      onClick={startEdit}
-                      title="Tap to edit"
-                      className={`-mx-0.5 rounded px-0.5 hover:text-text-secondary ${stop.stay_source === "user" ? "font-medium text-text-secondary" : ""}`}
-                    >
-                      stay {stop.stay_minutes} min
-                    </button>
-                  ) : (
-                    <>stay {stop.stay_minutes} min</>
-                  )}
-                  {" · leave "}
-                  {fmtTime(stop.depart_at)}
-                </>
-              )}
-            </span>
-          )}
-        </div>
+        {showStayInfo && (
+          <div className="mt-1">
+            {editing ? (
+              <div className="flex items-center gap-1 text-sm text-text-secondary">
+                <span>stay</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={480}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onBlur={commit}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") e.currentTarget.blur();
+                    if (e.key === "Escape") cancel();
+                  }}
+                  autoFocus
+                  className="w-14 rounded border border-accent-border bg-bg-elevated px-1.5 py-0.5 text-center text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-emphasis"
+                />
+                <span>min</span>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={onStayEdit ? startEdit : undefined}
+                disabled={!onStayEdit}
+                title={onStayEdit ? "Tap to edit" : undefined}
+                className={`inline-flex items-center rounded-sm border px-2 py-0.5 text-xs transition-colors duration-100 ${
+                  stop.stay_source === "user"
+                    ? "border-accent-faint bg-accent-soft font-medium text-accent hover:border-accent"
+                    : "border-border-subtle bg-bg-base text-text-secondary hover:border-border-default hover:text-text-primary"
+                } ${onStayEdit ? "cursor-pointer" : "cursor-default"}`}
+              >
+                stay {stop.stay_minutes} min · leave {fmtTime(stop.depart_at)}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

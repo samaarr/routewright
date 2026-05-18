@@ -213,7 +213,7 @@ export default function PlannerPage() {
           has scrolled past the timeline. Tap to jump back up. */}
       {showStickyBar && plan && (
         <div
-          className="fixed left-0 right-0 top-0 z-50 flex h-12 cursor-pointer items-center justify-between bg-bg-elevated px-4 shadow-raised md:hidden"
+          className="fixed left-0 right-0 top-0 z-50 flex h-12 cursor-pointer items-center justify-between bg-pane-bg px-4 shadow-raised md:hidden"
           role="button"
           tabIndex={0}
           onClick={scrollToTimeline}
@@ -228,20 +228,20 @@ export default function PlannerPage() {
         </div>
       )}
 
-      <main className="mx-auto max-w-[980px] px-4 py-8">
-        {/* Header — full-width, above both columns */}
-        <div className="mb-6">
+      <main className="mx-auto max-w-[980px] px-4 lg:px-6">
+        {/* Header — full-width hero above both columns */}
+        <div className="mb-6 mt-12 text-center lg:mb-8 lg:mt-16 lg:text-left">
           <h1 className="text-display text-text-primary">RouteWright</h1>
-          <p className="mt-1 text-base text-text-secondary">
+          <p className="mt-3 text-tagline">
             Multi-stop transit planning that Google Maps doesn&apos;t do.
           </p>
         </div>
 
         {/* Split-pane: stacked on mobile (timeline above form), side-by-side on lg+ */}
-        <div className="flex flex-col lg:flex-row lg:items-start lg:gap-6">
-          {/* Form column — order-2 (below timeline) on mobile, order-1 (left) on lg+ */}
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:gap-8">
+          {/* Form column — white pane, order-2 (below) on mobile, order-1 (left) on lg+ */}
           <div
-            className={`order-2 lg:order-1 lg:w-[380px] lg:flex-shrink-0${plan === null ? " pb-20 md:pb-0" : ""}`}
+            className={`order-2 rounded-lg border border-border-subtle bg-pane-bg p-6 shadow-subtle lg:order-1 lg:w-[380px] lg:flex-shrink-0 lg:p-8${plan === null ? " pb-20 md:pb-6 lg:pb-8" : ""}`}
           >
             {status === "error" && errorMsg && (
               <div className="mb-4 rounded-md border border-error-border bg-error-bg px-3 py-2 text-body text-error-text">
@@ -257,8 +257,8 @@ export default function PlannerPage() {
             />
           </div>
 
-          {/* Timeline canvas — order-1 (above form) on mobile, order-2 (right) on lg+ */}
-          <div className="order-1 mb-6 lg:order-2 lg:mb-0 lg:flex-1 lg:max-w-[560px]">
+          {/* Timeline canvas — white pane, order-1 (above) on mobile, order-2 (right) on lg+ */}
+          <div className="order-1 rounded-lg border border-border-subtle bg-pane-bg p-6 shadow-subtle lg:order-2 lg:flex-1 lg:max-w-[560px] lg:p-8">
             <PlanCanvas
               plan={plan}
               stopCount={stopCount}
@@ -274,7 +274,7 @@ export default function PlannerPage() {
           </div>
         </div>
 
-        <p className="mt-12 text-center text-body text-text-muted">
+        <p className="mb-10 mt-12 text-center text-body text-text-muted">
           Made in Dublin &middot;{" "}
           <a
             href="https://github.com/samaarr/routewright"
@@ -290,12 +290,12 @@ export default function PlannerPage() {
       {/* Mobile sticky Plan button — visible only on mobile when no plan exists yet.
           Uses form="plan-form" to submit the PlanForm without being inside it. */}
       {plan === null && (
-        <div className="fixed bottom-0 left-0 right-0 border-t border-border-subtle bg-bg-elevated p-3 md:hidden">
+        <div className="fixed bottom-0 left-0 right-0 border-t border-border-subtle bg-pane-bg p-3 md:hidden">
           <button
             type="submit"
             form="plan-form"
             disabled={status === "loading"}
-            className="w-full rounded-md bg-accent py-2.5 text-body-strong text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+            className={`btn-primary${status === "loading" ? " animate-pulse" : ""}`}
           >
             {status === "loading" ? "Planning…" : "Plan ↗"}
           </button>

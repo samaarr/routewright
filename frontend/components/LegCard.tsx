@@ -35,7 +35,7 @@ export default function LegCard({
   isRefreshing,
 }: Props) {
   return (
-    <div className="py-1 pl-20">
+    <div className="group py-1 pl-20">
       <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
         <span className="text-text-muted">↓</span>
         <span className={`text-body ${isDegraded ? "text-warning-strong" : "text-text-secondary"}`}>
@@ -56,7 +56,7 @@ export default function LegCard({
           onClick={() => onRefresh(legTimelineIndex)}
           disabled={isRefreshing}
           aria-label="Refresh this leg with current transit times"
-          className="-m-2 p-2 text-text-muted hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-50"
+          className="-m-2 p-2 text-text-muted opacity-0 transition-opacity group-hover:opacity-100 hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-50"
         >
           <RefreshIcon spinning={isRefreshing} />
         </button>

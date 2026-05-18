@@ -9,7 +9,11 @@ interface Props {
   mobileSubmitHidden?: boolean;
 }
 
-const MODES: TransportMode[] = ["transit", "walking", "driving"];
+const MODES: { value: TransportMode; label: string }[] = [
+  { value: "transit", label: "Transit" },
+  { value: "walking", label: "Walking" },
+  { value: "driving", label: "Driving" },
+];
 
 export default function PlanForm({ form, onChange, onSubmit, isLoading, mobileSubmitHidden }: Props) {
   function handleSubmit(e: React.FormEvent) {
@@ -20,25 +24,21 @@ export default function PlanForm({ form, onChange, onSubmit, isLoading, mobileSu
   }
 
   return (
-    <form id="plan-form" onSubmit={handleSubmit} className="space-y-4">
+    <form id="plan-form" onSubmit={handleSubmit} className="space-y-5">
       <div>
-        <label className="mb-1 block text-body-strong text-text-label">
-          City
-        </label>
+        <label className="mb-2 block text-section-label">City</label>
         <input
           type="text"
           placeholder="Dublin, Ireland"
           value={form.city}
           onChange={(e) => onChange({ ...form, city: e.target.value })}
           required
-          className="w-full rounded-md border border-border-default px-3 py-2 text-body focus:outline-none focus:ring-2 focus:ring-accent-emphasis"
+          className="input-base"
         />
       </div>
 
       <div>
-        <label className="mb-1 block text-body-strong text-text-label">
-          Stops
-        </label>
+        <label className="mb-2 block text-section-label">Stops</label>
         <StopList
           stops={form.stops}
           onChange={(stops) => onChange({ ...form, stops })}
@@ -46,37 +46,47 @@ export default function PlanForm({ form, onChange, onSubmit, isLoading, mobileSu
       </div>
 
       <div>
-        <label className="mb-1 block text-body-strong text-text-label">
-          Start time
-        </label>
+        <label className="mb-2 block text-section-label">Departure</label>
         <input
           type="datetime-local"
           value={form.start_time}
           onChange={(e) => onChange({ ...form, start_time: e.target.value })}
           required
-          className="w-full rounded-md border border-border-default px-3 py-2 text-body focus:outline-none focus:ring-2 focus:ring-accent-emphasis"
+          className="input-base"
         />
       </div>
 
       <div>
-        <label className="mb-1 block text-body-strong text-text-label">
-          Mode
-        </label>
-        <div className="flex gap-4">
-          {MODES.map((m) => (
+        <label className="mb-2 block text-section-label">Mode</label>
+        <div className="space-y-2">
+          {MODES.map(({ value, label }) => (
             <label
-              key={m}
-              className="flex cursor-pointer items-center gap-1.5 text-body text-text-label"
+              key={value}
+              className={`flex cursor-pointer items-center gap-3 rounded-md border px-4 py-3 transition-colors duration-150 ${
+                form.mode === value
+                  ? "border-accent bg-accent-soft"
+                  : "border-border-default hover:border-border-strong"
+              }`}
             >
               <input
                 type="radio"
                 name="mode"
-                value={m}
-                checked={form.mode === m}
-                onChange={() => onChange({ ...form, mode: m })}
-                className="accent-blue-600"
+                value={value}
+                checked={form.mode === value}
+                onChange={() => onChange({ ...form, mode: value })}
+                className="sr-only"
               />
-              {m.charAt(0).toUpperCase() + m.slice(1)}
+              {/* Custom radio dot */}
+              <div
+                className={`flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors duration-100 ${
+                  form.mode === value ? "border-accent" : "border-border-default"
+                }`}
+              >
+                {form.mode === value && (
+                  <div className="h-2 w-2 rounded-full bg-accent" />
+                )}
+              </div>
+              <span className="text-base font-medium text-text-primary">{label}</span>
             </label>
           ))}
         </div>
@@ -85,7 +95,7 @@ export default function PlanForm({ form, onChange, onSubmit, isLoading, mobileSu
       <button
         type="submit"
         disabled={isLoading}
-        className={`w-full rounded-md bg-accent py-2.5 text-body-strong text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50${mobileSubmitHidden ? " hidden md:block" : ""}`}
+        className={`btn-primary${isLoading ? " animate-pulse" : ""}${mobileSubmitHidden ? " hidden md:flex md:items-center md:justify-center" : ""}`}
       >
         {isLoading ? "Planning…" : "Plan ↗"}
       </button>

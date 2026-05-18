@@ -141,19 +141,6 @@ export default function Timeline({
       onDragCancel={handleDragCancel}
     >
       <div>
-        <div id="timeline-anchor" />
-        <div className="mb-5 flex items-center justify-between">
-          <p className="text-body-strong text-text-tertiary">{plan.city}</p>
-          <a
-            href={plan.overview_map_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-body text-accent underline underline-offset-2 hover:text-accent-strong"
-          >
-            Overview map ↗
-          </a>
-        </div>
-
         <SortableContext items={stopIds} strategy={verticalListSortingStrategy}>
           {/*
             Vertical dotted line sits at left-[5rem]:
@@ -161,12 +148,12 @@ export default function Timeline({
           */}
           <div className="relative">
             {isReordering && (
-              <div className="absolute inset-0 z-20 flex items-center justify-center rounded bg-bg-elevated/80">
+              <div className="absolute inset-0 z-20 flex items-center justify-center rounded bg-pane-bg/80">
                 <p className="text-body text-text-tertiary">Updating route…</p>
               </div>
             )}
 
-            <ol className="relative overflow-hidden before:absolute before:bottom-4 before:left-[5rem] before:top-4 before:border-l before:border-dashed before:border-border-subtle">
+            <ol className="relative overflow-hidden before:absolute before:bottom-4 before:left-[5rem] before:top-4 before:border-l-2 before:border-dashed before:border-border-subtle">
               {plan.timeline.map((item, idx) => {
                 if (item.item_type === "stop") {
                   const si = stopIndex;

@@ -8,32 +8,46 @@
 
    Color format: RGB space-separated ("R G B") so Tailwind opacity modifiers
    work correctly — e.g. bg-bg-base/80 compiles to rgb(R G B / 0.8).
+
+   Exception: --color-focus-ring and --color-marker-glow store rgba() directly
+   because they carry their own alpha and are only used in raw CSS (box-shadow),
+   not as Tailwind color aliases.
    ========================================================================== */
 
 :root {
   /* --- Surfaces --------------------------------------------------------- */
-  --color-bg-base:     250 249 247; /* stone-50  — warm off-white canvas     */
-  --color-bg-elevated: 255 254 252; /* stone-25  — warm white for cards      */
+  --color-bg-base:     252 251 249; /* warm stone canvas                     */
+  --color-bg-elevated: 255 254 252; /* warm white — floating elements        */
+  --color-pane-bg:     255 255 255; /* pure white — column pane backgrounds  */
 
   /* --- Text ------------------------------------------------------------- */
-  --color-text-primary:   28  25  23; /* stone-900 — warm near-black          */
-  --color-text-secondary: 87  83  78; /* stone-600 — warm mid-gray body copy  */
-  --color-text-tertiary:  113 113 122; /* zinc-500 — supporting labels        */
+  --color-text-primary:   20  18  16; /* warm near-black                      */
+  --color-text-secondary: 82  78  74; /* warm mid-gray                        */
+  --color-text-tertiary:  140 135 130; /* warm light gray                     */
   --color-text-muted:     161 161 170; /* zinc-400 — captions, icons          */
   --color-text-ghost:     212 212 216; /* zinc-300 — drag handle, separators  */
-  --color-text-label:     63  63  70;  /* zinc-700 — form field labels        */
+  --color-text-label:     63  63  70;  /* zinc-700 — legacy, being phased out */
 
   /* --- Borders ---------------------------------------------------------- */
-  --color-border-subtle:  231 229 228; /* stone-200 — warm timeline divider    */
-  --color-border-default: 214 211 209; /* stone-300 — warm input borders       */
+  --color-border-subtle:  231 229 226; /* warm dividers, pane edges            */
+  --color-border-default: 214 211 208; /* warm input borders                   */
+  --color-border-strong:  180 175 170; /* hover state for inputs, rows         */
 
-  /* --- Accent (blue) ---------------------------------------------------- */
-  --color-accent:          59 111 213; /* blue-ish — desaturated, Notion-tone  */
-  --color-accent-hover:    29  78 216; /* blue-700 — hover state for bg        */
-  --color-accent-strong:   30  64 175; /* blue-800 — hover state for text links*/
-  --color-accent-emphasis: 59 130 246; /* blue-500 — dot border, focus rings   */
-  --color-accent-border:   96 165 250; /* blue-400 — active edit-input border  */
-  --color-accent-faint:   191 219 254; /* blue-200 — drag overlay border       */
+  /* --- Accent (deep indigo) --------------------------------------------- */
+  --color-accent:          30  64 175; /* primary actions, links               */
+  --color-accent-hover:    37  78 198; /* hover state                          */
+  --color-accent-strong:   30  64 175; /* hover text links (= accent)          */
+  --color-accent-emphasis: 59 130 246; /* focus rings, timeline dot            */
+  --color-accent-border:   96 165 250; /* active edit-input border             */
+  --color-accent-faint:   191 219 254; /* drag overlay border                  */
+  --color-accent-soft:    232 236 248; /* selected radio bg, focus tint        */
+
+  /* --- Markers (timeline stop dots) ------------------------------------- */
+  --color-marker-active:  30  64 175; /* filled stop dot (= accent)           */
+  --color-marker-glow:    rgba(30, 64, 175, 0.15); /* hover glow ring        */
+
+  /* --- Focus ------------------------------------------------------------ */
+  --color-focus-ring: rgba(30, 64, 175, 0.2); /* input focus shadow           */
 
   /* --- Semantic states -------------------------------------------------- */
   --color-error-bg:     254 242 242; /* red-50  */
@@ -47,16 +61,16 @@
   --color-warning-strong: 180  83   9; /* amber-700 */
 
   /* --- Border radius ---------------------------------------------------- */
-  --radius-sm: 0.25rem;  /*  4px — inline / small elements (≈ Tailwind rounded)    */
-  --radius-md: 0.5rem;   /*  8px — inputs, buttons (macOS standard)                */
-  --radius-lg: 0.625rem; /* 10px — larger containers                               */
+  --radius-sm: 0.5rem;   /*  8px — chips, small elements                     */
+  --radius-md: 0.75rem;  /* 12px — inputs, buttons, pills                    */
+  --radius-lg: 1rem;     /* 16px — column panes                              */
 
   /* --- Shadows ---------------------------------------------------------- */
-  --shadow-subtle:   0 1px 3px 0 rgb(0 0 0 / 0.04), 0 1px 2px -1px rgb(0 0 0 / 0.04);
-  --shadow-raised:   0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-  --shadow-floating: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --shadow-subtle:   0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.04);
+  --shadow-raised:   0 4px 12px rgba(0,0,0,0.06), 0 12px 32px rgba(0,0,0,0.04);
+  --shadow-floating: 0 12px 32px rgba(0,0,0,0.08), 0 24px 64px rgba(0,0,0,0.06);
 
-  /* --- Typography intent (Phase 2b font-family override goes here) ------ */
+  /* --- Typography intent ------------------------------------------------ */
   /* --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; */
 }
 
@@ -66,9 +80,94 @@
    ========================================================================== */
 
 @layer components {
-  .text-display    { @apply text-3xl font-bold tracking-tight; } /* page title    */
-  .text-body       { @apply text-sm leading-relaxed; }     /* default body copy    */
-  .text-body-strong { @apply text-sm font-medium; }        /* emphasised body      */
-  .text-caption    { @apply text-xs; }                     /* captions, hint text  */
-  .text-time       { @apply text-sm font-semibold tabular-nums; } /* clock values  */
+  /* Page-level hero heading */
+  .text-display {
+    @apply text-5xl font-semibold;
+    line-height: 1.05;
+    letter-spacing: -0.025em;
+  }
+
+  /* Hero subhead / tagline */
+  .text-tagline {
+    @apply text-lg text-text-secondary;
+    line-height: 1.55;
+    letter-spacing: -0.005em;
+  }
+
+  /* Small-caps section labels above form fields */
+  .text-section-label {
+    @apply text-xs font-medium uppercase text-text-tertiary;
+    letter-spacing: 0.06em;
+  }
+
+  /* Prominent pane-level label ("Your day") */
+  .text-display-large {
+    @apply text-2xl font-semibold text-text-primary;
+    line-height: 1.2;
+    letter-spacing: -0.015em;
+  }
+
+  /* Default body copy */
+  .text-body {
+    @apply text-sm leading-relaxed;
+  }
+
+  /* Emphasised body — stop names, button labels */
+  .text-body-strong {
+    @apply text-base font-medium text-text-primary;
+    line-height: 1.5;
+  }
+
+  /* Caption / hint text */
+  .text-caption {
+    @apply text-xs;
+  }
+
+  /* Tabular time values in legacy timeline positions */
+  .text-time {
+    @apply text-sm font-semibold tabular-nums;
+  }
+
+  /* Prominent time chip — arrival times in the timeline */
+  .text-time-chip {
+    @apply text-base font-semibold text-text-primary;
+    font-feature-settings: 'tnum';
+    letter-spacing: -0.005em;
+  }
+
+  /* -----------------------------------------------------------------------
+     Input base — apply to every text/datetime input in the form.
+     Pseudo-class states use direct CSS because @apply in nested rules
+     can behave unexpectedly across Tailwind versions.
+     ----------------------------------------------------------------------- */
+  .input-base {
+    @apply h-12 w-full rounded-md border border-border-default bg-pane-bg px-4 text-base text-text-primary placeholder:text-text-tertiary transition-colors duration-150 focus:outline-none;
+  }
+  .input-base:hover:not(:focus) {
+    border-color: rgb(var(--color-border-strong));
+  }
+  .input-base:focus {
+    border-color: rgb(var(--color-accent));
+    box-shadow: 0 0 0 3px var(--color-focus-ring);
+  }
+
+  /* -----------------------------------------------------------------------
+     Primary action button
+     ----------------------------------------------------------------------- */
+  .btn-primary {
+    @apply h-14 w-full rounded-md text-base font-medium text-white transition-all duration-200 focus:outline-none;
+    background: linear-gradient(to bottom, rgb(var(--color-accent)), rgb(var(--color-accent-hover)));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  }
+  .btn-primary:hover:not(:disabled) {
+    transform: scale(1.01);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), var(--shadow-raised);
+  }
+  .btn-primary:active:not(:disabled) {
+    transform: scale(0.99);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+  .btn-primary:disabled {
+    @apply cursor-not-allowed opacity-50;
+  }
 }

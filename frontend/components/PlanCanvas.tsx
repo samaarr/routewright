@@ -29,8 +29,27 @@ export default function PlanCanvas({
 }: Props) {
   return (
     <div>
+      {/* Scroll target — scrollToTimeline() anchors here so the full pane
+          including the "Your day" header lands at the top of the viewport. */}
+      <div id="timeline-anchor" />
+
+      {/* Pane header */}
+      <div className="mb-6 flex items-baseline justify-between border-b border-border-subtle pb-4">
+        <span className="text-display-large">Your day</span>
+        {plan && (
+          <a
+            href={plan.overview_map_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm text-text-secondary transition-colors hover:text-accent"
+          >
+            Overview map ↗
+          </a>
+        )}
+      </div>
+
       {timelineError && (
-        <div className="mb-3 flex items-start gap-2 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-body text-warning-text">
+        <div className="mb-4 flex items-start gap-2 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-body text-warning-text">
           <span className="flex-1">{timelineError}</span>
           <button
             type="button"
@@ -42,6 +61,7 @@ export default function PlanCanvas({
           </button>
         </div>
       )}
+
       {plan !== null ? (
         <Timeline
           plan={plan}
