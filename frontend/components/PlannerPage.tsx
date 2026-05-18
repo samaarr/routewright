@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { FormState, Plan, PlanRequest, StopItem } from "@/lib/types";
 import { postPlan, postRefreshLeg } from "@/lib/api";
+import { fmtDuration } from "@/lib/utils";
 import PlanForm from "./PlanForm";
-import Timeline from "./Timeline";
+import PlanCanvas from "./PlanCanvas";
 
 type Refreshing =
   | { kind: "none" }
@@ -43,14 +44,45 @@ function toPayload(form: FormState): PlanRequest {
   };
 }
 
+function computeTotalDuration(plan: Plan): string {
+  const stops = plan.timeline.filter(
+    (i): i is StopItem => i.item_type === "stop"
+  );
+  if (stops.length < 2) return "";
+  const first = new Date(stops[0].arrive_at).getTime();
+  const last = new Date(stops[stops.length - 1].arrive_at).getTime();
+  return fmtDuration(Math.round((last - first) / 1000));
+}
+
 export default function PlannerPage() {
   const [form, setForm] = useState<FormState>(makeDefaultForm);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState<Refreshing>({ kind: "none" });
-  // Reorder/refresh errors sit near the timeline, not above the form.
   const [timelineError, setTimelineError] = useState<string | null>(null);
+  // Controls the mobile sticky summary bar that appears when the user
+  // scrolls past the timeline on a narrow viewport.
+  const [showStickyBar, setShowStickyBar] = useState(false);
+
+  useEffect(() => {
+    if (!plan) {
+      setShowStickyBar(false);
+      return;
+    }
+    function onScroll() {
+      if (window.innerWidth >= 768) {
+        setShowStickyBar(false);
+        return;
+      }
+      const anchor = document.getElementById("timeline-anchor");
+      if (!anchor) return;
+      setShowStickyBar(anchor.getBoundingClientRect().bottom < 0);
+    }
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [plan]);
 
   async function handleSubmit(formState: FormState) {
     setStatus("loading");
@@ -67,7 +99,10 @@ export default function PlannerPage() {
     }
   }
 
+  // On desktop (>=1024px) the timeline is always visible — no scroll needed.
+  // On mobile the timeline is at the top of the stacked layout so we scroll up.
   function scrollToTimeline() {
+    if (typeof window !== "undefined" && window.innerWidth >= 1024) return;
     setTimeout(() => {
       document.getElementById("timeline-anchor")?.scrollIntoView({
         behavior: "smooth",
@@ -169,73 +204,103 @@ export default function PlannerPage() {
   // plan.timeline. Passed to Timeline so it can use UUIDs for dnd-kit ids
   // and React keys instead of query strings.
   const stopIds = form.stops.map((s) => s.id);
+  const stopCount = form.stops.length;
+  const totalDuration = plan ? computeTotalDuration(plan) : "";
 
   return (
-    <main className="mx-auto max-w-lg px-4 py-10">
-      <div className="mb-8">
-        <h1 className="text-display text-text-primary">RouteWright</h1>
-        <p className="mt-1 text-base text-text-secondary">
-          Multi-stop transit planning that Google Maps doesn&apos;t do.
-        </p>
-      </div>
-
-      {status === "error" && errorMsg && (
-        <div className="mb-4 rounded-md border border-error-border bg-error-bg px-3 py-2 text-body text-error-text">
-          {errorMsg}
-        </div>
-      )}
-
-      <PlanForm
-        form={form}
-        onChange={setForm}
-        onSubmit={handleSubmit}
-        isLoading={status === "loading"}
-      />
-
-      {status === "idle" && plan === null && (
-        <p className="mt-4 text-center text-body text-text-muted">
-          Enter your stops and tap Generate.
-        </p>
-      )}
-
-      {plan !== null && (
-        <div className="mt-8">
-          {timelineError && (
-            <div className="mb-3 flex items-start gap-2 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-body text-warning-text">
-              <span className="flex-1">{timelineError}</span>
-              <button
-                type="button"
-                onClick={() => setTimelineError(null)}
-                aria-label="Dismiss"
-                className="flex-shrink-0 text-warning-icon hover:text-warning-text"
-              >
-                ✕
-              </button>
-            </div>
-          )}
-
-          <Timeline
-            plan={plan}
-            stopIds={stopIds}
-            onReorder={handleReorder}
-            onLegRefresh={handleLegRefresh}
-            onStayEdit={handleStayEdit}
-            isReordering={isReordering}
-            refreshingLegIdx={refreshingLegIdx}
-          />
-        </div>
-      )}
-      <p className="mt-12 text-center text-body text-text-muted">
-        Made in Dublin &middot;{" "}
-        <a
-          href="https://github.com/samaarr/routewright"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline underline-offset-2 hover:text-text-secondary"
+    <>
+      {/* Mobile sticky summary bar — appears when plan exists and the user
+          has scrolled past the timeline. Tap to jump back up. */}
+      {showStickyBar && plan && (
+        <div
+          className="fixed left-0 right-0 top-0 z-50 flex h-12 cursor-pointer items-center justify-between bg-bg-elevated px-4 shadow-raised md:hidden"
+          role="button"
+          tabIndex={0}
+          onClick={scrollToTimeline}
+          onKeyDown={(e) => e.key === "Enter" && scrollToTimeline()}
+          aria-label="Scroll back to timeline"
         >
-          github.com/samaarr/routewright
-        </a>
-      </p>
-    </main>
+          <span className="text-body-strong text-text-primary">
+            {plan.city} · {stopCount} stop{stopCount !== 1 ? "s" : ""}
+            {totalDuration ? ` · ${totalDuration}` : ""}
+          </span>
+          <span className="text-text-muted">↑</span>
+        </div>
+      )}
+
+      <main className="mx-auto max-w-[980px] px-4 py-8">
+        {/* Header — full-width, above both columns */}
+        <div className="mb-6">
+          <h1 className="text-display text-text-primary">RouteWright</h1>
+          <p className="mt-1 text-base text-text-secondary">
+            Multi-stop transit planning that Google Maps doesn&apos;t do.
+          </p>
+        </div>
+
+        {/* Split-pane: stacked on mobile (timeline above form), side-by-side on lg+ */}
+        <div className="flex flex-col lg:flex-row lg:items-start lg:gap-6">
+          {/* Form column — order-2 (below timeline) on mobile, order-1 (left) on lg+ */}
+          <div
+            className={`order-2 lg:order-1 lg:w-[380px] lg:flex-shrink-0${plan === null ? " pb-20 md:pb-0" : ""}`}
+          >
+            {status === "error" && errorMsg && (
+              <div className="mb-4 rounded-md border border-error-border bg-error-bg px-3 py-2 text-body text-error-text">
+                {errorMsg}
+              </div>
+            )}
+            <PlanForm
+              form={form}
+              onChange={setForm}
+              onSubmit={handleSubmit}
+              isLoading={status === "loading"}
+              mobileSubmitHidden={plan === null}
+            />
+          </div>
+
+          {/* Timeline canvas — order-1 (above form) on mobile, order-2 (right) on lg+ */}
+          <div className="order-1 mb-6 lg:order-2 lg:mb-0 lg:flex-1 lg:max-w-[560px]">
+            <PlanCanvas
+              plan={plan}
+              stopCount={stopCount}
+              stopIds={stopIds}
+              timelineError={timelineError}
+              onTimelineErrorDismiss={() => setTimelineError(null)}
+              onReorder={handleReorder}
+              onLegRefresh={handleLegRefresh}
+              onStayEdit={handleStayEdit}
+              isReordering={isReordering}
+              refreshingLegIdx={refreshingLegIdx}
+            />
+          </div>
+        </div>
+
+        <p className="mt-12 text-center text-body text-text-muted">
+          Made in Dublin &middot;{" "}
+          <a
+            href="https://github.com/samaarr/routewright"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-text-secondary"
+          >
+            github.com/samaarr/routewright
+          </a>
+        </p>
+      </main>
+
+      {/* Mobile sticky Plan button — visible only on mobile when no plan exists yet.
+          Uses form="plan-form" to submit the PlanForm without being inside it. */}
+      {plan === null && (
+        <div className="fixed bottom-0 left-0 right-0 border-t border-border-subtle bg-bg-elevated p-3 md:hidden">
+          <button
+            type="submit"
+            form="plan-form"
+            disabled={status === "loading"}
+            className="w-full rounded-md bg-accent py-2.5 text-body-strong text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {status === "loading" ? "Planning…" : "Plan ↗"}
+          </button>
+        </div>
+      )}
+    </>
   );
 }

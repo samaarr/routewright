@@ -6,11 +6,12 @@ interface Props {
   onChange: (form: FormState) => void;
   onSubmit: (form: FormState) => void;
   isLoading: boolean;
+  mobileSubmitHidden?: boolean;
 }
 
 const MODES: TransportMode[] = ["transit", "walking", "driving"];
 
-export default function PlanForm({ form, onChange, onSubmit, isLoading }: Props) {
+export default function PlanForm({ form, onChange, onSubmit, isLoading, mobileSubmitHidden }: Props) {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     // start_time conversion (naive → UTC ISO) happens in toPayload() in
@@ -19,7 +20,7 @@ export default function PlanForm({ form, onChange, onSubmit, isLoading }: Props)
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form id="plan-form" onSubmit={handleSubmit} className="space-y-4">
       <div>
         <label className="mb-1 block text-body-strong text-text-label">
           City
@@ -84,9 +85,9 @@ export default function PlanForm({ form, onChange, onSubmit, isLoading }: Props)
       <button
         type="submit"
         disabled={isLoading}
-        className="w-full rounded-md bg-accent py-2.5 text-body-strong text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+        className={`w-full rounded-md bg-accent py-2.5 text-body-strong text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50${mobileSubmitHidden ? " hidden md:block" : ""}`}
       >
-        {isLoading ? "Planning…" : "Generate"}
+        {isLoading ? "Planning…" : "Plan ↗"}
       </button>
     </form>
   );
