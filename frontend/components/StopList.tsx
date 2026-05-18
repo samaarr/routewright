@@ -36,7 +36,7 @@ export default function StopList({ stops, onChange }: Props) {
     <div className="space-y-2">
       {stops.map((stop, i) => (
         <div key={stop.id} className="flex items-center gap-2">
-          <span className="w-4 flex-shrink-0 text-right text-xs text-zinc-400">
+          <span className="w-4 flex-shrink-0 text-right text-caption text-text-muted">
             {i + 1}
           </span>
           <input
@@ -45,14 +45,14 @@ export default function StopList({ stops, onChange }: Props) {
             value={stop.query}
             onChange={(e) => updateQuery(i, e.target.value)}
             required
-            className="flex-1 rounded-md border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="flex-1 rounded-md border border-border-default px-3 py-2 text-body focus:outline-none focus:ring-2 focus:ring-accent-emphasis"
           />
           <button
             type="button"
             onClick={() => removeStop(i)}
             disabled={stops.length <= 2}
             aria-label={`Remove stop ${i + 1}`}
-            className="-m-2 p-2 text-lg leading-none text-zinc-400 hover:text-zinc-700 disabled:cursor-not-allowed disabled:opacity-30"
+            className="-m-2 p-2 text-lg leading-none text-text-muted hover:text-text-label disabled:cursor-not-allowed disabled:opacity-30"
           >
             ×
           </button>
@@ -63,7 +63,7 @@ export default function StopList({ stops, onChange }: Props) {
         type="button"
         onClick={addStop}
         disabled={stops.length >= 12}
-        className="py-2 text-sm text-blue-600 hover:text-blue-800 disabled:cursor-not-allowed disabled:opacity-40"
+        className="py-2 text-body text-accent hover:text-accent-strong disabled:cursor-not-allowed disabled:opacity-40"
       >
         + Add stop
       </button>

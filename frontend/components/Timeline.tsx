@@ -143,12 +143,12 @@ export default function Timeline({
       <div>
         <div id="timeline-anchor" />
         <div className="mb-5 flex items-center justify-between">
-          <p className="text-sm font-medium text-zinc-500">{plan.city}</p>
+          <p className="text-body-strong text-text-tertiary">{plan.city}</p>
           <a
             href={plan.overview_map_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sm text-blue-600 underline underline-offset-2 hover:text-blue-800"
+            className="text-body text-accent underline underline-offset-2 hover:text-accent-strong"
           >
             Overview map ↗
           </a>
@@ -161,12 +161,12 @@ export default function Timeline({
           */}
           <div className="relative">
             {isReordering && (
-              <div className="absolute inset-0 z-20 flex items-center justify-center rounded bg-white/80">
-                <p className="text-sm text-zinc-500">Updating route…</p>
+              <div className="absolute inset-0 z-20 flex items-center justify-center rounded bg-bg-elevated/80">
+                <p className="text-body text-text-tertiary">Updating route…</p>
               </div>
             )}
 
-            <ol className="relative overflow-hidden before:absolute before:bottom-4 before:left-[5rem] before:top-4 before:border-l before:border-dashed before:border-zinc-200">
+            <ol className="relative overflow-hidden before:absolute before:bottom-4 before:left-[5rem] before:top-4 before:border-l before:border-dashed before:border-border-subtle">
               {plan.timeline.map((item, idx) => {
                 if (item.item_type === "stop") {
                   const si = stopIndex;
@@ -207,7 +207,7 @@ export default function Timeline({
 
       <DragOverlay dropAnimation={null}>
         {activeStop ? (
-          <div className="rounded border border-blue-200 bg-white shadow-lg">
+          <div className="rounded border border-accent-faint bg-bg-elevated shadow-floating">
             <StopCard
               stop={activeStop}
               isFirst={false}

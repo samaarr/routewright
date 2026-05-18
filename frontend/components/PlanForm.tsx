@@ -21,7 +21,7 @@ export default function PlanForm({ form, onChange, onSubmit, isLoading }: Props)
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className="mb-1 block text-sm font-medium text-zinc-700">
+        <label className="mb-1 block text-body-strong text-text-label">
           City
         </label>
         <input
@@ -30,12 +30,12 @@ export default function PlanForm({ form, onChange, onSubmit, isLoading }: Props)
           value={form.city}
           onChange={(e) => onChange({ ...form, city: e.target.value })}
           required
-          className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full rounded-md border border-border-default px-3 py-2 text-body focus:outline-none focus:ring-2 focus:ring-accent-emphasis"
         />
       </div>
 
       <div>
-        <label className="mb-1 block text-sm font-medium text-zinc-700">
+        <label className="mb-1 block text-body-strong text-text-label">
           Stops
         </label>
         <StopList
@@ -45,7 +45,7 @@ export default function PlanForm({ form, onChange, onSubmit, isLoading }: Props)
       </div>
 
       <div>
-        <label className="mb-1 block text-sm font-medium text-zinc-700">
+        <label className="mb-1 block text-body-strong text-text-label">
           Start time
         </label>
         <input
@@ -53,19 +53,19 @@ export default function PlanForm({ form, onChange, onSubmit, isLoading }: Props)
           value={form.start_time}
           onChange={(e) => onChange({ ...form, start_time: e.target.value })}
           required
-          className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full rounded-md border border-border-default px-3 py-2 text-body focus:outline-none focus:ring-2 focus:ring-accent-emphasis"
         />
       </div>
 
       <div>
-        <label className="mb-1 block text-sm font-medium text-zinc-700">
+        <label className="mb-1 block text-body-strong text-text-label">
           Mode
         </label>
         <div className="flex gap-4">
           {MODES.map((m) => (
             <label
               key={m}
-              className="flex cursor-pointer items-center gap-1.5 text-sm text-zinc-700"
+              className="flex cursor-pointer items-center gap-1.5 text-body text-text-label"
             >
               <input
                 type="radio"
@@ -84,7 +84,7 @@ export default function PlanForm({ form, onChange, onSubmit, isLoading }: Props)
       <button
         type="submit"
         disabled={isLoading}
-        className="w-full rounded-md bg-blue-600 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded-md bg-accent py-2.5 text-body-strong text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
       >
         {isLoading ? "Planning…" : "Generate"}
       </button>

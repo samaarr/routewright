@@ -37,17 +37,17 @@ export default function LegCard({
   return (
     <div className="py-1 pl-20">
       <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
-        <span className="text-zinc-400">↓</span>
-        <span className={`text-sm ${isDegraded ? "text-amber-700" : "text-zinc-600"}`}>
+        <span className="text-text-muted">↓</span>
+        <span className={`text-body ${isDegraded ? "text-warning-strong" : "text-text-secondary"}`}>
           {isDegraded && "⚠ "}
           {leg.summary}
         </span>
-        <span className="text-zinc-300">·</span>
+        <span className="text-text-ghost">·</span>
         <a
           href={leg.map_url}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-sm text-blue-600 underline underline-offset-2 hover:text-blue-800"
+          className="text-body text-accent underline underline-offset-2 hover:text-accent-strong"
         >
           Get directions ↗
         </a>
@@ -56,21 +56,21 @@ export default function LegCard({
           onClick={() => onRefresh(legTimelineIndex)}
           disabled={isRefreshing}
           aria-label="Refresh this leg with current transit times"
-          className="-m-2 p-2 text-zinc-400 hover:text-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
+          className="-m-2 p-2 text-text-muted hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-50"
         >
           <RefreshIcon spinning={isRefreshing} />
         </button>
       </div>
 
       {isDegraded && (
-        <p className="mt-0.5 text-xs text-amber-600">
+        <p className="mt-0.5 text-caption text-warning-icon">
           Schedule unavailable — estimated time shown.
         </p>
       )}
 
       {/* Caption only on first leg — teaches the live-times model once */}
       {isFirstLeg && (
-        <p className="mt-0.5 text-xs text-zinc-400">
+        <p className="mt-0.5 text-caption text-text-muted">
           Tap when you&apos;re heading out — live times open in Google Maps.
         </p>
       )}

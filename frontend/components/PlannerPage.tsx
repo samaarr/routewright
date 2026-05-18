@@ -173,14 +173,14 @@ export default function PlannerPage() {
   return (
     <main className="mx-auto max-w-lg px-4 py-10">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-zinc-900">RouteWright</h1>
-        <p className="mt-1 text-base text-zinc-600">
+        <h1 className="text-display text-text-primary">RouteWright</h1>
+        <p className="mt-1 text-base text-text-secondary">
           Multi-stop transit planning that Google Maps doesn&apos;t do.
         </p>
       </div>
 
       {status === "error" && errorMsg && (
-        <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="mb-4 rounded-md border border-error-border bg-error-bg px-3 py-2 text-body text-error-text">
           {errorMsg}
         </div>
       )}
@@ -193,7 +193,7 @@ export default function PlannerPage() {
       />
 
       {status === "idle" && plan === null && (
-        <p className="mt-4 text-center text-sm text-zinc-400">
+        <p className="mt-4 text-center text-body text-text-muted">
           Enter your stops and tap Generate.
         </p>
       )}
@@ -201,13 +201,13 @@ export default function PlannerPage() {
       {plan !== null && (
         <div className="mt-8">
           {timelineError && (
-            <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            <div className="mb-3 flex items-start gap-2 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-body text-warning-text">
               <span className="flex-1">{timelineError}</span>
               <button
                 type="button"
                 onClick={() => setTimelineError(null)}
                 aria-label="Dismiss"
-                className="flex-shrink-0 text-amber-600 hover:text-amber-800"
+                className="flex-shrink-0 text-warning-icon hover:text-warning-text"
               >
                 ✕
               </button>
@@ -225,13 +225,13 @@ export default function PlannerPage() {
           />
         </div>
       )}
-      <p className="mt-12 text-center text-sm text-zinc-400">
+      <p className="mt-12 text-center text-body text-text-muted">
         Made in Dublin &middot;{" "}
         <a
           href="https://github.com/samaarr/routewright"
           target="_blank"
           rel="noopener noreferrer"
-          className="underline underline-offset-2 hover:text-zinc-600"
+          className="underline underline-offset-2 hover:text-text-secondary"
         >
           github.com/samaarr/routewright
         </a>
