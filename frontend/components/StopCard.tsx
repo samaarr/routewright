@@ -76,7 +76,7 @@ export default function StopCard({ stop, isFirst, isLast, dragHandleProps, onSta
       {/* Dot — centred over the dotted vertical line (line is at left-[5rem]) */}
       <div className="flex w-4 flex-shrink-0 justify-center pt-1.5">
         <div
-          className="relative z-10 h-3 w-3 rounded-full bg-accent transition-shadow duration-150 group-hover:shadow-[0_0_0_4px_rgba(30,64,175,0.15)]"
+          className="relative z-10 h-3 w-3 rounded-full bg-accent transition-shadow duration-150 group-hover:shadow-[0_0_0_4px_var(--color-marker-glow-spark)]"
         />
       </div>
 

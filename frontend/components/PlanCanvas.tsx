@@ -43,7 +43,7 @@ export default function PlanCanvas({
             href={plan.overview_map_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sm text-text-secondary transition-colors hover:text-accent"
+            className="text-sm text-spark transition-opacity hover:opacity-75"
           >
             Overview map ↗
           </a>

@@ -47,7 +47,7 @@ export default function LegCard({
           href={leg.map_url}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-body text-accent underline underline-offset-2 hover:text-accent-strong"
+          className="text-body text-spark underline underline-offset-2 transition-opacity hover:opacity-75"
         >
           Get directions ↗
         </a>

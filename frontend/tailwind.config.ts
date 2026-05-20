@@ -41,6 +41,13 @@ const config: Config = {
         "accent-faint":     "rgb(var(--color-accent-faint)    / <alpha-value>)",
         "accent-soft":      "rgb(var(--color-accent-soft)     / <alpha-value>)",
 
+        // Heading (near-navy indigo)
+        "heading": "rgb(var(--color-heading) / <alpha-value>)",
+
+        // Spark (coral — timeline side only)
+        "spark":      "rgb(var(--color-spark)      / <alpha-value>)",
+        "spark-soft": "rgb(var(--color-spark-soft) / <alpha-value>)",
+
         // States
         "error-bg":       "rgb(var(--color-error-bg)       / <alpha-value>)",
         "error-border":   "rgb(var(--color-error-border)   / <alpha-value>)",

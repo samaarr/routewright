@@ -16,38 +16,46 @@
 
 :root {
   /* --- Surfaces --------------------------------------------------------- */
-  --color-bg-base:     252 251 249; /* warm stone canvas                     */
+  --color-bg-base:     244 242 239; /* warm stone canvas                     */
   --color-bg-elevated: 255 254 252; /* warm white — floating elements        */
-  --color-pane-bg:     255 255 255; /* pure white — column pane backgrounds  */
+  --color-pane-bg:     255 254 254; /* panes, faint warmth                   */
 
   /* --- Text ------------------------------------------------------------- */
-  --color-text-primary:   20  18  16; /* warm near-black                      */
-  --color-text-secondary: 82  78  74; /* warm mid-gray                        */
-  --color-text-tertiary:  140 135 130; /* warm light gray                     */
-  --color-text-muted:     161 161 170; /* zinc-400 — captions, icons          */
-  --color-text-ghost:     212 212 216; /* zinc-300 — drag handle, separators  */
-  --color-text-label:     63  63  70;  /* zinc-700 — legacy, being phased out */
+  --color-text-primary:   26  23  21; /* warm near-black                      */
+  --color-text-secondary: 107 101  96; /* warm mid-gray                       */
+  --color-text-tertiary:  163 154 144; /* warm light gray                     */
+  --color-text-muted:     163 154 144; /* aligned with tertiary, warm         */
+  --color-text-ghost:     212 212 216; /* drag handle, separators             */
+  --color-text-label:     63  63  70;  /* legacy, being phased out            */
 
   /* --- Borders ---------------------------------------------------------- */
-  --color-border-subtle:  231 229 226; /* warm dividers, pane edges            */
-  --color-border-default: 214 211 208; /* warm input borders                   */
-  --color-border-strong:  180 175 170; /* hover state for inputs, rows         */
+  --color-border-subtle:  235 232 240; /* warm-cool dividers, pane edges       */
+  --color-border-default: 227 224 234; /* input borders                        */
+  --color-border-strong:  200 195 210; /* hover border                         */
 
   /* --- Accent (deep indigo) --------------------------------------------- */
-  --color-accent:          30  64 175; /* primary actions, links               */
-  --color-accent-hover:    37  78 198; /* hover state                          */
-  --color-accent-strong:   30  64 175; /* hover text links (= accent)          */
-  --color-accent-emphasis: 59 130 246; /* focus rings, timeline dot            */
-  --color-accent-border:   96 165 250; /* active edit-input border             */
-  --color-accent-faint:   191 219 254; /* drag overlay border                  */
-  --color-accent-soft:    232 236 248; /* selected radio bg, focus tint        */
+  --color-accent:          79  70 196; /* primary actions, markers             */
+  --color-accent-hover:    88  80 216; /* hover state (lighter)                */
+  --color-accent-strong:   59  52 176; /* button gradient bottom (deeper)      */
+  --color-accent-emphasis: 79  70 196; /* focus rings (= accent)               */
+  --color-accent-border:   79  70 196; /* active edit-input border             */
+  --color-accent-faint:   191 185 240; /* drag overlay border                  */
+  --color-accent-soft:    237 235 255; /* selected radio bg, focus tint        */
+
+  /* --- Heading (near-navy indigo — hero text, time chips) --------------- */
+  --color-heading: 36 27 84; /* #241B54 deep navy-indigo                      */
+
+  /* --- Spark (warm coral — timeline-side only) -------------------------- */
+  --color-spark:      245  97  58; /* #F5613A — directions link, map link      */
+  --color-spark-soft: 255 238 230; /* #FFEEE6 — faint coral tint               */
 
   /* --- Markers (timeline stop dots) ------------------------------------- */
-  --color-marker-active:  30  64 175; /* filled stop dot (= accent)           */
-  --color-marker-glow:    rgba(30, 64, 175, 0.15); /* hover glow ring        */
+  --color-marker-active:     79  70 196; /* filled stop dot (= accent)        */
+  --color-marker-glow:       rgba(79, 70, 196, 0.16); /* rest glow ring       */
+  --color-marker-glow-spark: rgba(245, 97, 58, 0.18); /* hover glow — coral  */
 
   /* --- Focus ------------------------------------------------------------ */
-  --color-focus-ring: rgba(30, 64, 175, 0.2); /* input focus shadow           */
+  --color-focus-ring: rgba(79, 70, 196, 0.2); /* input focus shadow           */
 
   /* --- Semantic states -------------------------------------------------- */
   --color-error-bg:     254 242 242; /* red-50  */
@@ -66,8 +74,8 @@
   --radius-lg: 1rem;     /* 16px — column panes                              */
 
   /* --- Shadows ---------------------------------------------------------- */
-  --shadow-subtle:   0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.04);
-  --shadow-raised:   0 4px 12px rgba(0,0,0,0.06), 0 12px 32px rgba(0,0,0,0.04);
+  --shadow-subtle:   0 1px 2px rgba(30,25,50,0.05), 0 14px 32px rgba(30,25,60,0.08);
+  --shadow-raised:   0 4px 12px rgba(30,25,60,0.08), 0 20px 48px rgba(30,25,60,0.10);
   --shadow-floating: 0 12px 32px rgba(0,0,0,0.08), 0 24px 64px rgba(0,0,0,0.06);
 
   /* --- Motion ----------------------------------------------------------- */
@@ -77,8 +85,24 @@
   --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);  /* soft Apple-style ease    */
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);   /* standard ease-in-out     */
 
+  /* --- Background gradient (panes float on a faint indigo+coral canvas) - */
+  --bg-gradient:
+    radial-gradient(110% 80% at 100% 0%, rgba(233,230,255,0.6) 0%, transparent 50%),
+    radial-gradient(120% 90% at 0% 100%, rgba(255,238,230,0.55) 0%, transparent 50%),
+    rgb(244 242 239);
+
   /* --- Typography intent ------------------------------------------------ */
   /* --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; */
+}
+
+/* ==========================================================================
+   Base overrides — applied once, before component/utility layers.
+   ========================================================================== */
+
+@layer base {
+  body {
+    background: var(--bg-gradient);
+  }
 }
 
 /* ==========================================================================
@@ -151,7 +175,7 @@
 
   /* Prominent pane-level label ("Your day") */
   .text-display-large {
-    @apply text-2xl font-semibold text-text-primary;
+    @apply text-2xl font-semibold text-heading;
     line-height: 1.2;
     letter-spacing: -0.015em;
   }
@@ -179,7 +203,7 @@
 
   /* Prominent time chip — arrival times in the timeline */
   .text-time-chip {
-    @apply text-base font-semibold text-text-primary;
+    @apply text-base font-semibold text-heading;
     font-feature-settings: 'tnum';
     letter-spacing: -0.005em;
   }
@@ -206,7 +230,7 @@
      ----------------------------------------------------------------------- */
   .btn-primary {
     @apply h-14 w-full rounded-md text-base font-medium text-white focus:outline-none;
-    background: linear-gradient(to bottom, rgb(var(--color-accent)), rgb(var(--color-accent-hover)));
+    background: linear-gradient(180deg, rgb(var(--color-accent-hover)), rgb(var(--color-accent-strong)));
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
     transition: transform  var(--duration-fast) var(--ease-out),
                 box-shadow var(--duration-base) var(--ease-out);
