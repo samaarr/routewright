@@ -58,22 +58,25 @@ function SortableStopRow({ id, stop, isFirst, isLast, animationDelay, onStayEdit
   return (
     <li
       ref={setNodeRef}
-      className="animate-fade-up"
       style={{
         transform: CSS.Transform.toString(transform),
         transition,
         opacity: isDragging ? 0.35 : 1,
-        animationDelay,
       }}
       {...attributes}
     >
-      <StopCard
-        stop={stop}
-        isFirst={isFirst}
-        isLast={isLast}
-        dragHandleProps={listeners as Parameters<typeof StopCard>[0]["dragHandleProps"]}
-        onStayEdit={(m) => onStayEdit(id, m)}
-      />
+      {/* Inner wrapper owns the entrance animation so dnd-kit's inline
+          opacity:1 on the <li> doesn't override the keyframe's opacity:0
+          starting state. */}
+      <div className="animate-fade-up" style={{ animationDelay }}>
+        <StopCard
+          stop={stop}
+          isFirst={isFirst}
+          isLast={isLast}
+          dragHandleProps={listeners as Parameters<typeof StopCard>[0]["dragHandleProps"]}
+          onStayEdit={(m) => onStayEdit(id, m)}
+        />
+      </div>
     </li>
   );
 }

@@ -4,6 +4,7 @@ import EmptyTimeline from "./EmptyTimeline";
 
 interface Props {
   plan: Plan | null;
+  planVersion: number;
   stopCount: number;
   stopIds: string[];
   timelineError: string | null;
@@ -17,6 +18,7 @@ interface Props {
 
 export default function PlanCanvas({
   plan,
+  planVersion,
   stopCount,
   stopIds,
   timelineError,
@@ -62,7 +64,7 @@ export default function PlanCanvas({
         </div>
       )}
 
-      <div key={plan !== null ? "filled" : "empty"} className="animate-fade-in">
+      <div key={plan !== null ? `filled-${planVersion}` : "empty"}>
         {plan !== null ? (
           <Timeline
             plan={plan}

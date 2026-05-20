@@ -64,6 +64,7 @@ export default function PlannerPage() {
   // Controls the mobile sticky summary bar that appears when the user
   // scrolls past the timeline on a narrow viewport.
   const [showStickyBar, setShowStickyBar] = useState(false);
+  const [planVersion, setPlanVersion] = useState(0);
 
   useEffect(() => {
     if (!plan) {
@@ -91,6 +92,7 @@ export default function PlannerPage() {
     try {
       const result = await postPlan(toPayload(formState));
       setPlan(result);
+      setPlanVersion((v) => v + 1);
       setStatus("idle");
       scrollToTimeline();
     } catch (err) {
@@ -263,6 +265,7 @@ export default function PlannerPage() {
           <div className="order-1 rounded-lg border border-border-subtle bg-pane-bg p-6 shadow-subtle lg:order-2 lg:flex-1 lg:max-w-[560px] lg:min-h-0 lg:overflow-y-auto lg:p-8 lg:[scrollbar-gutter:stable]">
             <PlanCanvas
               plan={plan}
+              planVersion={planVersion}
               stopCount={stopCount}
               stopIds={stopIds}
               timelineError={timelineError}
