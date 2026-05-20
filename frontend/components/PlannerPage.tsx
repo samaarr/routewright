@@ -228,7 +228,7 @@ export default function PlannerPage() {
         </div>
       )}
 
-      <main className="mx-auto flex-1 max-w-[980px] px-4 lg:flex lg:flex-col lg:overflow-hidden lg:px-6">
+      <main className="mx-auto flex-1 max-w-[980px] px-4 lg:flex lg:flex-col lg:min-h-0 lg:overflow-hidden lg:px-6">
         {/* Header — full-width hero above both columns */}
         <div className="mb-6 mt-12 text-center lg:mb-8 lg:mt-16 lg:flex-shrink-0 lg:text-left">
           <h1 className="text-display text-text-primary">RouteWright</h1>
@@ -243,7 +243,7 @@ export default function PlannerPage() {
         <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1 lg:flex-row lg:items-stretch lg:gap-8">
           {/* Form column — white pane, order-2 (below) on mobile, order-1 (left) on lg+ */}
           <div
-            className={`order-2 rounded-lg border border-border-subtle bg-pane-bg p-6 shadow-subtle lg:order-1 lg:w-[380px] lg:flex-shrink-0 lg:overflow-y-auto lg:p-8 lg:[scrollbar-gutter:stable]${plan === null ? " pb-20 md:pb-6 lg:pb-8" : ""}`}
+            className={`order-2 rounded-lg border border-border-subtle bg-pane-bg p-6 shadow-subtle lg:order-1 lg:w-[380px] lg:flex-shrink-0 lg:min-h-0 lg:overflow-y-auto lg:p-8 lg:[scrollbar-gutter:stable]${plan === null ? " pb-20 md:pb-6 lg:pb-8" : ""}`}
           >
             {status === "error" && errorMsg && (
               <div className="mb-4 rounded-md border border-error-border bg-error-bg px-3 py-2 text-body text-error-text">
@@ -260,7 +260,7 @@ export default function PlannerPage() {
           </div>
 
           {/* Timeline canvas — white pane, order-1 (above) on mobile, order-2 (right) on lg+ */}
-          <div className="order-1 rounded-lg border border-border-subtle bg-pane-bg p-6 shadow-subtle lg:order-2 lg:flex-1 lg:max-w-[560px] lg:overflow-y-auto lg:p-8 lg:[scrollbar-gutter:stable]">
+          <div className="order-1 rounded-lg border border-border-subtle bg-pane-bg p-6 shadow-subtle lg:order-2 lg:flex-1 lg:max-w-[560px] lg:min-h-0 lg:overflow-y-auto lg:p-8 lg:[scrollbar-gutter:stable]">
             <PlanCanvas
               plan={plan}
               stopCount={stopCount}
