@@ -33,8 +33,8 @@ export default function PlanCanvas({
           including the "Your day" header lands at the top of the viewport. */}
       <div id="timeline-anchor" />
 
-      {/* Pane header */}
-      <div className="mb-6 flex items-baseline justify-between border-b border-border-subtle pb-4">
+      {/* Pane header — sticky so it stays visible as the timeline scrolls */}
+      <div className="sticky top-0 z-10 mb-6 flex items-baseline justify-between border-b border-border-subtle bg-pane-bg pb-4">
         <span className="text-display-large">Your day</span>
         {plan && (
           <a
