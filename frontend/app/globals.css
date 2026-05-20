@@ -102,6 +102,7 @@
 @layer base {
   body {
     background: var(--bg-gradient);
+    background-attachment: fixed;
   }
 }
 
