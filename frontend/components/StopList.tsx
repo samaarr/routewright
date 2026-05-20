@@ -57,7 +57,7 @@ export default function StopList({ stops, onChange }: Props) {
       {stops.map((stop, i) => (
         <div
           key={stop.id}
-          className="group flex items-center gap-2 rounded-sm transition-colors hover:bg-bg-base"
+          className="animate-slide-down group flex items-center gap-2 rounded-sm transition-colors hover:bg-bg-base"
         >
           {/* Visual grip handle — decorative, matches timeline stop appearance */}
           <span className="cursor-grab text-text-tertiary">

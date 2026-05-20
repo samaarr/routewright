@@ -70,8 +70,57 @@
   --shadow-raised:   0 4px 12px rgba(0,0,0,0.06), 0 12px 32px rgba(0,0,0,0.04);
   --shadow-floating: 0 12px 32px rgba(0,0,0,0.08), 0 24px 64px rgba(0,0,0,0.06);
 
+  /* --- Motion ----------------------------------------------------------- */
+  --duration-fast:  100ms;
+  --duration-base:  200ms;
+  --duration-slow:  300ms;
+  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);  /* soft Apple-style ease    */
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);   /* standard ease-in-out     */
+
   /* --- Typography intent ------------------------------------------------ */
   /* --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; */
+}
+
+/* ==========================================================================
+   Keyframe animations
+   Defined inside prefers-reduced-motion: no-preference so they only exist
+   when the user has NOT requested reduced motion. The safety-net rule below
+   collapses any remaining durations to near-zero for reduced-motion users.
+   ========================================================================== */
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  @keyframes slide-down {
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Used for the Plan button "Planning…" state */
+  @keyframes planning-pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.6; }
+  }
+}
+
+/* Safety net: collapse all animation and transition for reduced-motion users. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ==========================================================================
@@ -137,11 +186,12 @@
 
   /* -----------------------------------------------------------------------
      Input base — apply to every text/datetime input in the form.
-     Pseudo-class states use direct CSS because @apply in nested rules
-     can behave unexpectedly across Tailwind versions.
+     Focus ring uses --color-focus-ring token. Transition uses motion tokens.
      ----------------------------------------------------------------------- */
   .input-base {
-    @apply h-12 w-full rounded-md border border-border-default bg-pane-bg px-4 text-base text-text-primary placeholder:text-text-tertiary transition-colors duration-150 focus:outline-none;
+    @apply h-12 w-full rounded-md border border-border-default bg-pane-bg px-4 text-base text-text-primary placeholder:text-text-tertiary focus:outline-none;
+    transition: border-color var(--duration-fast) var(--ease-out),
+                box-shadow   var(--duration-fast) var(--ease-out);
   }
   .input-base:hover:not(:focus) {
     border-color: rgb(var(--color-border-strong));
@@ -155,9 +205,11 @@
      Primary action button
      ----------------------------------------------------------------------- */
   .btn-primary {
-    @apply h-14 w-full rounded-md text-base font-medium text-white transition-all duration-200 focus:outline-none;
+    @apply h-14 w-full rounded-md text-base font-medium text-white focus:outline-none;
     background: linear-gradient(to bottom, rgb(var(--color-accent)), rgb(var(--color-accent-hover)));
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    transition: transform  var(--duration-fast) var(--ease-out),
+                box-shadow var(--duration-base) var(--ease-out);
   }
   .btn-primary:hover:not(:disabled) {
     transform: scale(1.01);
@@ -166,8 +218,28 @@
   .btn-primary:active:not(:disabled) {
     transform: scale(0.99);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    transition-duration: var(--duration-fast);
   }
   .btn-primary:disabled {
     @apply cursor-not-allowed opacity-50;
+  }
+
+  /* -----------------------------------------------------------------------
+     Animation utilities
+     Reference the @keyframes defined above. animation-fill-mode: both means
+     the element starts at the "from" state and holds the "to" state after.
+     ----------------------------------------------------------------------- */
+  .animate-fade-up {
+    animation: fade-up var(--duration-slow) var(--ease-out) both;
+  }
+  .animate-fade-in {
+    animation: fade-in var(--duration-base) var(--ease-out) both;
+  }
+  .animate-slide-down {
+    animation: slide-down var(--duration-base) var(--ease-out) both;
+  }
+  /* "Planning…" button pulse — infinite, no fill mode */
+  .animate-planning {
+    animation: planning-pulse 1.2s var(--ease-in-out) infinite;
   }
 }

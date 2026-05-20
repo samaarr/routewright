@@ -297,7 +297,7 @@ export default function PlannerPage() {
             type="submit"
             form="plan-form"
             disabled={status === "loading"}
-            className={`btn-primary${status === "loading" ? " animate-pulse" : ""}`}
+            className={`btn-primary${status === "loading" ? " animate-planning" : ""}`}
           >
             {status === "loading" ? "Planning…" : "Plan ↗"}
           </button>

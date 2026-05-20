@@ -95,7 +95,7 @@ export default function PlanForm({ form, onChange, onSubmit, isLoading, mobileSu
       <button
         type="submit"
         disabled={isLoading}
-        className={`btn-primary${isLoading ? " animate-pulse" : ""}${mobileSubmitHidden ? " hidden md:flex md:items-center md:justify-center" : ""}`}
+        className={`btn-primary${isLoading ? " animate-planning" : ""}${mobileSubmitHidden ? " hidden md:flex md:items-center md:justify-center" : ""}`}
       >
         {isLoading ? "Planning…" : "Plan ↗"}
       </button>

@@ -62,19 +62,21 @@ export default function PlanCanvas({
         </div>
       )}
 
-      {plan !== null ? (
-        <Timeline
-          plan={plan}
-          stopIds={stopIds}
-          onReorder={onReorder}
-          onLegRefresh={onLegRefresh}
-          onStayEdit={onStayEdit}
-          isReordering={isReordering}
-          refreshingLegIdx={refreshingLegIdx}
-        />
-      ) : (
-        <EmptyTimeline stopCount={stopCount} />
-      )}
+      <div key={plan !== null ? "filled" : "empty"} className="animate-fade-in">
+        {plan !== null ? (
+          <Timeline
+            plan={plan}
+            stopIds={stopIds}
+            onReorder={onReorder}
+            onLegRefresh={onLegRefresh}
+            onStayEdit={onStayEdit}
+            isReordering={isReordering}
+            refreshingLegIdx={refreshingLegIdx}
+          />
+        ) : (
+          <EmptyTimeline stopCount={stopCount} />
+        )}
+      </div>
     </div>
   );
 }

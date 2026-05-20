@@ -41,10 +41,11 @@ interface SortableStopRowProps {
   stop: StopItemType;
   isFirst: boolean;
   isLast: boolean;
+  animationDelay: string;
   onStayEdit: (stopId: string, minutes: number) => void;
 }
 
-function SortableStopRow({ id, stop, isFirst, isLast, onStayEdit }: SortableStopRowProps) {
+function SortableStopRow({ id, stop, isFirst, isLast, animationDelay, onStayEdit }: SortableStopRowProps) {
   const {
     attributes,
     listeners,
@@ -57,10 +58,12 @@ function SortableStopRow({ id, stop, isFirst, isLast, onStayEdit }: SortableStop
   return (
     <li
       ref={setNodeRef}
+      className="animate-fade-up"
       style={{
         transform: CSS.Transform.toString(transform),
         transition,
         opacity: isDragging ? 0.35 : 1,
+        animationDelay,
       }}
       {...attributes}
     >
@@ -166,6 +169,7 @@ export default function Timeline({
                       stop={item}
                       isFirst={si === 0}
                       isLast={si === totalStops - 1}
+                      animationDelay={`${Math.min(idx * 40, 400)}ms`}
                       onStayEdit={onStayEdit}
                     />
                   );
@@ -175,7 +179,11 @@ export default function Timeline({
                 const lti = idx;
                 legIndex += 1;
                 return (
-                  <li key={`leg-${idx}`}>
+                  <li
+                    key={`leg-${idx}`}
+                    className="animate-fade-up"
+                    style={{ animationDelay: `${Math.min(idx * 40, 400)}ms` }}
+                  >
                     <LegCard
                       leg={item}
                       isFirstLeg={li === 0}
