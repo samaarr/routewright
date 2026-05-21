@@ -299,64 +299,58 @@ export default function PlannerPage() {
         {/* ── TABLET + DESKTOP layout (>=768px) ─────────────────────────── */}
         {/* Hidden on mobile. On tablet: form (left) + tabbed right panel.   */}
         {/* On desktop: three independent columns.                           */}
-        <div className="hidden md:flex md:flex-col md:flex-1 md:min-h-0">
-          <div className="flex flex-row items-stretch gap-4 md:flex-1 md:min-h-0">
+        <div className="hidden md:flex md:flex-col md:flex-1 md:min-h-0 w-full">
 
-            {/* FORM — left column, always visible on tablet+ */}
-            <div className="flex flex-col rounded-lg border border-border-subtle bg-pane-bg p-6 shadow-subtle md:w-[300px] md:flex-shrink-0 md:min-h-0 md:overflow-y-auto md:[scrollbar-gutter:stable] lg:w-[340px] lg:p-8">
+          {/* Tablet-only tab toggle — sits above the column row, hidden on desktop */}
+          <div className="mb-4 flex rounded-lg border border-border-subtle bg-bg-base p-0.5 lg:hidden">
+            <TabButton
+              active={tabletRightTab === "map"}
+              onClick={() => setTabletRightTab("map")}
+            >
+              Map
+            </TabButton>
+            <TabButton
+              active={tabletRightTab === "timeline"}
+              onClick={() => setTabletRightTab("timeline")}
+            >
+              Plan
+            </TabButton>
+          </div>
+
+          {/* Column row — three direct flex siblings at all breakpoints.
+              w-full ensures it fills the parent rather than sizing to content.
+              No lg:contents trick — map and timeline are always direct children. */}
+          <div className="flex w-full flex-row items-stretch gap-4 md:flex-1 md:min-h-0">
+
+            {/* FORM — left column, always visible */}
+            <div className="flex flex-shrink-0 flex-col rounded-lg border border-border-subtle bg-pane-bg p-6 shadow-subtle md:w-[300px] md:min-h-0 md:overflow-y-auto md:[scrollbar-gutter:stable] lg:w-[340px] lg:p-8">
               {formPane(true)}
             </div>
 
-            {/* RIGHT AREA ─────────────────────────────────────────────────
-                Tablet (md, not lg): flex-col container wrapping the tab
-                toggle + one active panel.
-                Desktop (lg): display:contents makes children transparent
-                flex siblings of the column row — the right area div itself
-                disappears from layout, leaving map + timeline as cols 2 & 3.
-            ─────────────────────────────────────────────────────────────── */}
-            <div className="flex flex-1 min-h-0 flex-col gap-4 lg:contents">
+            {/* MAP PANE
+                Tablet: visible only when tabletRightTab="map".
+                Desktop: always visible — lg:flex overrides the tablet hidden. */}
+            <div
+              className={`relative overflow-hidden rounded-lg border border-border-subtle bg-pane-bg shadow-subtle min-w-0 lg:flex lg:flex-1 lg:min-h-0 lg:min-w-0 ${
+                tabletRightTab === "map"
+                  ? "flex flex-1 min-h-0"
+                  : "hidden lg:flex"
+              }`}
+            >
+              {mapPane}
+            </div>
 
-              {/* Tablet-only tab toggle — hidden on desktop (lg:hidden) */}
-              <div className="flex rounded-lg border border-border-subtle bg-bg-base p-0.5 lg:hidden">
-                <TabButton
-                  active={tabletRightTab === "map"}
-                  onClick={() => setTabletRightTab("map")}
-                >
-                  Map
-                </TabButton>
-                <TabButton
-                  active={tabletRightTab === "timeline"}
-                  onClick={() => setTabletRightTab("timeline")}
-                >
-                  Plan
-                </TabButton>
-              </div>
-
-              {/* MAP PANE
-                  Tablet: visible only when tabletRightTab="map" (hidden otherwise).
-                  Desktop: always visible via lg:flex (overrides any hidden). */}
-              <div
-                className={`relative overflow-hidden rounded-lg border border-border-subtle bg-pane-bg shadow-subtle lg:flex lg:flex-1 lg:min-h-0 ${
-                  tabletRightTab === "map"
-                    ? "flex flex-1 min-h-0"
-                    : "hidden lg:flex"
-                }`}
-              >
-                {mapPane}
-              </div>
-
-              {/* TIMELINE PANE
-                  Tablet: visible only when tabletRightTab="timeline" (hidden otherwise).
-                  Desktop: always visible via lg:flex (overrides any hidden). */}
-              <div
-                className={`rounded-lg border border-border-subtle bg-pane-bg shadow-subtle lg:flex lg:flex-col lg:w-[360px] lg:flex-shrink-0 lg:min-h-0 lg:overflow-y-auto lg:p-8 lg:[scrollbar-gutter:stable] ${
-                  tabletRightTab === "timeline"
-                    ? "flex flex-col flex-1 min-h-0 overflow-y-auto p-6"
-                    : "hidden p-6 lg:flex"
-                }`}
-              >
-                {timelinePane}
-              </div>
+            {/* TIMELINE PANE
+                Tablet: visible only when tabletRightTab="timeline".
+                Desktop: always visible — lg:flex overrides the tablet hidden. */}
+            <div
+              className={`rounded-lg border border-border-subtle bg-pane-bg shadow-subtle lg:flex lg:flex-col lg:w-[360px] lg:flex-shrink-0 lg:min-h-0 lg:overflow-y-auto lg:p-8 lg:[scrollbar-gutter:stable] ${
+                tabletRightTab === "timeline"
+                  ? "flex flex-col flex-1 min-h-0 overflow-y-auto p-6"
+                  : "hidden lg:flex"
+              }`}
+            >
+              {timelinePane}
             </div>
           </div>
         </div>
