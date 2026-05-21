@@ -1,16 +1,20 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useMemo } from "react";
 import type { FormState, Plan, PlanRequest, StopItem } from "@/lib/types";
 import { postPlan, postRefreshLeg } from "@/lib/api";
 import { fmtDuration } from "@/lib/utils";
 import PlanForm from "./PlanForm";
 import PlanCanvas from "./PlanCanvas";
+import PlanMap from "./PlanMap";
 
 type Refreshing =
   | { kind: "none" }
   | { kind: "reorder" }
   | { kind: "leg"; legTimelineIndex: number };
+
+type MobileTab = "form" | "map" | "timeline";
+type TabletRightTab = "map" | "timeline";
 
 function uid(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -31,11 +35,6 @@ function makeDefaultForm(): FormState {
   };
 }
 
-// Strip the frontend-only id field and convert the naive datetime-local string
-// to a UTC ISO 8601 string before sending to the backend.
-// new Date("2026-05-17T19:10") interprets the value in the browser's local
-// timezone; .toISOString() converts to UTC with a trailing Z — the backend
-// validator requires timezone-aware datetimes.
 function toPayload(form: FormState): PlanRequest {
   return {
     ...form,
@@ -54,6 +53,32 @@ function computeTotalDuration(plan: Plan): string {
   return fmtDuration(Math.round((last - first) / 1000));
 }
 
+// Pill toggle button used in both the mobile segmented control and the
+// tablet map/timeline tab toggle.
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex-1 rounded-md py-2 text-sm font-medium transition-colors duration-150 ${
+        active
+          ? "bg-pane-bg text-text-primary shadow-subtle"
+          : "text-text-secondary hover:text-text-primary"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function PlannerPage() {
   const [form, setForm] = useState<FormState>(makeDefaultForm);
   const [plan, setPlan] = useState<Plan | null>(null);
@@ -61,29 +86,32 @@ export default function PlannerPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState<Refreshing>({ kind: "none" });
   const [timelineError, setTimelineError] = useState<string | null>(null);
-  // Controls the mobile sticky summary bar that appears when the user
-  // scrolls past the timeline on a narrow viewport.
-  const [showStickyBar, setShowStickyBar] = useState(false);
   const [planVersion, setPlanVersion] = useState(0);
+  const [mobileTab, setMobileTab] = useState<MobileTab>("form");
+  // Tablet right panel defaults to "timeline" (users land on the plan after submit).
+  const [tabletRightTab, setTabletRightTab] = useState<TabletRightTab>("timeline");
 
-  useEffect(() => {
-    if (!plan) {
-      setShowStickyBar(false);
+  const mapStops = useMemo(
+    () =>
+      plan
+        ? (plan.timeline.filter(
+            (i): i is StopItem => i.item_type === "stop"
+          ))
+        : [],
+    [plan]
+  );
+
+  // On mobile: switch to timeline tab. On tablet: switch right panel to timeline.
+  // On desktop: no-op (all three columns always visible).
+  function focusTimeline() {
+    if (typeof window === "undefined") return;
+    if (window.innerWidth >= 1024) return;
+    if (window.innerWidth >= 768) {
+      setTabletRightTab("timeline");
       return;
     }
-    function onScroll() {
-      if (window.innerWidth >= 768) {
-        setShowStickyBar(false);
-        return;
-      }
-      const anchor = document.getElementById("timeline-anchor");
-      if (!anchor) return;
-      setShowStickyBar(anchor.getBoundingClientRect().bottom < 0);
-    }
-    window.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
-    return () => window.removeEventListener("scroll", onScroll);
-  }, [plan]);
+    setMobileTab("timeline");
+  }
 
   async function handleSubmit(formState: FormState) {
     setStatus("loading");
@@ -94,35 +122,19 @@ export default function PlannerPage() {
       setPlan(result);
       setPlanVersion((v) => v + 1);
       setStatus("idle");
-      scrollToTimeline();
+      focusTimeline();
     } catch (err) {
       setStatus("error");
       setErrorMsg(err instanceof Error ? err.message : "Something went wrong.");
     }
   }
 
-  // On desktop (>=1024px) the timeline is always visible — no scroll needed.
-  // On mobile the timeline is at the top of the stacked layout so we scroll up.
-  function scrollToTimeline() {
-    if (typeof window !== "undefined" && window.innerWidth >= 1024) return;
-    setTimeout(() => {
-      document.getElementById("timeline-anchor")?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-    }, 100);
-  }
-
-  // newIds: UUIDs in the new stop order — parallel to form.stops.
   async function handleReorder(newIds: string[]) {
     if (!plan) return;
     const prevStops = form.stops;
-
-    // Reorder by UUID so identical query strings don't cross-wire.
     const idToStop = new Map(prevStops.map((s) => [s.id, s]));
     const newStops = newIds.map((id) => idToStop.get(id)!);
     const newForm = { ...form, stops: newStops };
-
     setForm(newForm);
     setRefreshing({ kind: "reorder" });
     setTimelineError(null);
@@ -130,13 +142,10 @@ export default function PlannerPage() {
       const result = await postPlan(toPayload(newForm));
       setPlan(result);
       setRefreshing({ kind: "none" });
-      scrollToTimeline();
-    } catch (err) {
+    } catch {
       setForm({ ...form, stops: prevStops });
       setRefreshing({ kind: "none" });
-      setTimelineError(
-        "Couldn't update — your previous order is restored. Try again?"
-      );
+      setTimelineError("Couldn't update — your previous order is restored. Try again?");
     }
   }
 
@@ -154,7 +163,7 @@ export default function PlannerPage() {
       const result = await postPlan(toPayload(newForm));
       setPlan(result);
       setRefreshing({ kind: "none" });
-    } catch (err) {
+    } catch {
       setForm({ ...form, stops: prevStops });
       setRefreshing({ kind: "none" });
       setTimelineError("Couldn't update stay duration. Try again?");
@@ -163,16 +172,13 @@ export default function PlannerPage() {
 
   async function handleLegRefresh(legTimelineIndex: number) {
     if (!plan) return;
-
     const timeline = plan.timeline;
     const legItem = timeline[legTimelineIndex];
     if (!legItem || legItem.item_type !== "leg") return;
-
     const fromStop = timeline[legTimelineIndex - 1] as StopItem | undefined;
     const toStop = timeline[legTimelineIndex + 1] as StopItem | undefined;
     if (!fromStop || fromStop.item_type !== "stop") return;
     if (!toStop || toStop.item_type !== "stop") return;
-
     setRefreshing({ kind: "leg", legTimelineIndex });
     setTimelineError(null);
     try {
@@ -201,85 +207,162 @@ export default function PlannerPage() {
   const isReordering = refreshing.kind === "reorder";
   const refreshingLegIdx =
     refreshing.kind === "leg" ? refreshing.legTimelineIndex : null;
-
-  // Parallel array: form.stops[i].id corresponds to the i-th StopItem in
-  // plan.timeline. Passed to Timeline so it can use UUIDs for dnd-kit ids
-  // and React keys instead of query strings.
   const stopIds = form.stops.map((s) => s.id);
   const stopCount = form.stops.length;
   const totalDuration = plan ? computeTotalDuration(plan) : "";
 
-  return (
+  // Shared pane contents — built once, placed in both layout sections.
+  // State lives in PlannerPage so both sections stay in sync when both are
+  // mounted (tablet+desktop section is always in DOM via CSS).
+  const formPane = (hasPaddingBottom: boolean) => (
     <>
-      {/* Mobile sticky summary bar — appears when plan exists and the user
-          has scrolled past the timeline. Tap to jump back up. */}
-      {showStickyBar && plan && (
-        <div
-          className="fixed left-0 right-0 top-0 z-50 flex h-12 cursor-pointer items-center justify-between bg-pane-bg px-4 shadow-raised md:hidden"
-          role="button"
-          tabIndex={0}
-          onClick={scrollToTimeline}
-          onKeyDown={(e) => e.key === "Enter" && scrollToTimeline()}
-          aria-label="Scroll back to timeline"
-        >
-          <span className="text-body-strong text-text-primary">
-            {plan.city} · {stopCount} stop{stopCount !== 1 ? "s" : ""}
-            {totalDuration ? ` · ${totalDuration}` : ""}
-          </span>
-          <span className="text-text-muted">↑</span>
+      {status === "error" && errorMsg && (
+        <div className="mb-4 rounded-md border border-error-border bg-error-bg px-3 py-2 text-body text-error-text">
+          {errorMsg}
         </div>
       )}
+      <PlanForm
+        form={form}
+        onChange={setForm}
+        onSubmit={handleSubmit}
+        isLoading={status === "loading"}
+        mobileSubmitHidden={plan === null}
+      />
+      {hasPaddingBottom && plan === null && <div className="h-14" />}
+    </>
+  );
 
-      <main className="mx-auto flex-1 max-w-[980px] px-4 lg:flex lg:flex-col lg:min-h-0 lg:overflow-hidden lg:px-6">
-        {/* Header — full-width hero above both columns */}
-        <div className="mb-6 mt-12 text-center lg:mb-8 lg:mt-16 lg:flex-shrink-0 lg:text-left">
+  const timelinePane = (
+    <PlanCanvas
+      plan={plan}
+      planVersion={planVersion}
+      stopCount={stopCount}
+      stopIds={stopIds}
+      timelineError={timelineError}
+      onTimelineErrorDismiss={() => setTimelineError(null)}
+      onReorder={handleReorder}
+      onLegRefresh={handleLegRefresh}
+      onStayEdit={handleStayEdit}
+      isReordering={isReordering}
+      refreshingLegIdx={refreshingLegIdx}
+    />
+  );
+
+  const mapPane = <PlanMap stops={mapStops} city={form.city} />;
+
+  return (
+    <>
+      <main className="mx-auto flex-1 max-w-[1440px] px-4 lg:flex lg:flex-col lg:min-h-0 lg:overflow-hidden lg:px-6">
+
+        {/* ── Page header — always visible ─────────────────────────────── */}
+        <div className="mb-4 mt-10 text-center md:mb-6 md:mt-12 lg:mb-6 lg:mt-14 lg:flex-shrink-0 lg:text-left">
           <h1 className="text-display text-text-primary">RouteWright</h1>
-          <p className="mt-3 text-tagline">
+          <p className="mt-2 text-tagline">
             Multi-stop transit planning that Google Maps doesn&apos;t do.
           </p>
         </div>
 
-        {/* Split-pane: stacked on mobile, side-by-side on lg+.
-            On desktop lg:flex-1 lg:min-h-0 makes the row fill remaining
-            viewport height so each column can scroll independently. */}
-        <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1 lg:flex-row lg:items-stretch lg:gap-8">
-          {/* Form column — white pane, order-2 (below) on mobile, order-1 (left) on lg+ */}
-          <div
-            className={`order-2 rounded-lg border border-border-subtle bg-pane-bg p-6 shadow-subtle lg:order-1 lg:w-[380px] lg:flex-shrink-0 lg:min-h-0 lg:overflow-y-auto lg:p-8 lg:[scrollbar-gutter:stable]${plan === null ? " pb-20 md:pb-6 lg:pb-8" : ""}`}
-          >
-            {status === "error" && errorMsg && (
-              <div className="mb-4 rounded-md border border-error-border bg-error-bg px-3 py-2 text-body text-error-text">
-                {errorMsg}
-              </div>
-            )}
-            <PlanForm
-              form={form}
-              onChange={setForm}
-              onSubmit={handleSubmit}
-              isLoading={status === "loading"}
-              mobileSubmitHidden={plan === null}
-            />
+        {/* ── MOBILE layout (<768px) ────────────────────────────────────── */}
+        {/* Hidden on md+. Segmented control switches between form/map/plan. */}
+        <div className="md:hidden">
+          {/* Segmented control */}
+          <div className="mb-3 flex rounded-lg border border-border-subtle bg-bg-base p-0.5">
+            <TabButton active={mobileTab === "form"} onClick={() => setMobileTab("form")}>
+              Form
+            </TabButton>
+            <TabButton active={mobileTab === "map"} onClick={() => setMobileTab("map")}>
+              Map
+            </TabButton>
+            <TabButton active={mobileTab === "timeline"} onClick={() => setMobileTab("timeline")}>
+              Plan
+            </TabButton>
           </div>
 
-          {/* Timeline canvas — white pane, order-1 (above) on mobile, order-2 (right) on lg+ */}
-          <div className="order-1 rounded-lg border border-border-subtle bg-pane-bg p-6 shadow-subtle lg:order-2 lg:flex-1 lg:max-w-[560px] lg:min-h-0 lg:overflow-y-auto lg:p-8 lg:[scrollbar-gutter:stable]">
-            <PlanCanvas
-              plan={plan}
-              planVersion={planVersion}
-              stopCount={stopCount}
-              stopIds={stopIds}
-              timelineError={timelineError}
-              onTimelineErrorDismiss={() => setTimelineError(null)}
-              onReorder={handleReorder}
-              onLegRefresh={handleLegRefresh}
-              onStayEdit={handleStayEdit}
-              isReordering={isReordering}
-              refreshingLegIdx={refreshingLegIdx}
-            />
+          {mobileTab === "form" && (
+            <div className={`rounded-lg border border-border-subtle bg-pane-bg p-6 shadow-subtle${plan === null ? " pb-20" : ""}`}>
+              {formPane(false)}
+            </div>
+          )}
+          {mobileTab === "map" && (
+            /* relative so PlanMap's absolute inset-0 positions correctly */
+            <div className="relative h-[65vh] overflow-hidden rounded-lg border border-border-subtle bg-pane-bg shadow-subtle">
+              {mapPane}
+            </div>
+          )}
+          {mobileTab === "timeline" && (
+            <div className="rounded-lg border border-border-subtle bg-pane-bg p-6 shadow-subtle">
+              {timelinePane}
+            </div>
+          )}
+        </div>
+
+        {/* ── TABLET + DESKTOP layout (>=768px) ─────────────────────────── */}
+        {/* Hidden on mobile. On tablet: form (left) + tabbed right panel.   */}
+        {/* On desktop: three independent columns.                           */}
+        <div className="hidden md:flex md:flex-col md:flex-1 md:min-h-0">
+          <div className="flex flex-row items-stretch gap-4 md:flex-1 md:min-h-0">
+
+            {/* FORM — left column, always visible on tablet+ */}
+            <div className="flex flex-col rounded-lg border border-border-subtle bg-pane-bg p-6 shadow-subtle md:w-[300px] md:flex-shrink-0 md:min-h-0 md:overflow-y-auto md:[scrollbar-gutter:stable] lg:w-[340px] lg:p-8">
+              {formPane(true)}
+            </div>
+
+            {/* RIGHT AREA ─────────────────────────────────────────────────
+                Tablet (md, not lg): flex-col container wrapping the tab
+                toggle + one active panel.
+                Desktop (lg): display:contents makes children transparent
+                flex siblings of the column row — the right area div itself
+                disappears from layout, leaving map + timeline as cols 2 & 3.
+            ─────────────────────────────────────────────────────────────── */}
+            <div className="flex flex-1 min-h-0 flex-col gap-4 lg:contents">
+
+              {/* Tablet-only tab toggle — hidden on desktop (lg:hidden) */}
+              <div className="flex rounded-lg border border-border-subtle bg-bg-base p-0.5 lg:hidden">
+                <TabButton
+                  active={tabletRightTab === "map"}
+                  onClick={() => setTabletRightTab("map")}
+                >
+                  Map
+                </TabButton>
+                <TabButton
+                  active={tabletRightTab === "timeline"}
+                  onClick={() => setTabletRightTab("timeline")}
+                >
+                  Plan
+                </TabButton>
+              </div>
+
+              {/* MAP PANE
+                  Tablet: visible only when tabletRightTab="map" (hidden otherwise).
+                  Desktop: always visible via lg:flex (overrides any hidden). */}
+              <div
+                className={`relative overflow-hidden rounded-lg border border-border-subtle bg-pane-bg shadow-subtle lg:flex lg:flex-1 lg:min-h-0 ${
+                  tabletRightTab === "map"
+                    ? "flex flex-1 min-h-0"
+                    : "hidden lg:flex"
+                }`}
+              >
+                {mapPane}
+              </div>
+
+              {/* TIMELINE PANE
+                  Tablet: visible only when tabletRightTab="timeline" (hidden otherwise).
+                  Desktop: always visible via lg:flex (overrides any hidden). */}
+              <div
+                className={`rounded-lg border border-border-subtle bg-pane-bg shadow-subtle lg:flex lg:flex-col lg:w-[360px] lg:flex-shrink-0 lg:min-h-0 lg:overflow-y-auto lg:p-8 lg:[scrollbar-gutter:stable] ${
+                  tabletRightTab === "timeline"
+                    ? "flex flex-col flex-1 min-h-0 overflow-y-auto p-6"
+                    : "hidden p-6 lg:flex"
+                }`}
+              >
+                {timelinePane}
+              </div>
+            </div>
           </div>
         </div>
 
-        <p className="mb-10 mt-8 text-center text-body text-text-muted lg:flex-shrink-0">
+        {/* ── Footer ───────────────────────────────────────────────────── */}
+        <p className="mb-10 mt-6 text-center text-body text-text-muted lg:flex-shrink-0">
           Made in Dublin &middot;{" "}
           <a
             href="https://github.com/samaarr/routewright"
@@ -290,11 +373,11 @@ export default function PlannerPage() {
             github.com/samaarr/routewright
           </a>
         </p>
+
       </main>
 
-      {/* Mobile sticky Plan button — visible only on mobile when no plan exists yet.
-          Uses form="plan-form" to submit the PlanForm without being inside it. */}
-      {plan === null && (
+      {/* Mobile sticky Plan button — only on form tab, only when no plan yet */}
+      {plan === null && mobileTab === "form" && (
         <div className="fixed bottom-0 left-0 right-0 border-t border-border-subtle bg-pane-bg p-3 md:hidden">
           <button
             type="submit"
@@ -303,6 +386,24 @@ export default function PlannerPage() {
             className={`btn-primary${status === "loading" ? " animate-planning" : ""}`}
           >
             {status === "loading" ? "Planning…" : "Plan ↗"}
+          </button>
+        </div>
+      )}
+
+      {/* Mobile summary bar — shown on map/timeline tabs when plan exists,
+          so the user can see city + stop count without switching to the plan tab */}
+      {plan !== null && (mobileTab === "map" || mobileTab === "timeline") && (
+        <div className="fixed left-0 right-0 top-0 z-50 flex h-10 items-center justify-between border-b border-border-subtle bg-pane-bg/95 px-4 backdrop-blur-sm md:hidden">
+          <span className="text-sm font-medium text-text-primary">
+            {plan.city} · {stopCount} stop{stopCount !== 1 ? "s" : ""}
+            {totalDuration ? ` · ${totalDuration}` : ""}
+          </span>
+          <button
+            type="button"
+            onClick={() => setMobileTab("form")}
+            className="text-xs text-text-secondary hover:text-text-primary"
+          >
+            Edit ↩
           </button>
         </div>
       )}
