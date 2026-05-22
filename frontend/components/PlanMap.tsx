@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useMemo } from "react";
+import { useEffect, useRef, useMemo, useState } from "react";
 import {
   APIProvider,
   Map,
   AdvancedMarker,
   useMap,
 } from "@vis.gl/react-google-maps";
-import type { StopItem } from "@/lib/types";
+import type { RouteHint, StopItem } from "@/lib/types";
 
 // AdvancedMarker requires a mapId. styles[] and mapId are mutually exclusive
 // (Google ignores styles when mapId is set — styles must be configured in
@@ -17,7 +17,16 @@ import type { StopItem } from "@/lib/types";
 // Google's standard styling.
 const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
 const MAP_ID  = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID ?? "DEMO_MAP_ID";
-const ACCENT  = "#4F46C4"; // --color-accent
+const ACCENT  = "#4F46C4"; // --color-accent (indigo)
+const SPARK   = "#F5613A"; // --color-spark  (coral)
+
+// Deterministic template picker — stable per plan (no flicker on re-render).
+const HINT_TEMPLATES: Array<(flagged: string, before: string) => string> = [
+  (flagged, before) =>
+    `${flagged} is back the way you came — see the long leg on the map. Visiting it before ${before} may avoid doubling back.`,
+  (flagged, before) =>
+    `Your route doubles back to reach ${flagged} (the long coral leg). Moving it before ${before} may keep your day in one direction.`,
+];
 
 // --- Fit viewport to stops (always mounted inside Map) --------------------
 
@@ -43,62 +52,95 @@ function MapFitter({ stops }: MapFitterProps) {
   return null;
 }
 
-// --- Polyline drawn via Maps JS API (not a React component) ---------------
+// --- Polyline with optional highlighted segment ---------------------------
 
-interface RouteLayerProps { stops: StopItem[] }
+interface RouteLayerProps {
+  stops: StopItem[];
+  highlightLeg: { from: number; to: number } | null;
+}
 
-function RouteLayer({ stops }: RouteLayerProps) {
+function RouteLayer({ stops, highlightLeg }: RouteLayerProps) {
   const map = useMap();
-  const polyRef = useRef<google.maps.Polyline | null>(null);
+  const normalRefs = useRef<google.maps.Polyline[]>([]);
+  const coralRef   = useRef<google.maps.Polyline | null>(null);
 
   useEffect(() => {
     if (!map) return;
 
-    polyRef.current?.setMap(null);
-    polyRef.current = null;
+    normalRefs.current.forEach((p) => p.setMap(null));
+    normalRefs.current = [];
+    coralRef.current?.setMap(null);
+    coralRef.current = null;
 
     if (stops.length < 2) return;
 
-    const path = stops.map((s) => ({ lat: s.lat, lng: s.lng }));
+    function makeLine(
+      path: google.maps.LatLngLiteral[],
+      color: string,
+    ): google.maps.Polyline {
+      return new google.maps.Polyline({
+        path,
+        strokeColor: color,
+        strokeOpacity: 0,
+        strokeWeight: 2,
+        icons: [
+          {
+            icon: {
+              path: "M 0,-1 0,1",
+              strokeOpacity: 0.75,
+              scale: 3.5,
+              strokeColor: color,
+            },
+            offset: "0",
+            repeat: "13px",
+          },
+        ],
+        map,
+      });
+    }
 
-    polyRef.current = new google.maps.Polyline({
-      path,
-      strokeColor: ACCENT,
-      strokeOpacity: 0,
-      strokeWeight: 2,
-      icons: [
-        {
-          icon: { path: "M 0,-1 0,1", strokeOpacity: 0.75, scale: 3.5, strokeColor: ACCENT },
-          offset: "0",
-          repeat: "13px",
-        },
-      ],
-      map,
-    });
+    const pts = stops.map((s) => ({ lat: s.lat, lng: s.lng }));
+
+    if (!highlightLeg) {
+      normalRefs.current.push(makeLine(pts, ACCENT));
+    } else {
+      const { from: f, to: t } = highlightLeg;
+      if (f > 0)
+        normalRefs.current.push(makeLine(pts.slice(0, f + 1), ACCENT));
+      coralRef.current = makeLine([pts[f], pts[t]], SPARK);
+      if (t < stops.length - 1)
+        normalRefs.current.push(makeLine(pts.slice(t), ACCENT));
+    }
 
     return () => {
-      polyRef.current?.setMap(null);
-      polyRef.current = null;
+      normalRefs.current.forEach((p) => p.setMap(null));
+      normalRefs.current = [];
+      coralRef.current?.setMap(null);
+      coralRef.current = null;
     };
-  }, [map, stops]);
+  }, [map, stops, highlightLeg]);
 
   return null;
 }
 
-// --- Custom numbered pin ---------------------------------------------------
+// --- Numbered pin (indigo or coral) ---------------------------------------
 
-function NumberedPin({ n }: { n: number }) {
+function NumberedPin({ n, coral }: { n: number; coral?: boolean }) {
+  const bg = coral ? SPARK : ACCENT;
+  const glow = coral
+    ? "rgba(245,97,58,0.18)"
+    : "rgba(79,70,196,0.16)";
   return (
     <div
       style={{
         width: 28,
         height: 28,
         borderRadius: "50%",
-        background: ACCENT,
+        background: bg,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        boxShadow: "0 2px 8px rgba(30,25,60,0.45)",
+        boxShadow: `0 2px 8px rgba(30,25,60,0.45), 0 0 0 6px ${glow}`,
         border: "2.5px solid rgba(255,255,255,0.95)",
         cursor: "default",
         userSelect: "none",
@@ -140,11 +182,30 @@ function EmptyState({ city }: { city: string }) {
 interface Props {
   stops: StopItem[];
   city: string;
+  routeHint: RouteHint | null;
+  onMoveHintStop: () => void;
 }
 
-export default function PlanMap({ stops, city }: Props) {
-  // Stable default center: Dublin. Overridden by fitBounds when stops exist.
+export default function PlanMap({ stops, city, routeHint, onMoveHintStop }: Props) {
+  const [dismissed, setDismissed] = useState(false);
   const defaultCenter = useMemo(() => ({ lat: 53.3498, lng: -6.2603 }), []);
+
+  // Reset dismissed state when a new hint (or no hint) arrives for a new plan.
+  useEffect(() => {
+    setDismissed(false);
+  }, [routeHint]);
+
+  const showChip = !dismissed && routeHint !== null;
+  const highlightLeg = routeHint
+    ? { from: routeHint.long_leg_from_index, to: routeHint.long_leg_to_index }
+    : null;
+
+  const hintMessage = routeHint
+    ? HINT_TEMPLATES[routeHint.flagged_stop_index % HINT_TEMPLATES.length](
+        routeHint.flagged_stop_name,
+        routeHint.suggested_before_name,
+      )
+    : "";
 
   if (!API_KEY) {
     return (
@@ -174,13 +235,46 @@ export default function PlanMap({ stops, city }: Props) {
               position={{ lat: stop.lat, lng: stop.lng }}
               title={stop.name}
             >
-              <NumberedPin n={i + 1} />
+              <NumberedPin
+                n={i + 1}
+                coral={routeHint?.flagged_stop_index === i}
+              />
             </AdvancedMarker>
           ))}
-          {stops.length >= 2 && <RouteLayer stops={stops} />}
+          {stops.length >= 2 && (
+            <RouteLayer stops={stops} highlightLeg={highlightLeg} />
+          )}
           <MapFitter stops={stops} />
         </Map>
       </div>
+
+      {/* Hint chip — bottom of map, above the empty state overlay z-order */}
+      {showChip && (
+        <div className="absolute bottom-3 left-3 right-3 z-10 flex items-start gap-3 rounded-lg border border-border-subtle bg-pane-bg/95 px-4 py-3 shadow-raised backdrop-blur-sm">
+          <div className="flex-1">
+            <p className="text-sm leading-snug text-text-primary">{hintMessage}</p>
+            <button
+              type="button"
+              onClick={() => {
+                onMoveHintStop();
+                setDismissed(true);
+              }}
+              className="mt-2 text-xs font-medium text-accent transition-opacity hover:opacity-75"
+            >
+              Move it earlier ↑
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDismissed(true)}
+            aria-label="Dismiss hint"
+            className="flex-shrink-0 text-text-muted transition-opacity hover:opacity-75"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {stops.length === 0 && <EmptyState city={city} />}
     </APIProvider>
   );

@@ -248,7 +248,29 @@ export default function PlannerPage() {
     />
   );
 
-  const mapPane = <PlanMap stops={mapStops} city={form.city} />;
+  function handleMoveHintStop() {
+    if (!plan?.route_hint) return;
+    const { flagged_stop_index, suggested_before_index } = plan.route_hint;
+    const currentIds = form.stops.map((s) => s.id);
+    const flaggedId = currentIds[flagged_stop_index];
+    const withoutFlagged = currentIds.filter((_, i) => i !== flagged_stop_index);
+    const insertIdx = withoutFlagged.indexOf(currentIds[suggested_before_index]);
+    const newIds = [
+      ...withoutFlagged.slice(0, insertIdx),
+      flaggedId,
+      ...withoutFlagged.slice(insertIdx),
+    ];
+    handleReorder(newIds);
+  }
+
+  const mapPane = (
+    <PlanMap
+      stops={mapStops}
+      city={form.city}
+      routeHint={plan?.route_hint ?? null}
+      onMoveHintStop={handleMoveHintStop}
+    />
+  );
 
   return (
     <>

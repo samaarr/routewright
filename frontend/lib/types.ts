@@ -74,6 +74,15 @@ export interface PlanWarning {
 
 export type TimelineItem = StopItem | LegItem;
 
+export interface RouteHint {
+  flagged_stop_index: number;
+  suggested_before_index: number;
+  flagged_stop_name: string;
+  suggested_before_name: string;
+  long_leg_from_index: number;
+  long_leg_to_index: number;
+}
+
 export interface Plan {
   generated_at: string;
   city: string;
@@ -81,4 +90,5 @@ export interface Plan {
   timeline: TimelineItem[];
   overview_map_url: string;
   warnings: PlanWarning[];
+  route_hint: RouteHint | null;
 }
