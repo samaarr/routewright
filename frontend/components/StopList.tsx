@@ -1,8 +1,24 @@
+"use client";
+
 // WHY uuid keys: using array index as key causes React to cross-wire inputs
 // when a stop is removed from the middle. Using query string as key causes
 // React and dnd-kit to treat two stops with the same query as the same
 // element — dragging one would "tag along" the other and multiply entries
 // in the timeline. Stable UUIDs that never derive from user input fix both.
+import {
+  DndContext,
+  type DragEndEvent,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import type { StopDraft } from "@/lib/types";
 
 // crypto.randomUUID requires a secure context (HTTPS or localhost). Fall back
@@ -34,71 +50,127 @@ function GripDots() {
   );
 }
 
+interface RowProps {
+  stop: StopDraft;
+  index: number;
+  total: number;
+  onUpdate: (value: string) => void;
+  onRemove: () => void;
+}
+
+function SortableStopRow({ stop, index, total, onUpdate, onRemove }: RowProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: stop.id });
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.35 : 1,
+      }}
+      className="group flex items-center gap-2 rounded-sm transition-colors hover:bg-bg-base"
+      {...attributes}
+    >
+      {/* Drag handle — listeners are here so only the grip initiates drag */}
+      <span
+        className="cursor-grab touch-none text-text-tertiary"
+        {...listeners}
+      >
+        <GripDots />
+      </span>
+
+      <span className="w-4 flex-shrink-0 text-right text-caption text-text-muted">
+        {index + 1}
+      </span>
+
+      <input
+        type="text"
+        placeholder={`Stop ${index + 1}`}
+        value={stop.query}
+        onChange={(e) => onUpdate(e.target.value)}
+        required
+        className="input-base"
+      />
+
+      {/* × remove — invisible at rest, appears on row hover */}
+      <button
+        type="button"
+        onClick={onRemove}
+        disabled={total <= 2}
+        aria-label={`Remove stop ${index + 1}`}
+        className="-m-2 p-2 text-lg leading-none text-text-muted opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 disabled:cursor-not-allowed disabled:opacity-0 group-hover:disabled:opacity-30"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
 interface Props {
   stops: StopDraft[];
   onChange: (stops: StopDraft[]) => void;
 }
 
 export default function StopList({ stops, onChange }: Props) {
-  function updateQuery(index: number, value: string) {
-    onChange(stops.map((s, i) => (i === index ? { ...s, query: value } : s)));
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+  );
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const oldIndex = stops.findIndex((s) => s.id === active.id);
+    const newIndex = stops.findIndex((s) => s.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    onChange(arrayMove(stops, oldIndex, newIndex));
   }
 
   function addStop() {
     onChange([...stops, { id: uid(), query: "" }]);
   }
 
-  function removeStop(index: number) {
-    onChange(stops.filter((_, i) => i !== index));
-  }
-
   return (
-    <div className="space-y-2">
-      {stops.map((stop, i) => (
-        <div
-          key={stop.id}
-          className="animate-slide-down group flex items-center gap-2 rounded-sm transition-colors hover:bg-bg-base"
-        >
-          {/* Visual grip handle — decorative, matches timeline stop appearance */}
-          <span className="cursor-grab text-text-tertiary">
-            <GripDots />
-          </span>
-
-          {/* Stop number */}
-          <span className="w-4 flex-shrink-0 text-right text-caption text-text-muted">
-            {i + 1}
-          </span>
-
-          <input
-            type="text"
-            placeholder={`Stop ${i + 1}`}
-            value={stop.query}
-            onChange={(e) => updateQuery(i, e.target.value)}
-            required
-            className="input-base"
-          />
-
-          {/* × remove — invisible at rest, appears on row hover */}
-          <button
-            type="button"
-            onClick={() => removeStop(i)}
-            disabled={stops.length <= 2}
-            aria-label={`Remove stop ${i + 1}`}
-            className="-m-2 p-2 text-lg leading-none text-text-muted opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 disabled:cursor-not-allowed disabled:opacity-0 group-hover:disabled:opacity-30"
-          >
-            ×
-          </button>
+    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+      <SortableContext
+        items={stops.map((s) => s.id)}
+        strategy={verticalListSortingStrategy}
+      >
+        <div className="space-y-2">
+          {stops.map((stop, i) => (
+            <SortableStopRow
+              key={stop.id}
+              stop={stop}
+              index={i}
+              total={stops.length}
+              onUpdate={(value) =>
+                onChange(
+                  stops.map((s, j) => (j === i ? { ...s, query: value } : s))
+                )
+              }
+              onRemove={() => onChange(stops.filter((_, j) => j !== i))}
+            />
+          ))}
         </div>
-      ))}
+      </SortableContext>
 
       <button
         type="button"
         onClick={addStop}
         disabled={stops.length >= 12}
-        className="mt-1 w-full rounded-md border border-dashed border-border-default py-2.5 text-body text-text-secondary transition-colors duration-150 hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+        className="mt-3 w-full rounded-md border border-dashed border-border-default py-2.5 text-body text-text-secondary transition-colors duration-150 hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
       >
         + Add another stop
       </button>
-    </div>
+    </DndContext>
   );
 }

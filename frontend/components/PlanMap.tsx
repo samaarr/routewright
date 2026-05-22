@@ -19,6 +19,30 @@ const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
 const MAP_ID  = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID ?? "DEMO_MAP_ID";
 const ACCENT  = "#4F46C4"; // --color-accent
 
+// --- Fit viewport to stops (always mounted inside Map) --------------------
+
+interface MapFitterProps { stops: StopItem[] }
+
+function MapFitter({ stops }: MapFitterProps) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!map || stops.length === 0) return;
+
+    if (stops.length === 1) {
+      map.setCenter({ lat: stops[0].lat, lng: stops[0].lng });
+      map.setZoom(14);
+      return;
+    }
+
+    const bounds = new google.maps.LatLngBounds();
+    stops.forEach((s) => bounds.extend({ lat: s.lat, lng: s.lng }));
+    map.fitBounds(bounds, 60);
+  }, [map, stops]);
+
+  return null;
+}
+
 // --- Polyline drawn via Maps JS API (not a React component) ---------------
 
 interface RouteLayerProps { stops: StopItem[] }
@@ -51,10 +75,6 @@ function RouteLayer({ stops }: RouteLayerProps) {
       ],
       map,
     });
-
-    const bounds = new google.maps.LatLngBounds();
-    path.forEach((p) => bounds.extend(p));
-    map.fitBounds(bounds, 72);
 
     return () => {
       polyRef.current?.setMap(null);
@@ -158,6 +178,7 @@ export default function PlanMap({ stops, city }: Props) {
             </AdvancedMarker>
           ))}
           {stops.length >= 2 && <RouteLayer stops={stops} />}
+          <MapFitter stops={stops} />
         </Map>
       </div>
       {stops.length === 0 && <EmptyState city={city} />}

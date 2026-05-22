@@ -252,7 +252,7 @@ export default function PlannerPage() {
 
   return (
     <>
-      <main className="mx-auto flex-1 max-w-[1440px] px-4 lg:flex lg:flex-col lg:min-h-0 lg:overflow-hidden lg:px-6">
+      <main className="mx-auto w-full flex-1 max-w-[1440px] px-4 lg:flex lg:flex-col lg:min-h-0 lg:overflow-hidden lg:px-6">
 
         {/* ── Page header — always visible ─────────────────────────────── */}
         <div className="mb-4 mt-10 text-center md:mb-6 md:mt-12 lg:mb-6 lg:mt-14 lg:flex-shrink-0 lg:text-left">
