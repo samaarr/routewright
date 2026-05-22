@@ -21,7 +21,8 @@ from app.core.limiter import limiter
 from app.models.request import PlanRequest
 from app.models.response import LegItem, Plan, StopItem
 from app.models.response import Warning as PlanWarning
-from app.services.directions import DirectionsError, fetch_leg
+from app.services.directions import fetch_leg
+from app.services.geo import detect_backtrack_hint
 from app.services.geocache import geocode_cached
 from app.services.geocoder import GeocodedPlace, GeocoderError
 from app.services.stay_defaults import lookup_stay_minutes
@@ -33,7 +34,16 @@ _FALLBACK_LEG_SECONDS = 15 * 60
 # Words that appear in both neighbourhood names and venue names; triggers a
 # disambiguation warning when the geocoder returns a food/drink place type.
 _AMBIGUOUS_NEIGHBOURHOOD_TOKENS = {"bar", "quarter", "village", "yard"}
-_FOOD_PLACE_TYPES = {"bar", "pub", "restaurant", "cafe", "bakery", "meal_takeaway", "night_club", "food"}
+_FOOD_PLACE_TYPES = {
+    "bar",
+    "pub",
+    "restaurant",
+    "cafe",
+    "bakery",
+    "meal_takeaway",
+    "night_club",
+    "food",
+}
 
 
 @router.post("/plan", response_model=Plan)
@@ -81,12 +91,9 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
                     affects_stop_index=i,
                 )
             )
-    for stop, place in zip(req.stops, places):
+    for stop, place in zip(req.stops, places, strict=False):
         tokens = {t.lower().strip("',.-") for t in stop.query.split()}
-        if (
-            tokens & _AMBIGUOUS_NEIGHBOURHOOD_TOKENS
-            and place.primary_type in _FOOD_PLACE_TYPES
-        ):
+        if tokens & _AMBIGUOUS_NEIGHBOURHOOD_TOKENS and place.primary_type in _FOOD_PLACE_TYPES:
             warnings.append(
                 PlanWarning(
                     severity="info",
@@ -99,6 +106,10 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
                 )
             )
 
+    # Advisory backtrack hint — runs after geocoding (coords available) but
+    # before any routing. Detection is pure haversine; never reorders the plan.
+    route_hint = detect_backtrack_hint(places)
+
     # Phase 2: resolve stay_minutes for every stop.
     # First and last stops are anchors — default stay is 0 so the chain starts
     # and ends cleanly. Middle stops use the type-lookup table. A user-supplied
@@ -106,7 +117,7 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
     stays: list[int] = []
     stay_sources: list[Literal["user", "default"]] = []
     n_stops = len(req.stops)
-    for i, (stop, place) in enumerate(zip(req.stops, places)):
+    for i, (stop, place) in enumerate(zip(req.stops, places, strict=False)):
         if stop.stay_minutes is not None:
             stays.append(stop.stay_minutes)
             stay_sources.append("user")
@@ -146,7 +157,7 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
     timeline: list[StopItem | LegItem] = []
     cursor = req.start_time
 
-    for i, (stop, place) in enumerate(zip(req.stops, places)):
+    for i, (stop, place) in enumerate(zip(req.stops, places, strict=False)):
         arrive_at = cursor
         depart_at = cursor + timedelta(minutes=stays[i])
 
@@ -210,6 +221,7 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
         timeline=timeline,
         overview_map_url=_overview_url([s.query for s in req.stops], req.city),
         warnings=warnings,
+        route_hint=route_hint,
     )
 
 

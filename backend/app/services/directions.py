@@ -172,10 +172,7 @@ def _parse_response(response_json: dict[str, Any], depart_at: datetime, mode: st
     else:
         actual_depart = depart_at
         actual_arrive = depart_at + timedelta(seconds=duration_seconds)
-        if mode == "walking":
-            summary = f"{summary} walk"
-        else:
-            summary = f"{summary} drive"
+        summary = f"{summary} walk" if mode == "walking" else f"{summary} drive"
 
     return LegResult(
         duration_seconds=duration_seconds,

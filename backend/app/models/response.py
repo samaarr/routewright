@@ -58,6 +58,35 @@ class Warning(BaseModel):
     affects_stop_index: int | None = None
 
 
+class RouteHint(BaseModel):
+    """Advisory backtrack hint — pure metadata, never reorders the plan.
+
+    Returned when a single stop appears to require a large spatial detour
+    relative to the rest of the route (>=25% haversine path reduction from
+    one relocation). The frontend uses this to highlight the long leg and
+    suggest a reorder; the user decides.
+    """
+
+    flagged_stop_index: int = Field(
+        ...,
+        description="Index of the out-of-place stop in the plan's stop list (0-based).",
+    )
+    suggested_before_index: int = Field(
+        ...,
+        description="Index of the stop the flagged stop should appear before.",
+    )
+    flagged_stop_name: str
+    suggested_before_name: str
+    long_leg_from_index: int = Field(
+        ...,
+        description="Start-stop index of the longest backtrack leg to highlight on the map.",
+    )
+    long_leg_to_index: int = Field(
+        ...,
+        description="End-stop index of the longest backtrack leg.",
+    )
+
+
 class Plan(BaseModel):
     """Full timeline response."""
 
@@ -73,6 +102,13 @@ class Plan(BaseModel):
         description="Google Maps URL showing all stops as a driving-mode overview.",
     )
     warnings: list[Warning] = Field(default_factory=list)
+    route_hint: RouteHint | None = Field(
+        default=None,
+        description=(
+            "Advisory spatial backtrack hint. None in the common case (efficient route). "
+            "Never affects plan order — purely advisory metadata for the UI."
+        ),
+    )
 
 
 class HealthResponse(BaseModel):

@@ -41,14 +41,18 @@ app.include_router(health.router)
 app.include_router(plan.router)
 app.include_router(refresh_leg.router)
 
+
 async def _rate_limit_handler(_request: Request, _exc: RateLimitExceeded) -> JSONResponse:
     return JSONResponse(
         status_code=429,
-        content={"error": "rate_limit_exceeded", "detail": "Daily limit reached — try again tomorrow."},
+        content={
+            "error": "rate_limit_exceeded",
+            "detail": "Daily limit reached — try again tomorrow.",
+        },
     )
 
 
-app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)  # type: ignore[arg-type]
 
 
 @app.exception_handler(RequestValidationError)
