@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { StopItem } from "@/lib/types";
+import type { HoursDetail, HoursStatus, StopItem } from "@/lib/types";
 import { fmtTime } from "@/lib/utils";
 
 // Opaque handle prop type: dnd-kit listeners are event-handler records.
@@ -31,6 +31,59 @@ function GripIcon() {
       <circle cx="8" cy="12" r="1.5" />
     </svg>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Hours status line — one quiet line under the stop name.
+// "unknown" renders nothing (no false "closed" for places without hours data).
+// ---------------------------------------------------------------------------
+
+function HoursStatusLine({
+  status,
+  detail,
+  arriveAt,
+}: {
+  status: HoursStatus;
+  detail: HoursDetail | null;
+  arriveAt: string;
+}) {
+  if (status === "unknown") return null;
+
+  if (status === "open") {
+    return (
+      <p className="mt-0.5 text-xs text-text-tertiary">
+        Open{detail?.closes_at ? ` · until ${detail.closes_at}` : ""}
+      </p>
+    );
+  }
+
+  if (status === "closed_on_arrival") {
+    const opensAt = detail?.opens_at;
+    const arrive = fmtTime(arriveAt);
+    return (
+      <p className="mt-0.5 text-xs text-spark">
+        ⚠ {opensAt ? `Opens ${opensAt}` : "Closed"} — you arrive {arrive}
+      </p>
+    );
+  }
+
+  if (status === "closes_during_visit") {
+    return (
+      <p className="mt-0.5 text-xs text-spark">
+        ⚠ Closes {detail?.closes_at ?? "early"} — during your visit
+      </p>
+    );
+  }
+
+  if (status === "closes_soon") {
+    return (
+      <p className="mt-0.5 text-xs text-text-secondary">
+        Closes soon{detail?.closes_at ? ` (${detail.closes_at})` : ""}
+      </p>
+    );
+  }
+
+  return null;
 }
 
 export default function StopCard({ stop, isFirst, isLast, dragHandleProps, onStayEdit }: Props) {
@@ -83,6 +136,11 @@ export default function StopCard({ stop, isFirst, isLast, dragHandleProps, onSta
       {/* Content — name + optional stay chip. min-w-0 enables truncate. */}
       <div className="ml-2 min-w-0 flex-1">
         <span className="block truncate text-body-strong">{stop.name}</span>
+        <HoursStatusLine
+          status={stop.hours_status}
+          detail={stop.hours_detail}
+          arriveAt={stop.arrive_at}
+        />
 
         {showStayInfo && (
           <div className="mt-1">

@@ -39,6 +39,24 @@ export interface FormState {
 
 // ---- Response --------------------------------------------------------
 
+// Status of a stop's opening hours relative to its planned arrival/departure.
+// "unknown" means no hours data — never displayed as "closed".
+export type HoursStatus =
+  | "open"
+  | "closed_on_arrival"
+  | "closes_during_visit"
+  | "closes_soon"
+  | "unknown";
+
+// Machine-readable time facts for a stop's hours status.
+// Times are HH:MM in the trip-city's local timezone.
+// Timezone assumption: client submits start_time in the city's local timezone;
+// all derived datetimes share it. Per-venue timezone lookup is not performed.
+export interface HoursDetail {
+  closes_at: string | null; // e.g. "17:00"
+  opens_at: string | null;  // e.g. "14:00"
+}
+
 export interface StopItem {
   item_type: "stop";
   query: string;
@@ -51,6 +69,8 @@ export interface StopItem {
   stay_minutes: number;
   stay_source: StaySource;
   map_url: string;
+  hours_status: HoursStatus;
+  hours_detail: HoursDetail | null;
 }
 
 export interface LegItem {
