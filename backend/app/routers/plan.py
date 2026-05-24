@@ -25,6 +25,7 @@ from app.services.directions import fetch_leg
 from app.services.geo import detect_backtrack_hint
 from app.services.geocache import geocode_cached
 from app.services.geocoder import GeocodedPlace, GeocoderError
+from app.services.hours import compute_hours_status
 from app.services.stay_defaults import lookup_stay_minutes
 
 router = APIRouter(prefix="/api", tags=["plan"])
@@ -161,6 +162,7 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
         arrive_at = cursor
         depart_at = cursor + timedelta(minutes=stays[i])
 
+        h_status, h_detail = compute_hours_status(place.opening_hours, arrive_at, depart_at)
         timeline.append(
             StopItem(
                 query=stop.query,
@@ -172,6 +174,8 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
                 stay_minutes=stays[i],
                 stay_source=stay_sources[i],
                 map_url=_search_url(stop.query, req.city),
+                hours_status=h_status,
+                hours_detail=h_detail,
             )
         )
 

@@ -12,6 +12,28 @@ from pydantic import BaseModel, Field
 
 WarningSeverity = Literal["info", "warning", "error"]
 
+# Status of a stop's opening hours relative to its planned arrival/departure.
+# "unknown" means no hours data was available — never implies closed.
+HoursStatus = Literal[
+    "open",
+    "closed_on_arrival",
+    "closes_during_visit",
+    "closes_soon",
+    "unknown",
+]
+
+
+class HoursDetail(BaseModel):
+    """Machine-readable time facts for a stop's hours status.
+
+    Times are HH:MM in the trip-city's local timezone (same tz as start_time).
+    Fields not relevant to the current status are None.
+    Frontend composes the display sentence; this model carries only the facts.
+    """
+
+    closes_at: str | None = None  # e.g. "17:00" — for open/closes_during_visit/closes_soon
+    opens_at: str | None = None  # e.g. "14:00" — for closed_on_arrival
+
 
 class StopItem(BaseModel):
     """A scheduled stop on the timeline."""
@@ -30,6 +52,14 @@ class StopItem(BaseModel):
         description="Whether stay_minutes came from the user or our default table.",
     )
     map_url: str = Field(..., description="Google Maps search URL for the place itself.")
+    hours_status: HoursStatus = Field(
+        default="unknown",
+        description="Open/closed status of this stop at planned arrival time.",
+    )
+    hours_detail: HoursDetail | None = Field(
+        default=None,
+        description="Machine-readable time facts (closes_at / opens_at as HH:MM).",
+    )
 
 
 class LegItem(BaseModel):
