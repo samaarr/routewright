@@ -19,6 +19,7 @@ Conversion: google_day = (python_weekday + 1) % 7
 """
 
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.models.response import HoursDetail, HoursStatus
 from app.services.geocoder import OpeningPeriod
@@ -61,6 +62,7 @@ def compute_hours_status(
     opening_hours: list[OpeningPeriod] | None,
     arrive_at: datetime,
     depart_at: datetime,
+    city_timezone: str = "UTC",
 ) -> tuple[HoursStatus, HoursDetail | None]:
     """Compute the hours status for a stop at its planned arrival time.
 
@@ -75,7 +77,9 @@ def compute_hours_status(
                                 minutes of arrival (but not during the visit)
         "unknown"             — no hours data (opening_hours is None)
 
-    All times in HoursDetail are HH:MM in the same timezone as arrive_at.
+    Google opening hours are stored in venue-local time; arrive_at/depart_at may
+    be UTC. city_timezone (IANA name) converts them to local before comparison.
+    All times in HoursDetail are HH:MM in the trip-city's local timezone.
     """
     if not opening_hours:
         return "unknown", None
@@ -83,6 +87,15 @@ def compute_hours_status(
     # 24-hour place: any period with no close field.
     if any(p.close_day is None for p in opening_hours):
         return "open", None
+
+    # Convert to city-local time so _to_week_minutes extracts the correct
+    # local hour/weekday — Google's opening hours are in venue-local time.
+    try:
+        tz = ZoneInfo(city_timezone)
+    except (ZoneInfoNotFoundError, KeyError):
+        tz = ZoneInfo("UTC")
+    arrive_at = arrive_at.astimezone(tz)
+    depart_at = depart_at.astimezone(tz)
 
     arrive_abs = _to_week_minutes(arrive_at)
     depart_abs = _to_week_minutes(depart_at)

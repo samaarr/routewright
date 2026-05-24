@@ -40,6 +40,7 @@ function toPayload(form: FormState): PlanRequest {
     ...form,
     stops: form.stops.map(({ id: _, ...rest }) => rest),
     start_time: new Date(form.start_time).toISOString(),
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   };
 }
 

@@ -7,6 +7,7 @@ geocoding cache — the client always sends the full ordered list.
 
 from datetime import datetime, timedelta, timezone
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -64,6 +65,20 @@ class PlanRequest(BaseModel):
         default="transit",
         description="Transport mode for all legs. v1 uses a single mode globally.",
     )
+    timezone: str = Field(
+        default="UTC",
+        description="IANA timezone for the trip city (e.g. 'Europe/London'). "
+        "Used to compare UTC arrival times against venue-local opening hours.",
+    )
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: str) -> str:
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, KeyError) as exc:
+            raise ValueError(f"Unknown IANA timezone: {v!r}") from exc
+        return v
 
     @field_validator("start_time")
     @classmethod

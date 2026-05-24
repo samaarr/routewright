@@ -17,6 +17,7 @@ export interface PlanRequest {
   stops: StopInput[];
   start_time: string; // ISO 8601, timezone-aware
   mode: TransportMode;
+  timezone: string;   // IANA zone for the trip city, e.g. "Europe/London"
 }
 
 // Frontend-only: StopInput extended with a stable client-generated UUID.
