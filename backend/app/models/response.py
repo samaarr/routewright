@@ -141,6 +141,22 @@ class Plan(BaseModel):
     )
 
 
+class OptimisedStop(BaseModel):
+    """One stop in an optimised route, preserving the original query and stay override."""
+
+    query: str
+    name: str
+    stay_minutes: int | None = None
+
+
+class OptimiseResponse(BaseModel):
+    """Result of POST /api/optimise — reordered stops plus path-length stats."""
+
+    stops: list[OptimisedStop]
+    original_km: float = Field(..., description="Haversine path length of the input order (km).")
+    optimised_km: float = Field(..., description="Haversine path length after optimisation (km).")
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
     version: str

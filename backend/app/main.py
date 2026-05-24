@@ -15,7 +15,7 @@ from slowapi.errors import RateLimitExceeded
 from app.core.config import settings
 from app.core.limiter import limiter
 from app.models.response import ErrorResponse
-from app.routers import health, plan, refresh_leg
+from app.routers import health, optimise, plan, refresh_leg
 
 logging.basicConfig(level=settings.log_level)
 log = logging.getLogger("routewright")
@@ -40,6 +40,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(plan.router)
 app.include_router(refresh_leg.router)
+app.include_router(optimise.router)
 
 
 async def _rate_limit_handler(_request: Request, _exc: RateLimitExceeded) -> JSONResponse:
