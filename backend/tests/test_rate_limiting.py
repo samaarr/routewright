@@ -4,7 +4,6 @@ Each test builds its own isolated FastAPI app with a fresh Limiter instance
 so tests never share counters or exhaust the production 20/day limit.
 """
 
-import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient

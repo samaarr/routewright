@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.services.geocoder import GeocoderError, GeocodedPlace, geocode
+from app.services.geocoder import GeocodedPlace, GeocoderError, geocode
 
 # ---------------------------------------------------------------------------
 # Shared fixtures and helpers

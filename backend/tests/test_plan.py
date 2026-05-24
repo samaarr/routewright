@@ -117,11 +117,11 @@ def test_plan_default_stay_uses_type_table(
     payload["stops"][2] = {"query": "Guinness Storehouse"}  # remove explicit override
     response = client.post("/api/plan", json=payload)
     stops = [i for i in response.json()["timeline"] if i["item_type"] == "stop"]
-    assert stops[0]["stay_minutes"] == 0    # first stop — anchor, type lookup skipped
+    assert stops[0]["stay_minutes"] == 0  # first stop — anchor, type lookup skipped
     assert stops[0]["stay_source"] == "default"
-    assert stops[1]["stay_minutes"] == 60   # tourist_attraction (Temple Bar, middle)
+    assert stops[1]["stay_minutes"] == 60  # tourist_attraction (Temple Bar, middle)
     assert stops[1]["stay_source"] == "default"
-    assert stops[2]["stay_minutes"] == 0    # last stop — anchor, type lookup skipped
+    assert stops[2]["stay_minutes"] == 0  # last stop — anchor, type lookup skipped
     assert stops[2]["stay_source"] == "default"
 
 

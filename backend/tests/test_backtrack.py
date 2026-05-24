@@ -2,9 +2,14 @@
 
 Test coordinates use Dublin-area latitudes (≈53.34°) so the math is
 representative of real-world use.  At that latitude 1° lng ≈ 66.5 km
-and 1° lat ≈ 111 km, giving comfortable margins above the 25%/1.8x thresholds.
+and 1° lat ≈ 111 km.
 
 All tests are pure-haversine (no network calls).
+
+Algorithm state: minimal-guard mode — no start/end anchoring, no
+median-leg guard, threshold 0.10.  The median-leg guard was removed
+because a large backtrack inflates the median, blocking the very cases
+the guard should catch (confirmed on the Howth diagnostic route).
 """
 
 import pytest
@@ -12,7 +17,6 @@ import pytest
 from app.models.response import RouteHint
 from app.services.geo import (
     BACKTRACK_HINT_THRESHOLD,
-    LONG_LEG_RATIO_THRESHOLD,
     detect_backtrack_hint,
     haversine_km,
 )
@@ -51,62 +55,103 @@ def test_haversine_symmetric() -> None:
 
 
 # ---------------------------------------------------------------------------
-# detect_backtrack_hint — clear backtrack (>= 25% improvement, long leg)
+# detect_backtrack_hint — clear backtrack cases
 # ---------------------------------------------------------------------------
 
 
 def test_clear_backtrack_returns_hint() -> None:
-    """A stop that sits far west while the rest of the route runs east-west
-    near the start triggers a hint.
+    """A stop close to the start, visited after the route has moved east,
+    is flagged as a backtrack.
 
     Route (lng): -6.260 → -6.230 → -6.258 → -6.200 → -6.170
     Stop 2 (lng -6.258) is almost back at the start after going east to -6.230.
-    Moving it to position 1 (before stop 1) reduces the path substantially.
+    Moving it before stop 1 reduces the path substantially.
     """
     places = [
-        make_place("Start", 53.340, -6.260),  # index 0 — anchor
-        make_place("East1", 53.340, -6.230),  # index 1
-        make_place("BackNear", 53.340, -6.258),  # index 2 — backtrack close to start
-        make_place("East2", 53.340, -6.200),  # index 3
-        make_place("End", 53.340, -6.170),  # index 4 — anchor
+        make_place("Start", 53.340, -6.260),
+        make_place("East1", 53.340, -6.230),
+        make_place("BackNear", 53.340, -6.258),  # backtrack close to start
+        make_place("East2", 53.340, -6.200),
+        make_place("End", 53.340, -6.170),
     ]
     hint = detect_backtrack_hint(places)
     assert hint is not None
     assert isinstance(hint, RouteHint)
     assert hint.flagged_stop_index == 2
     assert hint.flagged_stop_name == "BackNear"
-    # Suggested position is before East2 (index 3) or East1 (index 1)
-    assert hint.suggested_before_index in (1, 3)
-    # The backtrack leg highlighted must span the flagged stop
     assert hint.long_leg_from_index in (1, 2)
     assert hint.long_leg_to_index == hint.long_leg_from_index + 1
 
 
 def test_clear_backtrack_near_start_far_end() -> None:
-    """Stop C sits almost at the start anchor while the rest of the route
-    runs east, and D is a big jump further east.  This creates a C→D leg
-    that is ~2.5x the median — comfortably above the long-leg threshold —
-    and a 39% haversine path improvement when C is moved first.
+    """Stop C sits almost at the start while the rest of the route runs east,
+    and D is a big jump further east — 39% haversine path improvement from
+    moving C to position 1 (before B).
 
-    Verified values (at Dublin lat ≈ 53.34°, 1° lng ≈ 66.5 km):
-      A(-6.260) → B(-6.220) → C(-6.259) → D(-6.160) → E(-6.140)
-      Leg lengths ≈ [2.66, 2.59, 6.58, 1.33] km, median ≈ 2.62 km
-      Best relocation: move C before B → 39% improvement, C→D ratio ≈ 2.5x
+    Route (lng): -6.260 → -6.220 → -6.259 → -6.160 → -6.140
     """
     places = [
-        make_place("A", 53.340, -6.260),  # anchor start (west)
-        make_place("B", 53.340, -6.220),  # going east
+        make_place("A", 53.340, -6.260),
+        make_place("B", 53.340, -6.220),
         make_place("C", 53.340, -6.259),  # almost back at start — backtrack
-        make_place("D", 53.340, -6.160),  # far east (big jump)
-        make_place("E", 53.340, -6.140),  # anchor end (east)
+        make_place("D", 53.340, -6.160),  # big jump east
+        make_place("E", 53.340, -6.140),
     ]
     hint = detect_backtrack_hint(places)
     assert hint is not None
     assert hint.flagged_stop_index == 2
     assert hint.flagged_stop_name == "C"
     assert hint.suggested_before_index == 1  # move C before B
-    assert hint.long_leg_from_index == 2  # the long C→D backtrack leg
+    assert hint.long_leg_from_index == 2  # the long C→D leg
     assert hint.long_leg_to_index == 3
+
+
+def test_howth_backtrack_returns_hint() -> None:
+    """Real Dublin route: Howth is a large NE outlier visited between two
+    central stops — a 41% haversine improvement exists.
+
+    Previously blocked by the self-defeating median-leg guard (the two ~14 km
+    Howth legs inflated the median to 10.9 km, pushing the 1.8x bar to 19.5 km
+    — higher than the legs themselves).  With the guard removed this now fires.
+
+    Coords: Trinity, Bonobo Smithfield, Howth, Mema's, Strand View.
+    """
+    places = [
+        make_place("Trinity", 53.3438, -6.2546),
+        make_place("Bonobo Smithfield", 53.3504, -6.2746),
+        make_place("Howth", 53.3728, -6.0588),
+        make_place("Mema's", 53.3532, -6.2604),
+        make_place("Strand View", 53.3835, -6.1483),
+    ]
+    hint = detect_backtrack_hint(places)
+    assert hint is not None
+    assert hint.flagged_stop_index == 2  # Howth
+    assert hint.flagged_stop_name == "Howth"
+    # Suggested position: before Strand View (the best single-stop relocation)
+    assert hint.suggested_before_index == 4
+    assert hint.suggested_before_name == "Strand View"
+
+
+def test_last_stop_can_be_flagged() -> None:
+    """With anchoring removed, the last stop can be flagged.
+
+    Far is geographically near the start (west) but placed last, creating a
+    long backtrack leg at the end of the route (~48% improvement by moving it
+    right after the start stop).
+
+    Route (lng): -6.260 → -6.240 → -6.220 → -6.200 → -6.255(Far)
+    """
+    places = [
+        make_place("A", 53.340, -6.260),  # start (west)
+        make_place("B", 53.340, -6.240),
+        make_place("C", 53.340, -6.220),
+        make_place("D", 53.340, -6.200),  # eastmost middle stop
+        make_place("Far", 53.340, -6.255),  # last stop — near A, should be earlier
+    ]
+    hint = detect_backtrack_hint(places)
+    assert hint is not None
+    assert hint.flagged_stop_index == 4  # last stop
+    assert hint.flagged_stop_name == "Far"
 
 
 # ---------------------------------------------------------------------------
@@ -145,48 +190,25 @@ def test_two_stops_returns_none() -> None:
 
 
 def test_sub_threshold_inefficiency_returns_none() -> None:
-    """A mild inefficiency (< 25% improvement from one relocation) → None.
+    """A mild inefficiency (< 10% improvement from any single relocation) → None.
 
-    Route: A → B(lng -6.230) → C(lng -6.225) → D(lng -6.200) → E(lng -6.170)
-    C is only slightly back from B — tiny improvement, well below threshold.
+    Route: A → B(-6.230) → C(-6.225) → D(-6.200) → E(-6.170).
+    All stops trend eastward with no significant backtrack.
     """
     places = [
-        make_place("A", 53.340, -6.260),  # anchor
+        make_place("A", 53.340, -6.260),
         make_place("B", 53.340, -6.230),
-        make_place("C", 53.340, -6.225),  # barely back from B
+        make_place("C", 53.340, -6.225),  # almost same position as B — not a backtrack
         make_place("D", 53.340, -6.200),
-        make_place("E", 53.340, -6.170),  # anchor
+        make_place("E", 53.340, -6.170),
     ]
     assert detect_backtrack_hint(places) is None
 
 
-def test_long_leg_guard_blocks_marginal_case() -> None:
-    """Even if improvement >= 25%, hint is suppressed when no adjacent leg
-    is anomalously long (all legs are roughly the same length).
-
-    All legs ≈ equal length — no single leg stands out as a backtrack.
-    """
-    # Zigzag route where each leg is similar length but order isn't ideal.
-    # Leg ratio will not reach 1.8x median, so guard fires.
-    places = [
-        make_place("A", 53.340, -6.260),
-        make_place("B", 53.360, -6.240),
-        make_place("C", 53.345, -6.255),  # slight zigzag back
-        make_place("D", 53.380, -6.220),
-        make_place("E", 53.400, -6.200),
-    ]
-    # Verify that even if improvement were >= 25%, the long-leg guard
-    # would suppress it.  (If this route passes guard, adjust coords.)
-    hint = detect_backtrack_hint(places)
-    # Either guard fires (None) or improvement is below threshold (also None).
-    assert hint is None
-
-
 # ---------------------------------------------------------------------------
-# detect_backtrack_hint — threshold constants accessible
+# detect_backtrack_hint — threshold constant accessible
 # ---------------------------------------------------------------------------
 
 
-def test_threshold_constants_are_reasonable() -> None:
-    assert 0.15 <= BACKTRACK_HINT_THRESHOLD <= 0.40
-    assert 1.2 <= LONG_LEG_RATIO_THRESHOLD <= 2.5
+def test_threshold_constant_is_reasonable() -> None:
+    assert 0.05 <= BACKTRACK_HINT_THRESHOLD <= 0.40

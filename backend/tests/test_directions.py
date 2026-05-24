@@ -5,12 +5,10 @@ parsing without spending real API quota.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
-
-from datetime import timedelta
 
 from app.services.directions import (
     DirectionsError,

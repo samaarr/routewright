@@ -17,10 +17,9 @@ import time
 from pathlib import Path
 
 import aiosqlite
+import httpx
 
 from app.services.geocoder import GeocodedPlace, geocode
-
-import httpx
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS geocache (

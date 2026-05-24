@@ -6,7 +6,6 @@ so tests verify shape/content rather than exact timestamps.
 """
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -27,9 +26,7 @@ def _valid_payload() -> dict:
     }
 
 
-def test_refresh_leg_returns_leg_item(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_refresh_leg_returns_leg_item(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Happy path: valid payload → LegItem with correct structure."""
     now = datetime.now(timezone.utc)
 

@@ -75,7 +75,9 @@ def test_same_location_consecutive_stops_emits_warning(
         types=["tourist_attraction"],
     )
 
-    async def _fake(query: str, city: str, db_path: str, ttl_days: int, client: object = None) -> GeocodedPlace:
+    async def _fake(
+        query: str, city: str, db_path: str, ttl_days: int, client: object = None
+    ) -> GeocodedPlace:
         return same_place
 
     monkeypatch.setattr("app.routers.plan.geocode_cached", _fake)
@@ -115,7 +117,9 @@ def test_neighbourhood_query_resolving_to_food_type_emits_info_warning(
         types=["tourist_attraction"],
     )
 
-    async def _fake(query: str, city: str, db_path: str, ttl_days: int, client: object = None) -> GeocodedPlace:
+    async def _fake(
+        query: str, city: str, db_path: str, ttl_days: int, client: object = None
+    ) -> GeocodedPlace:
         return bar_place if "temple bar" in query.lower() else other_place
 
     monkeypatch.setattr("app.routers.plan.geocode_cached", _fake)

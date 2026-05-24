@@ -5,19 +5,15 @@ detect_backtrack_hint: single-stop backtrack detection, advisory only.
 """
 
 import math
-from statistics import median
 
 from app.models.response import RouteHint
 from app.services.geocoder import GeocodedPlace
 
 # A single relocation must reduce the haversine path length by at least
-# this fraction before a hint is emitted. Deliberately conservative.
-BACKTRACK_HINT_THRESHOLD = 0.25
-
-# The leg into or out of the flagged stop must be at least this many times
-# the median leg length. Guards against flagging marginal reshuffles in
-# routes where all legs are similarly long.
-LONG_LEG_RATIO_THRESHOLD = 1.8
+# this fraction before a hint is emitted.  Set at 0.10 (deliberately
+# sensitive / minimal-guard) to observe raw behaviour on real routes
+# before deciding which guards to reinstate.
+BACKTRACK_HINT_THRESHOLD = 0.10
 
 
 def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -45,20 +41,22 @@ def _path_length(places: list[GeocodedPlace], order: list[int]) -> float:
 
 
 def detect_backtrack_hint(places: list[GeocodedPlace]) -> RouteHint | None:
-    """Return an advisory hint if one middle stop is a clear spatial backtrack.
+    """Return an advisory hint if one stop is a clear spatial backtrack.
 
-    Conservative conditions — ALL must hold:
-    1. At least 4 stops (otherwise no meaningful middle to consider).
-    2. A single relocation of one middle stop reduces the haversine path
-       length by >= BACKTRACK_HINT_THRESHOLD (25%).
-    3. The flagged stop is adjacent to a leg that is >= LONG_LEG_RATIO_THRESHOLD
-       (1.8x) the median leg length — avoids flagging near-uniform routes.
+    Minimal-guard mode: no start/end anchoring (any stop can be flagged),
+    no median-leg guard, threshold at 10%.  The median-leg guard was removed
+    because a large backtrack inflates the median, making the ratio test
+    self-defeating for exactly the cases it should catch.
 
-    First/last stops are treated as fixed anchors (not candidates for moving).
+    Conditions — ALL must hold:
+    1. At least 4 stops.
+    2. A single relocation of ANY stop (including first and last) reduces
+       the haversine path length by >= BACKTRACK_HINT_THRESHOLD.
+
     When two relocations give equal improvement, the one whose flagged stop
     has the longest adjacent leg is preferred (most visually obvious backtrack).
 
-    Returns None in the common case (efficient route or ambiguous hint).
+    Returns None in the common case (efficient route or below threshold).
     """
     n = len(places)
     if n < 4:
@@ -69,7 +67,7 @@ def detect_backtrack_hint(places: list[GeocodedPlace]) -> RouteHint | None:
     if current_total == 0.0:
         return None
 
-    # Leg lengths in the current (user) order.
+    # Leg lengths used for tie-breaking and for choosing the highlighted leg.
     leg_lengths = [
         haversine_km(
             places[i].lat,
@@ -79,17 +77,15 @@ def detect_backtrack_hint(places: list[GeocodedPlace]) -> RouteHint | None:
         )
         for i in range(n - 1)
     ]
-    med = median(leg_lengths)
 
     best_improvement = 0.0
-    # Collect all relocations within epsilon of best — break ties by max adj leg.
     best_candidates: list[tuple[int, int]] = []  # (flagged_idx, insert_before_idx)
 
-    for move_i in range(1, n - 1):  # middle stops only — first/last are anchors
+    for move_i in range(n):  # all stops are candidates — no anchoring
         remaining = [j for j in base_order if j != move_i]
-        # Insert move_i before each position in remaining, excluding before the
-        # first anchor (remaining[0]) and after the last anchor (remaining[-1]).
-        for insert_pos in range(1, len(remaining)):
+        # range(len(remaining)) tries every position except appending to the
+        # very end, so remaining[insert_pos] is always a valid "before" stop.
+        for insert_pos in range(len(remaining)):
             new_order = [*remaining[:insert_pos], move_i, *remaining[insert_pos:]]
             new_total = _path_length(places, new_order)
             improvement = (current_total - new_total) / current_total
@@ -103,20 +99,20 @@ def detect_backtrack_hint(places: list[GeocodedPlace]) -> RouteHint | None:
         return None
 
     def max_adj_leg(flagged: int) -> float:
-        return max(leg_lengths[flagged - 1], leg_lengths[flagged])
+        # Guard for edge stops: no leg before index 0, no leg after index n-1.
+        legs = []
+        if flagged > 0:
+            legs.append(leg_lengths[flagged - 1])
+        if flagged < n - 1:
+            legs.append(leg_lengths[flagged])
+        return max(legs) if legs else 0.0
 
-    # Among equally-good candidates, prefer the one with the longest adjacent leg
-    # — that stop is the most spatially obvious backtrack.
     best_flagged_idx, best_insert_before = max(best_candidates, key=lambda c: max_adj_leg(c[0]))
 
-    # Long-leg guard: the flagged stop must sit next to a clearly anomalous leg.
+    # The leg to highlight on the map: whichever adjacent leg is longer.
     flagged = best_flagged_idx
-    leg_in = leg_lengths[flagged - 1]
-    leg_out = leg_lengths[flagged]
-    if max(leg_in, leg_out) < med * LONG_LEG_RATIO_THRESHOLD:
-        return None
-
-    # The leg to highlight on the map: whichever of the two adjacent legs is longer.
+    leg_in = leg_lengths[flagged - 1] if flagged > 0 else 0.0
+    leg_out = leg_lengths[flagged] if flagged < n - 1 else 0.0
     if leg_in >= leg_out:
         long_from, long_to = flagged - 1, flagged
     else:

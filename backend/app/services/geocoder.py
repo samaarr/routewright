@@ -79,9 +79,7 @@ async def geocode(
         response = await client.post(PLACES_ENDPOINT, json=body, headers=headers)
 
     if response.status_code != 200:
-        raise GeocoderError(
-            f"Places API returned {response.status_code}: {response.text[:200]}"
-        )
+        raise GeocoderError(f"Places API returned {response.status_code}: {response.text[:200]}")
 
     return _parse_response(response.json(), query)
 

@@ -4,8 +4,6 @@ All tests use tmp_path for the DB so they're isolated and leave no artifacts.
 Network calls are mocked via httpx.MockTransport.
 """
 
-import json
-import time
 from pathlib import Path
 from typing import Any
 
