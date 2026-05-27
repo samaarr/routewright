@@ -22,7 +22,6 @@ from app.models.request import PlanRequest
 from app.models.response import LegItem, Plan, StopItem
 from app.models.response import Warning as PlanWarning
 from app.services.directions import fetch_leg
-from app.services.geo import detect_backtrack_hint
 from app.services.geocache import geocode_cached
 from app.services.geocoder import GeocodedPlace, GeocoderError
 from app.services.hours import compute_hours_status
@@ -108,10 +107,6 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
                     affects_stop_index=None,
                 )
             )
-
-    # Advisory backtrack hint — runs after geocoding (coords available) but
-    # before any routing. Detection is pure haversine; never reorders the plan.
-    route_hint = detect_backtrack_hint(places)
 
     # Derive the trip timezone from destination coordinates (offline, no API).
     # All stops share the same city, so the first stop's coords are sufficient.
@@ -234,7 +229,6 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
         timeline=timeline,
         overview_map_url=_overview_url([s.query for s in req.stops], req.city),
         warnings=warnings,
-        route_hint=route_hint,
     )
 
 
