@@ -15,7 +15,6 @@ from typing import Any, Literal
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, HTTPException, Request
-from timezonefinder import TimezoneFinder
 
 from app.core.config import settings
 from app.core.limiter import limiter
@@ -28,23 +27,9 @@ from app.services.geocache import geocode_cached
 from app.services.geocoder import GeocodedPlace, GeocoderError
 from app.services.hours import compute_hours_status
 from app.services.stay_defaults import lookup_stay_minutes
+from app.services.tz import destination_timezone
 
 router = APIRouter(prefix="/api", tags=["plan"])
-
-# Instantiated once at module load — TimezoneFinder reads its bundled data
-# on __init__ and is safe to share across requests (thread-safe reads).
-_tf = TimezoneFinder()
-
-
-def _destination_timezone(lat: float, lng: float, fallback: str) -> str:
-    """Return the IANA timezone for the given coordinates.
-
-    Uses offline timezonefinder data — no network call. Falls back to the
-    browser-supplied timezone when the lookup returns None (ocean/null-island),
-    and ultimately to 'UTC' if that's also absent.
-    """
-    tz = _tf.timezone_at(lat=lat, lng=lng)
-    return tz if tz is not None else (fallback or "UTC")
 
 
 _FALLBACK_LEG_SECONDS = 15 * 60
@@ -131,7 +116,7 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
     # Derive the trip timezone from destination coordinates (offline, no API).
     # All stops share the same city, so the first stop's coords are sufficient.
     # Falls back to the browser-supplied req.timezone, then "UTC".
-    trip_timezone = _destination_timezone(places[0].lat, places[0].lng, req.timezone)
+    trip_timezone = destination_timezone(places[0].lat, places[0].lng, req.timezone)
 
     # Phase 2: resolve stay_minutes for every stop.
     # First and last stops are anchors — default stay is 0 so the chain starts

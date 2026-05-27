@@ -149,12 +149,36 @@ class OptimisedStop(BaseModel):
     stay_minutes: int | None = None
 
 
+class InfeasibilityFlag(BaseModel):
+    """A stop that remains hours-violated in the chosen order.
+
+    Reported when the solver could not schedule the stop within its opening
+    hours even as a soft constraint (e.g. the stop is closed all day).
+    The frontend uses this to display a warning inline — it never blocks the
+    response.
+    """
+
+    stop_index: int = Field(
+        ...,
+        description="Index of the stop in the output order (0-based).",
+    )
+    stop_name: str
+    issue: HoursStatus = Field(
+        ...,
+        description="'closed_on_arrival' or 'closes_during_visit'.",
+    )
+
+
 class OptimiseResponse(BaseModel):
     """Result of POST /api/optimise — reordered stops plus path-length stats."""
 
     stops: list[OptimisedStop]
     original_km: float = Field(..., description="Haversine path length of the input order (km).")
     optimised_km: float = Field(..., description="Haversine path length after optimisation (km).")
+    infeasibility_flags: list[InfeasibilityFlag] = Field(
+        default_factory=list,
+        description="Stops that remain hours-violated in the chosen order.",
+    )
 
 
 class HealthResponse(BaseModel):

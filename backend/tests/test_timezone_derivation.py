@@ -1,6 +1,6 @@
 """Tests for destination-timezone derivation from geocoded coordinates.
 
-Verifies _destination_timezone returns the correct IANA zone from lat/lng,
+Verifies destination_timezone returns the correct IANA zone from lat/lng,
 with correct fallback chain (coords -> browser zone -> UTC), and that
 compute_hours_status uses the derived zone (not the test machine's zone).
 """
@@ -10,9 +10,9 @@ from datetime import timezone as _tz
 
 import pytest
 
-from app.routers.plan import _destination_timezone
 from app.services.geocoder import OpeningPeriod
 from app.services.hours import compute_hours_status
+from app.services.tz import destination_timezone
 
 # ---------------------------------------------------------------------------
 # Coordinate derivation
@@ -20,15 +20,15 @@ from app.services.hours import compute_hours_status
 
 
 def test_london_coords_return_europe_london() -> None:
-    assert _destination_timezone(51.5074, -0.1278, "UTC") == "Europe/London"
+    assert destination_timezone(51.5074, -0.1278, "UTC") == "Europe/London"
 
 
 def test_tokyo_coords_return_asia_tokyo() -> None:
-    assert _destination_timezone(35.6762, 139.6503, "UTC") == "Asia/Tokyo"
+    assert destination_timezone(35.6762, 139.6503, "UTC") == "Asia/Tokyo"
 
 
 def test_nyc_coords_return_america_new_york() -> None:
-    assert _destination_timezone(40.7128, -74.0060, "UTC") == "America/New_York"
+    assert destination_timezone(40.7128, -74.0060, "UTC") == "America/New_York"
 
 
 # ---------------------------------------------------------------------------
@@ -47,18 +47,18 @@ def test_fallback_to_browser_zone_when_lookup_returns_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Ocean/null-island coords return None -> use browser-supplied zone."""
-    from app.routers import plan as _plan
+    from app.services import tz as _tz_mod
 
-    monkeypatch.setattr(_plan, "_tf", _NullFinder())
-    assert _destination_timezone(0.0, 0.0, "Europe/Dublin") == "Europe/Dublin"
+    monkeypatch.setattr(_tz_mod, "_tf", _NullFinder())
+    assert destination_timezone(0.0, 0.0, "Europe/Dublin") == "Europe/Dublin"
 
 
 def test_fallback_to_utc_when_both_none(monkeypatch: pytest.MonkeyPatch) -> None:
     """If coord lookup returns None AND browser zone is empty, use 'UTC'."""
-    from app.routers import plan as _plan
+    from app.services import tz as _tz_mod
 
-    monkeypatch.setattr(_plan, "_tf", _NullFinder())
-    assert _destination_timezone(0.0, 0.0, "") == "UTC"
+    monkeypatch.setattr(_tz_mod, "_tf", _NullFinder())
+    assert destination_timezone(0.0, 0.0, "") == "UTC"
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ def test_tokyo_venue_evaluated_in_asia_tokyo_not_browser_zone() -> None:
     hours = [_period(1, 9, 0, 1, 18)]
 
     # Derive timezone from Tokyo coordinates (mimics plan.py's derivation)
-    tz_name = _destination_timezone(35.6762, 139.6503, "UTC")
+    tz_name = destination_timezone(35.6762, 139.6503, "UTC")
     assert tz_name == "Asia/Tokyo"
 
     status, detail = compute_hours_status(hours, arrive_utc, depart_utc, tz_name)
@@ -109,7 +109,7 @@ def test_tokyo_venue_closed_correctly_in_asia_tokyo() -> None:
 
     hours = [_period(1, 9, 0, 1, 18)]  # Mon 09:00-18:00 JST
 
-    tz_name = _destination_timezone(35.6762, 139.6503, "UTC")
+    tz_name = destination_timezone(35.6762, 139.6503, "UTC")
     assert tz_name == "Asia/Tokyo"
 
     status, detail = compute_hours_status(hours, arrive_utc, depart_utc, tz_name)

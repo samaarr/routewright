@@ -1,7 +1,7 @@
-"""Tests for distance-based route optimiser — Stage 1 (haversine, no time windows).
+"""Tests for route optimiser — Stage 1 (haversine) and Stage 2 (hours-aware).
 
-No opening-hours constraints (Stage 2). No UI (Stage 3).
-Pure distance optimisation via OR-Tools TSP.
+Stage 1: pure distance via OR-Tools TSP.
+Stage 2: opening-hours soft constraints via OR-Tools time dimension.
 """
 
 from datetime import datetime, timezone
@@ -9,11 +9,12 @@ from datetime import datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from app.services.geocoder import GeocodedPlace
+from app.services.geocoder import GeocodedPlace, OpeningPeriod
 from app.services.optimise import (
     OPTIMISE_MAX_STOPS,
     build_haversine_matrix,
     optimise_order,
+    optimise_order_with_hours,
 )
 
 
@@ -224,3 +225,149 @@ def test_optimise_endpoint_two_stops_unchanged(
     assert len(data["stops"]) == 2
     assert data["stops"][0]["query"] == "Trinity College"
     assert data["stops"][1]["query"] == "Temple Bar"
+
+
+# ---------------------------------------------------------------------------
+# Stage 2: hours-aware optimiser
+# ---------------------------------------------------------------------------
+
+# Monday 2026-06-01 09:00 UTC = 10:00 BST — all test places in "Europe/London"
+_S2_START = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
+_S2_TZ = "Europe/London"
+
+# Monday period helpers
+# Google day: 0=Sun, 1=Mon … 6=Sat
+_MON_ALL_DAY = OpeningPeriod(open_day=1, open_minutes=0, close_day=1, close_minutes=1439)
+_MON_AFTERNOON = OpeningPeriod(open_day=1, open_minutes=840, close_day=1, close_minutes=1200)
+# opens Mon 14:00 BST = 840 min, closes Mon 20:00 BST = 1200 min
+
+# Slightly spread around central London — distance differences are intentionally small
+# so hours penalties (50 km-eq) dominate over travel cost (~0.5 km)
+_CLOSE_CLUSTER = [
+    _place("Museum", 51.5194, -0.1270),
+    _place("Park", 51.5202, -0.1265),
+    _place("Café", 51.5198, -0.1260),
+    _place("Gallery", 51.5190, -0.1255),
+]
+
+# Sunday 2026-05-31 09:00 UTC = 10:00 BST — for "all-closed" tests
+_S2_START_SUN = datetime(2026, 5, 31, 9, 0, tzinfo=timezone.utc)
+
+
+def _place_with_hours(
+    name: str, lat: float, lng: float, periods: list[OpeningPeriod]
+) -> GeocodedPlace:
+    return GeocodedPlace(
+        place_id=f"id_{name.replace(' ', '_')}",
+        name=name,
+        lat=lat,
+        lng=lng,
+        primary_type="tourist_attraction",
+        types=["tourist_attraction"],
+        opening_hours=periods,
+    )
+
+
+def test_s2_unknown_hours_no_flags_no_penalty() -> None:
+    """Stops with no hours data (unknown) produce no flags.
+
+    Without hours constraints the result must equal Stage 1's pure-distance order.
+    """
+    order_s1 = optimise_order(_HOWTH)
+    order_s2, flags = optimise_order_with_hours(
+        _HOWTH,
+        stays=[60] * len(_HOWTH),
+        start_time=_S2_START,
+        city_timezone=_S2_TZ,
+    )
+    assert sorted(order_s2) == list(range(len(_HOWTH)))
+    assert flags == []
+    assert order_s2 == order_s1, "No-hours result must match Stage 1"
+
+
+def test_s2_closed_on_arrival_stop_not_first() -> None:
+    """A stop closed in the morning is pushed out of the lead position.
+
+    Museum only opens Mon 14:00 BST (840 min).  Trip starts 10:00 BST.
+    Arrival penalty (50 km-equivalent per 60 min) vastly exceeds intra-cluster
+    travel cost (~0.1 km), so the solver avoids placing Museum first.
+    """
+    places = [
+        _place_with_hours("Museum", 51.5194, -0.1270, [_MON_AFTERNOON]),  # closed until 14:00
+        _place("Park", 51.5202, -0.1265),
+        _place("Café", 51.5198, -0.1260),
+    ]
+    order, _flags = optimise_order_with_hours(
+        places,
+        stays=[60, 60, 60],
+        start_time=_S2_START,
+        city_timezone=_S2_TZ,
+    )
+    assert order[0] != 0, "Museum (closed at 10:00 BST) must not be the first stop"
+
+
+def test_s2_all_closed_all_flagged() -> None:
+    """When every stop is closed on Sunday, all appear in infeasibility_flags."""
+    # All stops only open Monday; trip runs on Sunday.
+    sunday_places = [
+        _place_with_hours(f"Stop{i}", 51.5194 + i * 0.001, -0.127, [_MON_ALL_DAY]) for i in range(4)
+    ]
+    order, flags = optimise_order_with_hours(
+        sunday_places,
+        stays=[60] * 4,
+        start_time=_S2_START_SUN,
+        city_timezone=_S2_TZ,
+    )
+    assert sorted(order) == [0, 1, 2, 3]
+    assert len(flags) == 4, "Every stop closed on Sunday must be flagged"
+    assert all(f.issue == "closed_on_arrival" for f in flags)
+
+
+def test_s2_closes_during_visit_flagged_when_stay_too_long() -> None:
+    """A stop where the stay overruns closing time is flagged closes_during_visit.
+
+    n=2 → passthrough (order=[0,1]).  LateCloser is first; trip starts 10:00 BST.
+    Stop open Mon 08:00–11:30 BST.  Stay = 180 min → depart 13:00 BST > 11:30 close.
+    """
+    closes_1130 = OpeningPeriod(open_day=1, open_minutes=480, close_day=1, close_minutes=690)
+    # Mon 08:00 BST (480 min) → Mon 11:30 BST (690 min)
+    late_closer = _place_with_hours("LateCloser", 51.5200, -0.1270, [closes_1130])
+    other = _place("Other", 51.5205, -0.1265)
+
+    _order, flags = optimise_order_with_hours(
+        [late_closer, other],
+        stays=[180, 60],
+        start_time=_S2_START,
+        city_timezone=_S2_TZ,
+    )
+    assert len(flags) == 1
+    assert flags[0].stop_name == "LateCloser"
+    assert flags[0].issue == "closes_during_visit"
+
+
+def test_s2_open_all_trip_no_flags() -> None:
+    """Stops confirmed open throughout the trip produce no infeasibility flags."""
+    all_open = [
+        _place_with_hours(f"Stop{i}", 51.5194 + i * 0.001, -0.127, [_MON_ALL_DAY]) for i in range(4)
+    ]
+    _order, flags = optimise_order_with_hours(
+        all_open,
+        stays=[60] * 4,
+        start_time=_S2_START,
+        city_timezone=_S2_TZ,
+    )
+    assert flags == []
+
+
+def test_s2_stage1_regression_no_hours() -> None:
+    """Without hours data, Stage 2 matches Stage 1 on the zigzag London route."""
+    order_s1 = optimise_order(_LONDON)
+    order_s2, flags = optimise_order_with_hours(
+        _LONDON,
+        stays=[60] * len(_LONDON),
+        start_time=_S2_START,
+        city_timezone=_S2_TZ,
+    )
+    assert sorted(order_s2) == list(range(len(_LONDON)))
+    assert flags == []
+    assert order_s2 == order_s1, "No-hours Stage 2 must produce same order as Stage 1"

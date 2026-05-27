@@ -1,8 +1,9 @@
-"""POST /api/optimise — distance-optimal stop reordering.
+"""POST /api/optimise — distance-optimal stop reordering with hours awareness.
 
-Stage 1: haversine cost, no time-window constraints (Stage 2), no UI (Stage 3).
-Geocodes stops cache-first, runs OR-Tools TSP, returns the reordered stop list
-plus path-length stats. The caller re-POSTs the result to /api/plan for pricing.
+Stage 2: haversine cost + opening-hours soft constraints via OR-Tools time
+dimension.  Geocodes stops cache-first, runs OR-Tools TSP, returns the
+reordered stop list, path-length stats, and any infeasibility flags.
+The caller re-POSTs the result to /api/plan for pricing.
 """
 
 from fastapi import APIRouter, HTTPException, Request
@@ -13,7 +14,9 @@ from app.models.request import PlanRequest
 from app.models.response import OptimisedStop, OptimiseResponse
 from app.services.geocache import geocode_cached
 from app.services.geocoder import GeocoderError
-from app.services.optimise import build_haversine_matrix, optimise_order
+from app.services.optimise import build_haversine_matrix, optimise_order_with_hours
+from app.services.stay_defaults import DEFAULT_STAY_MINUTES
+from app.services.tz import destination_timezone
 
 router = APIRouter(prefix="/api", tags=["optimise"])
 
@@ -25,11 +28,12 @@ def _path_km(matrix: list[list[float]], order: list[int]) -> float:
 @router.post("/optimise", response_model=OptimiseResponse)
 @limiter.limit("20/day")
 async def optimise(request: Request, req: PlanRequest) -> OptimiseResponse:
-    """Return stops in haversine-optimal order with before/after path lengths.
+    """Return stops in hours-aware haversine-optimal order with path-length stats.
 
-    Geocodes stops (cache-first — nearly free after the first plan).  The
-    optimised stop list is intended for the frontend to re-POST to /api/plan,
-    reusing the existing handleReorder flow to produce a priced timeline.
+    Geocodes stops (cache-first — nearly free after the first plan).  Opening
+    hours are applied as soft constraints so the solver avoids arriving at
+    closed venues; infeasibility_flags reports stops that remain violated.
+    The optimised stop list is intended for re-POST to /api/plan.
     """
     places = []
     for stop in req.stops:
@@ -47,10 +51,15 @@ async def optimise(request: Request, req: PlanRequest) -> OptimiseResponse:
             ) from exc
         places.append(place)
 
+    trip_timezone = destination_timezone(places[0].lat, places[0].lng, req.timezone)
+    stays = [
+        s.stay_minutes if s.stay_minutes is not None else DEFAULT_STAY_MINUTES for s in req.stops
+    ]
+
     n = len(places)
     matrix = build_haversine_matrix(places)
     original_order = list(range(n))
-    optimised_idx = optimise_order(places)
+    optimised_idx, flags = optimise_order_with_hours(places, stays, req.start_time, trip_timezone)
 
     return OptimiseResponse(
         stops=[
@@ -63,4 +72,5 @@ async def optimise(request: Request, req: PlanRequest) -> OptimiseResponse:
         ],
         original_km=round(_path_km(matrix, original_order), 2),
         optimised_km=round(_path_km(matrix, optimised_idx), 2),
+        infeasibility_flags=flags,
     )
