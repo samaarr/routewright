@@ -70,6 +70,14 @@ class PlanRequest(BaseModel):
         description="IANA timezone for the trip city (e.g. 'Europe/London'). "
         "Used to compare UTC arrival times against venue-local opening hours.",
     )
+    fixed_first: bool = Field(
+        default=False,
+        description="Pin the first stop — the optimiser will not move it.",
+    )
+    fixed_last: bool = Field(
+        default=False,
+        description="Pin the last stop — the optimiser will not move it.",
+    )
 
     @field_validator("timezone")
     @classmethod

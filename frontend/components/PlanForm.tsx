@@ -7,6 +7,10 @@ interface Props {
   onSubmit: (form: FormState) => void;
   isLoading: boolean;
   mobileSubmitHidden?: boolean;
+  fixedFirst: boolean;
+  fixedLast: boolean;
+  onToggleFixedFirst: () => void;
+  onToggleFixedLast: () => void;
 }
 
 const MODES: { value: TransportMode; label: string }[] = [
@@ -15,7 +19,17 @@ const MODES: { value: TransportMode; label: string }[] = [
   { value: "driving", label: "Driving" },
 ];
 
-export default function PlanForm({ form, onChange, onSubmit, isLoading, mobileSubmitHidden }: Props) {
+export default function PlanForm({
+  form,
+  onChange,
+  onSubmit,
+  isLoading,
+  mobileSubmitHidden,
+  fixedFirst,
+  fixedLast,
+  onToggleFixedFirst,
+  onToggleFixedLast,
+}: Props) {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     // start_time conversion (naive → UTC ISO) happens in toPayload() in
@@ -41,6 +55,10 @@ export default function PlanForm({ form, onChange, onSubmit, isLoading, mobileSu
         <label className="mb-2 block text-section-label">Stops</label>
         <StopList
           stops={form.stops}
+          fixedFirst={fixedFirst}
+          fixedLast={fixedLast}
+          onToggleFixedFirst={onToggleFixedFirst}
+          onToggleFixedLast={onToggleFixedLast}
           onChange={(stops) => onChange({ ...form, stops })}
         />
       </div>

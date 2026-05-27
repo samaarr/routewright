@@ -1,4 +1,4 @@
-import type { LegItem, Plan, PlanRequest, TransportMode } from "./types";
+import type { LegItem, OptimiseResponse, Plan, PlanRequest, TransportMode } from "./types";
 
 export interface RefreshLegRequest {
   from_lat: number;
@@ -31,6 +31,21 @@ export async function postPlan(req: PlanRequest): Promise<Plan> {
   }
 
   return res.json() as Promise<Plan>;
+}
+
+export async function postOptimise(req: PlanRequest): Promise<OptimiseResponse> {
+  const res = await fetch(`${BASE}/api/optimise`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { detail?: string };
+    throw new Error(body.detail ?? `Optimise failed (${res.status})`);
+  }
+
+  return res.json() as Promise<OptimiseResponse>;
 }
 
 export async function postRefreshLeg(req: RefreshLegRequest): Promise<LegItem> {

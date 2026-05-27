@@ -1,12 +1,46 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import type { FormState, Plan, PlanRequest, StopItem } from "@/lib/types";
-import { postPlan, postRefreshLeg } from "@/lib/api";
+import type {
+  FormState,
+  InfeasibilityFlag,
+  Plan,
+  PlanRequest,
+  StopItem,
+} from "@/lib/types";
+import { postOptimise, postPlan, postRefreshLeg } from "@/lib/api";
 import { fmtDuration } from "@/lib/utils";
 import PlanForm from "./PlanForm";
 import PlanCanvas from "./PlanCanvas";
-import PlanMap from "./PlanMap";
+import PlanMap, { type OptimiseMapState } from "./PlanMap";
+
+// ---------------------------------------------------------------------------
+// Optimise state machine
+// ---------------------------------------------------------------------------
+
+type OptimisePhase =
+  | { kind: "none" }
+  | { kind: "loading" }
+  | { kind: "already_optimal" }
+  | {
+      kind: "suggested";
+      optimisedIds: string[];
+      savingKm: number;
+      flags: InfeasibilityFlag[];
+    }
+  | {
+      kind: "accepted";
+      optimisedIds: string[];
+      originalIds: string[];
+      flags: InfeasibilityFlag[];
+      view: "optimised" | "original";
+      isFlipping: boolean;
+    }
+  | { kind: "error" };
+
+// ---------------------------------------------------------------------------
+// Misc helpers
+// ---------------------------------------------------------------------------
 
 type Refreshing =
   | { kind: "none" }
@@ -35,12 +69,16 @@ function makeDefaultForm(): FormState {
   };
 }
 
-function toPayload(form: FormState): PlanRequest {
+function toPayload(
+  form: FormState,
+  opts: { fixed_first?: boolean; fixed_last?: boolean } = {}
+): PlanRequest {
   return {
     ...form,
     stops: form.stops.map(({ id: _, ...rest }) => rest),
     start_time: new Date(form.start_time).toISOString(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    ...opts,
   };
 }
 
@@ -54,8 +92,6 @@ function computeTotalDuration(plan: Plan): string {
   return fmtDuration(Math.round((last - first) / 1000));
 }
 
-// Pill toggle button used in both the mobile segmented control and the
-// tablet map/timeline tab toggle.
 function TabButton({
   active,
   onClick,
@@ -80,6 +116,10 @@ function TabButton({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Root component
+// ---------------------------------------------------------------------------
+
 export default function PlannerPage() {
   const [form, setForm] = useState<FormState>(makeDefaultForm);
   const [plan, setPlan] = useState<Plan | null>(null);
@@ -89,21 +129,23 @@ export default function PlannerPage() {
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const [planVersion, setPlanVersion] = useState(0);
   const [mobileTab, setMobileTab] = useState<MobileTab>("form");
-  // Tablet right panel defaults to "timeline" (users land on the plan after submit).
   const [tabletRightTab, setTabletRightTab] = useState<TabletRightTab>("timeline");
+
+  // Optimise state
+  const [optimisePhase, setOptimisePhase] = useState<OptimisePhase>({ kind: "none" });
+
+  // Pin state — fixed_first / fixed_last for the next optimise call
+  const [fixedFirst, setFixedFirst] = useState(false);
+  const [fixedLast, setFixedLast] = useState(false);
 
   const mapStops = useMemo(
     () =>
       plan
-        ? (plan.timeline.filter(
-            (i): i is StopItem => i.item_type === "stop"
-          ))
+        ? (plan.timeline.filter((i): i is StopItem => i.item_type === "stop"))
         : [],
     [plan]
   );
 
-  // On mobile: switch to timeline tab. On tablet: switch right panel to timeline.
-  // On desktop: no-op (all three columns always visible).
   function focusTimeline() {
     if (typeof window === "undefined") return;
     if (window.innerWidth >= 1024) return;
@@ -114,10 +156,21 @@ export default function PlannerPage() {
     setMobileTab("timeline");
   }
 
+  // handleFormChange: user-initiated edit → reset optimise state
+  function handleFormChange(newForm: FormState) {
+    setForm(newForm);
+    setOptimisePhase({ kind: "none" });
+    setFixedFirst(false);
+    setFixedLast(false);
+  }
+
   async function handleSubmit(formState: FormState) {
     setStatus("loading");
     setErrorMsg(null);
     setTimelineError(null);
+    setOptimisePhase({ kind: "none" });
+    setFixedFirst(false);
+    setFixedLast(false);
     try {
       const result = await postPlan(toPayload(formState));
       setPlan(result);
@@ -136,6 +189,7 @@ export default function PlannerPage() {
     const idToStop = new Map(prevStops.map((s) => [s.id, s]));
     const newStops = newIds.map((id) => idToStop.get(id)!);
     const newForm = { ...form, stops: newStops };
+    // Direct setForm (not handleFormChange) so drag-reorder doesn't wipe optimise state
     setForm(newForm);
     setRefreshing({ kind: "reorder" });
     setTimelineError(null);
@@ -205,16 +259,151 @@ export default function PlannerPage() {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Optimise flow
+  // ---------------------------------------------------------------------------
+
+  async function handleOptimise() {
+    if (!plan || form.stops.length < 3) return;
+    setOptimisePhase({ kind: "loading" });
+    try {
+      const response = await postOptimise(
+        toPayload(form, { fixed_first: fixedFirst, fixed_last: fixedLast })
+      );
+
+      // Match response stop order back to form stop IDs (handles duplicates)
+      const remaining = [...form.stops];
+      const optimisedIds = response.stops.map((optStop) => {
+        const idx = remaining.findIndex((s) => s.query === optStop.query);
+        if (idx === -1) return remaining[0].id;
+        const [matched] = remaining.splice(idx, 1);
+        return matched.id;
+      });
+
+      const originalIds = form.stops.map((s) => s.id);
+      const isSameOrder = optimisedIds.every((id, i) => id === originalIds[i]);
+
+      if (isSameOrder) {
+        setOptimisePhase({ kind: "already_optimal" });
+      } else {
+        const savingKm = Math.max(0, response.original_km - response.optimised_km);
+        setOptimisePhase({
+          kind: "suggested",
+          optimisedIds,
+          savingKm,
+          flags: response.infeasibility_flags,
+        });
+      }
+    } catch {
+      setOptimisePhase({ kind: "error" });
+    }
+  }
+
+  async function handleApplyOptimise() {
+    if (optimisePhase.kind !== "suggested") return;
+    const { optimisedIds, flags } = optimisePhase;
+    const originalIds = form.stops.map((s) => s.id);
+
+    const idToStop = new Map(form.stops.map((s) => [s.id, s]));
+    const newStops = optimisedIds.map((id) => idToStop.get(id)!);
+    const newForm = { ...form, stops: newStops };
+
+    setForm(newForm);
+    setRefreshing({ kind: "reorder" });
+    setTimelineError(null);
+
+    try {
+      const result = await postPlan(toPayload(newForm));
+      setPlan(result);
+      setRefreshing({ kind: "none" });
+      setOptimisePhase({
+        kind: "accepted",
+        optimisedIds,
+        originalIds,
+        flags,
+        view: "optimised",
+        isFlipping: false,
+      });
+    } catch {
+      setForm({ ...form });
+      setRefreshing({ kind: "none" });
+      setTimelineError("Couldn't apply optimised order — try again?");
+    }
+  }
+
+  async function handleToggleView(to: "optimised" | "original") {
+    if (optimisePhase.kind !== "accepted") return;
+    const { optimisedIds, originalIds, flags } = optimisePhase;
+    if (optimisePhase.view === to) return;
+
+    const ids = to === "optimised" ? optimisedIds : originalIds;
+    setOptimisePhase({ ...optimisePhase, isFlipping: true });
+
+    const idToStop = new Map(form.stops.map((s) => [s.id, s]));
+    const newStops = ids.map((id) => idToStop.get(id)!);
+    const newForm = { ...form, stops: newStops };
+
+    setForm(newForm);
+    setRefreshing({ kind: "reorder" });
+
+    try {
+      const result = await postPlan(toPayload(newForm));
+      setPlan(result);
+      setRefreshing({ kind: "none" });
+      setOptimisePhase({
+        kind: "accepted",
+        optimisedIds,
+        originalIds,
+        flags,
+        view: to,
+        isFlipping: false,
+      });
+    } catch {
+      // Revert
+      const revertIds = to === "optimised" ? originalIds : optimisedIds;
+      const revertStops = revertIds.map((id) => idToStop.get(id)!);
+      setForm({ ...form, stops: revertStops });
+      setRefreshing({ kind: "none" });
+      setOptimisePhase({ ...optimisePhase, isFlipping: false });
+      setTimelineError("Couldn't switch order — try again?");
+    }
+  }
+
+  function handleDismissOptimise() {
+    setOptimisePhase({ kind: "none" });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Derived values for rendering
+  // ---------------------------------------------------------------------------
+
   const isReordering = refreshing.kind === "reorder";
   const refreshingLegIdx =
     refreshing.kind === "leg" ? refreshing.legTimelineIndex : null;
   const stopIds = form.stops.map((s) => s.id);
   const stopCount = form.stops.length;
   const totalDuration = plan ? computeTotalDuration(plan) : "";
+  const canOptimise = plan !== null && stopCount >= 3;
 
-  // Shared pane contents — built once, placed in both layout sections.
-  // State lives in PlannerPage so both sections stay in sync when both are
-  // mounted (tablet+desktop section is always in DOM via CSS).
+  // Map view of the optimise state (only the fields PlanMap needs)
+  const optimiseMapState: OptimiseMapState = (() => {
+    if (optimisePhase.kind === "suggested") {
+      return { kind: "suggested", savingKm: optimisePhase.savingKm };
+    }
+    if (optimisePhase.kind === "accepted") {
+      return {
+        kind: "accepted",
+        view: optimisePhase.view,
+        isFlipping: optimisePhase.isFlipping,
+      };
+    }
+    return optimisePhase; // none | loading | already_optimal | error
+  })();
+
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
+
   const formPane = (hasPaddingBottom: boolean) => (
     <>
       {status === "error" && errorMsg && (
@@ -224,10 +413,14 @@ export default function PlannerPage() {
       )}
       <PlanForm
         form={form}
-        onChange={setForm}
+        onChange={handleFormChange}
         onSubmit={handleSubmit}
         isLoading={status === "loading"}
         mobileSubmitHidden={plan === null}
+        fixedFirst={fixedFirst}
+        fixedLast={fixedLast}
+        onToggleFixedFirst={() => setFixedFirst((v) => !v)}
+        onToggleFixedLast={() => setFixedLast((v) => !v)}
       />
       {hasPaddingBottom && plan === null && <div className="h-14" />}
     </>
@@ -249,35 +442,46 @@ export default function PlannerPage() {
     />
   );
 
-  function handleMoveHintStop() {
-    if (!plan?.route_hint) return;
-    const { flagged_stop_index, suggested_before_index } = plan.route_hint;
-    const currentIds = form.stops.map((s) => s.id);
-    const flaggedId = currentIds[flagged_stop_index];
-    const withoutFlagged = currentIds.filter((_, i) => i !== flagged_stop_index);
-    const insertIdx = withoutFlagged.indexOf(currentIds[suggested_before_index]);
-    const newIds = [
-      ...withoutFlagged.slice(0, insertIdx),
-      flaggedId,
-      ...withoutFlagged.slice(insertIdx),
-    ];
-    handleReorder(newIds);
-  }
-
   const mapPane = (
-    <PlanMap
-      stops={mapStops}
-      city={form.city}
-      routeHint={plan?.route_hint ?? null}
-      onMoveHintStop={handleMoveHintStop}
-    />
+    <>
+      <PlanMap
+        stops={mapStops}
+        city={form.city}
+        optimiseState={optimiseMapState}
+        onApply={handleApplyOptimise}
+        onDismiss={handleDismissOptimise}
+        onToggleView={handleToggleView}
+      />
+
+      {/* Optimise button — floats above the map at top-right.
+          z-20 keeps it above the chip (z-10) and the Google Maps controls. */}
+      {canOptimise && optimisePhase.kind === "none" && (
+        <div className="absolute right-3 top-3 z-20">
+          <button
+            type="button"
+            onClick={handleOptimise}
+            className="flex items-center gap-1.5 rounded-lg border border-accent bg-pane-bg/95 px-3 py-2 text-xs font-medium text-accent shadow-raised backdrop-blur-sm transition-colors hover:bg-accent-soft"
+          >
+            Optimise route ↗
+          </button>
+        </div>
+      )}
+      {canOptimise && optimisePhase.kind === "loading" && (
+        <div className="absolute right-3 top-3 z-20">
+          <div className="flex items-center gap-1.5 rounded-lg border border-border-subtle bg-pane-bg/95 px-3 py-2 text-xs text-text-muted shadow-raised backdrop-blur-sm">
+            <span className="inline-block h-3 w-3 animate-spin rounded-full border border-current border-t-transparent" />
+            Optimising…
+          </div>
+        </div>
+      )}
+    </>
   );
 
   return (
     <>
       <main className="mx-auto w-full flex-1 max-w-[1440px] px-4 lg:flex lg:flex-col lg:min-h-0 lg:overflow-hidden lg:px-6">
 
-        {/* ── Page header — always visible ─────────────────────────────── */}
+        {/* Page header */}
         <div className="mb-4 mt-10 text-center md:mb-6 md:mt-12 lg:mb-6 lg:mt-14 lg:flex-shrink-0 lg:text-left">
           <h1 className="text-display text-text-primary">RouteWright</h1>
           <p className="mt-2 text-tagline">
@@ -285,10 +489,8 @@ export default function PlannerPage() {
           </p>
         </div>
 
-        {/* ── MOBILE layout (<768px) ────────────────────────────────────── */}
-        {/* Hidden on md+. Segmented control switches between form/map/plan. */}
+        {/* MOBILE layout (<768px) */}
         <div className="md:hidden">
-          {/* Segmented control */}
           <div className="mb-3 flex rounded-lg border border-border-subtle bg-bg-base p-0.5">
             <TabButton active={mobileTab === "form"} onClick={() => setMobileTab("form")}>
               Form
@@ -307,7 +509,6 @@ export default function PlannerPage() {
             </div>
           )}
           {mobileTab === "map" && (
-            /* relative so PlanMap's absolute inset-0 positions correctly */
             <div className="relative h-[65vh] overflow-hidden rounded-lg border border-border-subtle bg-pane-bg shadow-subtle">
               {mapPane}
             </div>
@@ -319,12 +520,10 @@ export default function PlannerPage() {
           )}
         </div>
 
-        {/* ── TABLET + DESKTOP layout (>=768px) ─────────────────────────── */}
-        {/* Hidden on mobile. On tablet: form (left) + tabbed right panel.   */}
-        {/* On desktop: three independent columns.                           */}
+        {/* TABLET + DESKTOP layout (>=768px) */}
         <div className="hidden md:flex md:flex-col md:flex-1 md:min-h-0 w-full">
 
-          {/* Tablet-only tab toggle — sits above the column row, hidden on desktop */}
+          {/* Tablet-only tab toggle */}
           <div className="mb-4 flex rounded-lg border border-border-subtle bg-bg-base p-0.5 lg:hidden">
             <TabButton
               active={tabletRightTab === "map"}
@@ -340,19 +539,14 @@ export default function PlannerPage() {
             </TabButton>
           </div>
 
-          {/* Column row — three direct flex siblings at all breakpoints.
-              w-full ensures it fills the parent rather than sizing to content.
-              No lg:contents trick — map and timeline are always direct children. */}
           <div className="flex w-full flex-row items-stretch gap-4 md:flex-1 md:min-h-0">
 
-            {/* FORM — left column, always visible */}
+            {/* FORM */}
             <div className="flex flex-shrink-0 flex-col rounded-lg border border-border-subtle bg-pane-bg p-6 shadow-subtle md:w-[300px] md:min-h-0 md:overflow-y-auto md:[scrollbar-gutter:stable] lg:w-[340px] lg:p-8">
               {formPane(true)}
             </div>
 
-            {/* MAP PANE
-                Tablet: visible only when tabletRightTab="map".
-                Desktop: always visible — lg:flex overrides the tablet hidden. */}
+            {/* MAP PANE */}
             <div
               className={`relative overflow-hidden rounded-lg border border-border-subtle bg-pane-bg shadow-subtle min-w-0 lg:flex lg:flex-1 lg:min-h-0 lg:min-w-0 ${
                 tabletRightTab === "map"
@@ -363,9 +557,7 @@ export default function PlannerPage() {
               {mapPane}
             </div>
 
-            {/* TIMELINE PANE
-                Tablet: visible only when tabletRightTab="timeline".
-                Desktop: always visible — lg:flex overrides the tablet hidden. */}
+            {/* TIMELINE PANE */}
             <div
               className={`rounded-lg border border-border-subtle bg-pane-bg shadow-subtle lg:flex lg:flex-col lg:w-[360px] lg:flex-shrink-0 lg:min-h-0 lg:overflow-y-auto lg:p-8 lg:[scrollbar-gutter:stable] ${
                 tabletRightTab === "timeline"
@@ -378,7 +570,7 @@ export default function PlannerPage() {
           </div>
         </div>
 
-        {/* ── Footer ───────────────────────────────────────────────────── */}
+        {/* Footer */}
         <p className="mb-10 mt-6 text-center text-body text-text-muted lg:flex-shrink-0">
           Made in Dublin &middot;{" "}
           <a
@@ -393,7 +585,7 @@ export default function PlannerPage() {
 
       </main>
 
-      {/* Mobile sticky Plan button — only on form tab, only when no plan yet */}
+      {/* Mobile sticky Plan button */}
       {plan === null && mobileTab === "form" && (
         <div className="fixed bottom-0 left-0 right-0 border-t border-border-subtle bg-pane-bg p-3 md:hidden">
           <button
@@ -407,8 +599,7 @@ export default function PlannerPage() {
         </div>
       )}
 
-      {/* Mobile summary bar — shown on map/timeline tabs when plan exists,
-          so the user can see city + stop count without switching to the plan tab */}
+      {/* Mobile summary bar */}
       {plan !== null && (mobileTab === "map" || mobileTab === "timeline") && (
         <div className="fixed left-0 right-0 top-0 z-50 flex h-10 items-center justify-between border-b border-border-subtle bg-pane-bg/95 px-4 backdrop-blur-sm md:hidden">
           <span className="text-sm font-medium text-text-primary">

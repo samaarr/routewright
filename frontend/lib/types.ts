@@ -18,6 +18,27 @@ export interface PlanRequest {
   start_time: string; // ISO 8601, timezone-aware
   mode: TransportMode;
   timezone: string;   // IANA zone for the trip city, e.g. "Europe/London"
+  fixed_first?: boolean;
+  fixed_last?: boolean;
+}
+
+export interface InfeasibilityFlag {
+  stop_index: number;
+  stop_name: string;
+  issue: "closed_on_arrival" | "closes_during_visit";
+}
+
+export interface OptimisedStop {
+  query: string;
+  name: string;
+  stay_minutes: number | null;
+}
+
+export interface OptimiseResponse {
+  stops: OptimisedStop[];
+  original_km: number;
+  optimised_km: number;
+  infeasibility_flags: InfeasibilityFlag[];
 }
 
 // Frontend-only: StopInput extended with a stable client-generated UUID.

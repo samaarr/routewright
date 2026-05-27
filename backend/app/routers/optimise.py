@@ -59,7 +59,14 @@ async def optimise(request: Request, req: PlanRequest) -> OptimiseResponse:
     n = len(places)
     matrix = build_haversine_matrix(places)
     original_order = list(range(n))
-    optimised_idx, flags = optimise_order_with_hours(places, stays, req.start_time, trip_timezone)
+    optimised_idx, flags = optimise_order_with_hours(
+        places,
+        stays,
+        req.start_time,
+        trip_timezone,
+        fixed_first=req.fixed_first,
+        fixed_last=req.fixed_last,
+    )
 
     return OptimiseResponse(
         stops=[

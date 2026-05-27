@@ -50,15 +50,32 @@ function GripDots() {
   );
 }
 
+function PinIcon({ active }: { active: boolean }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 14 14"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      {/* Simple filled pin / location marker */}
+      <path d="M7 0a4.5 4.5 0 0 0-4.5 4.5C2.5 7.75 7 14 7 14s4.5-6.25 4.5-9.5A4.5 4.5 0 0 0 7 0Zm0 6.25a1.75 1.75 0 1 1 0-3.5 1.75 1.75 0 0 1 0 3.5Z" />
+    </svg>
+  );
+}
+
 interface RowProps {
   stop: StopDraft;
   index: number;
   total: number;
+  pinned?: boolean;
   onUpdate: (value: string) => void;
   onRemove: () => void;
+  onTogglePin?: () => void;
 }
 
-function SortableStopRow({ stop, index, total, onUpdate, onRemove }: RowProps) {
+function SortableStopRow({ stop, index, total, pinned, onUpdate, onRemove, onTogglePin }: RowProps) {
   const {
     attributes,
     listeners,
@@ -68,6 +85,8 @@ function SortableStopRow({ stop, index, total, onUpdate, onRemove }: RowProps) {
     isDragging,
   } = useSortable({ id: stop.id });
 
+  const showPin = onTogglePin !== undefined;
+
   return (
     <div
       ref={setNodeRef}
@@ -76,10 +95,10 @@ function SortableStopRow({ stop, index, total, onUpdate, onRemove }: RowProps) {
         transition,
         opacity: isDragging ? 0.35 : 1,
       }}
-      className="group flex items-center gap-2 rounded-sm transition-colors hover:bg-bg-base"
+      className={`group flex items-center gap-2 rounded-sm transition-colors hover:bg-bg-base${pinned ? " border-l-2 border-accent pl-1" : ""}`}
       {...attributes}
     >
-      {/* Drag handle — listeners are here so only the grip initiates drag */}
+      {/* Drag handle */}
       <span
         className="cursor-grab touch-none text-text-tertiary"
         {...listeners}
@@ -100,7 +119,24 @@ function SortableStopRow({ stop, index, total, onUpdate, onRemove }: RowProps) {
         className="input-base"
       />
 
-      {/* × remove — invisible at rest, appears on row hover */}
+      {/* Pin icon — only on first/last; shows affordance for fixed_first/fixed_last */}
+      {showPin && (
+        <button
+          type="button"
+          onClick={onTogglePin}
+          title={pinned ? "Unpin this stop" : "Pin as start/end — the optimiser won't move this"}
+          aria-label={pinned ? "Unpin stop" : "Pin stop as anchor"}
+          className={`-m-1 flex-shrink-0 rounded p-1 transition-colors duration-100 ${
+            pinned
+              ? "text-accent"
+              : "text-text-ghost opacity-0 hover:text-text-muted hover:opacity-100 group-hover:opacity-100 focus:opacity-100"
+          }`}
+        >
+          <PinIcon active={!!pinned} />
+        </button>
+      )}
+
+      {/* × remove */}
       <button
         type="button"
         onClick={onRemove}
@@ -116,10 +152,21 @@ function SortableStopRow({ stop, index, total, onUpdate, onRemove }: RowProps) {
 
 interface Props {
   stops: StopDraft[];
+  fixedFirst: boolean;
+  fixedLast: boolean;
+  onToggleFixedFirst: () => void;
+  onToggleFixedLast: () => void;
   onChange: (stops: StopDraft[]) => void;
 }
 
-export default function StopList({ stops, onChange }: Props) {
+export default function StopList({
+  stops,
+  fixedFirst,
+  fixedLast,
+  onToggleFixedFirst,
+  onToggleFixedLast,
+  onChange,
+}: Props) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
@@ -146,20 +193,32 @@ export default function StopList({ stops, onChange }: Props) {
         strategy={verticalListSortingStrategy}
       >
         <div className="space-y-2">
-          {stops.map((stop, i) => (
-            <SortableStopRow
-              key={stop.id}
-              stop={stop}
-              index={i}
-              total={stops.length}
-              onUpdate={(value) =>
-                onChange(
-                  stops.map((s, j) => (j === i ? { ...s, query: value } : s))
-                )
-              }
-              onRemove={() => onChange(stops.filter((_, j) => j !== i))}
-            />
-          ))}
+          {stops.map((stop, i) => {
+            const isFirst = i === 0;
+            const isLast = i === stops.length - 1;
+            // Pin icon only on first and last stops
+            const pinned = isFirst ? fixedFirst : isLast ? fixedLast : undefined;
+            const onTogglePin =
+              isFirst
+                ? onToggleFixedFirst
+                : isLast
+                ? onToggleFixedLast
+                : undefined;
+            return (
+              <SortableStopRow
+                key={stop.id}
+                stop={stop}
+                index={i}
+                total={stops.length}
+                pinned={pinned}
+                onUpdate={(value) =>
+                  onChange(stops.map((s, j) => (j === i ? { ...s, query: value } : s)))
+                }
+                onRemove={() => onChange(stops.filter((_, j) => j !== i))}
+                onTogglePin={onTogglePin}
+              />
+            );
+          })}
         </div>
       </SortableContext>
 
