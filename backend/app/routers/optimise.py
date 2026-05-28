@@ -26,7 +26,7 @@ def _path_km(matrix: list[list[float]], order: list[int]) -> float:
 
 
 @router.post("/optimise", response_model=OptimiseResponse)
-@limiter.limit("20/day")
+@limiter.limit("50/day")
 async def optimise(request: Request, req: PlanRequest) -> OptimiseResponse:
     """Return stops in hours-aware haversine-optimal order with path-length stats.
 

@@ -41,7 +41,12 @@ class Settings(BaseSettings):
 
     # --- Limits ---
     max_stops_per_request: int = 12
-    max_requests_per_ip_per_day: int = 20
+    max_requests_per_ip_per_day: int = 50
+    # Comma-separated IPs exempt from rate limiting (dev/internal use).
+    # Example: RATE_LIMIT_WHITELIST_IPS=203.0.113.1,203.0.113.2
+    rate_limit_whitelist_ips: str = Field(
+        default="", description="Comma-separated IPs to exempt from rate limiting."
+    )
 
     # --- Cache ---
     cache_db_path: str = "./cache/places_cache.db"

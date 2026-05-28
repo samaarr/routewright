@@ -49,7 +49,7 @@ _FOOD_PLACE_TYPES = {
 
 
 @router.post("/plan", response_model=Plan)
-@limiter.limit("20/day")
+@limiter.limit("50/day")
 async def plan(request: Request, req: PlanRequest) -> Plan:
     """Generate a timeline from the user's ordered stops.
 
