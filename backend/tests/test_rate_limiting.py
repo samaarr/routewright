@@ -23,7 +23,7 @@ def _make_app(plan_limit: str, refresh_limit: str) -> FastAPI:
             status_code=429,
             content={
                 "error": "rate_limit_exceeded",
-                "detail": "Daily limit reached — try again tomorrow.",
+                "detail": "Too many requests — please try again later.",
             },
         )
 
@@ -58,7 +58,7 @@ def test_plan_over_limit_returns_429_with_json_body():
     assert r.status_code == 429
     body = r.json()
     assert body["error"] == "rate_limit_exceeded"
-    assert "tomorrow" in body["detail"]
+    assert "later" in body["detail"]
 
 
 def test_plan_and_refresh_limits_are_independent():

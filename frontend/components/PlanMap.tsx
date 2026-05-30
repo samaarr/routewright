@@ -30,6 +30,19 @@ export type OptimiseMapState =
 // Map utilities
 // ---------------------------------------------------------------------------
 
+// Overlay Google's built-in transit data (bus/tube/rail lines) on the map.
+// TransitLayer is bundled in the Maps JS API — no extra fetch, no billing SKU.
+function TransitLayerOverlay() {
+  const map = useMap();
+  useEffect(() => {
+    if (!map) return;
+    const layer = new google.maps.TransitLayer();
+    layer.setMap(map);
+    return () => { layer.setMap(null); };
+  }, [map]);
+  return null;
+}
+
 interface MapFitterProps { stops: StopItem[] }
 
 function MapFitter({ stops }: MapFitterProps) {
@@ -266,6 +279,7 @@ export default function PlanMap({
           style={{ width: "100%", height: "100%" }}
           gestureHandling="cooperative"
         >
+          <TransitLayerOverlay />
           {stops.map((stop, i) => (
             <AdvancedMarker
               key={`stop-${i}`}

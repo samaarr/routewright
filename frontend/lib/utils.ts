@@ -1,11 +1,13 @@
-// Render an ISO 8601 UTC string as HH:MM in the browser's local timezone.
-// The payload converts the user's typed local time to UTC before sending;
-// converting back here restores the time the user originally picked.
-export function fmtTime(iso: string): string {
+// Render an ISO 8601 UTC string as HH:MM.
+// When tz is provided (IANA zone from plan.timezone) times display in the
+// destination's local zone — a Tokyo trip from Dublin shows JST, not IST.
+// Falls back to browser local when tz is omitted.
+export function fmtTime(iso: string, tz?: string): string {
   return new Date(iso).toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
+    ...(tz ? { timeZone: tz } : {}),
   });
 }
 

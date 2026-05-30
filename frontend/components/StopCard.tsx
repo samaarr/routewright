@@ -12,6 +12,7 @@ interface Props {
   isLast: boolean;
   dragHandleProps?: DragHandleProps;
   onStayEdit?: (minutes: number) => void;
+  tz?: string;
 }
 
 function GripIcon() {
@@ -42,10 +43,12 @@ function HoursStatusLine({
   status,
   detail,
   arriveAt,
+  tz,
 }: {
   status: HoursStatus;
   detail: HoursDetail | null;
   arriveAt: string;
+  tz?: string;
 }) {
   if (status === "unknown") return null;
 
@@ -60,7 +63,7 @@ function HoursStatusLine({
 
   if (status === "closed_on_arrival") {
     const opensAt = detail?.opens_at;
-    const arrive = fmtTime(arriveAt);
+    const arrive = fmtTime(arriveAt, tz);
     return (
       <p className="mt-0.5 text-xs text-spark">
         ⚠ {opensAt ? `Opens ${opensAt}` : "Closed"} — you arrive {arrive}
@@ -87,7 +90,7 @@ function HoursStatusLine({
   return null;
 }
 
-export default function StopCard({ stop, isFirst, isLast, dragHandleProps, onStayEdit }: Props) {
+export default function StopCard({ stop, isFirst, isLast, dragHandleProps, onStayEdit, tz }: Props) {
   const showStayInfo = !isFirst && !isLast && stop.stay_minutes > 0;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -124,7 +127,7 @@ export default function StopCard({ stop, isFirst, isLast, dragHandleProps, onSta
 
       {/* Arrival time — right-aligned in fixed column */}
       <span className="w-12 flex-shrink-0 pt-0.5 text-right text-time-chip">
-        {fmtTime(stop.arrive_at)}
+        {fmtTime(stop.arrive_at, tz)}
       </span>
 
       {/* Dot — centred over the dotted vertical line (line is at left-[5rem]) */}
@@ -141,6 +144,7 @@ export default function StopCard({ stop, isFirst, isLast, dragHandleProps, onSta
           status={stop.hours_status}
           detail={stop.hours_detail}
           arriveAt={stop.arrive_at}
+          tz={tz}
         />
 
         {showStayInfo && (
@@ -176,7 +180,7 @@ export default function StopCard({ stop, isFirst, isLast, dragHandleProps, onSta
                     : "border-border-subtle bg-bg-base text-text-secondary hover:border-border-default hover:text-text-primary"
                 } ${onStayEdit ? "cursor-pointer" : "cursor-default"}`}
               >
-                stay {stop.stay_minutes} min · leave {fmtTime(stop.depart_at)}
+                stay {stop.stay_minutes} min · leave {fmtTime(stop.depart_at, tz)}
               </button>
             )}
           </div>

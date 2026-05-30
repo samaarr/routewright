@@ -94,6 +94,13 @@ class Plan(BaseModel):
     generated_at: datetime
     city: str
     mode: Literal["transit", "walking", "driving"]
+    timezone: str = Field(
+        ...,
+        description="IANA timezone for the trip city, e.g. 'Europe/London'. "
+        "Derived from the first stop's coordinates. Used by the frontend "
+        "to display arrival times in destination time regardless of the "
+        "user's browser timezone.",
+    )
     timeline: list[StopItem | LegItem] = Field(
         ...,
         description="Alternating stop/leg/stop/leg/... in chronological order.",

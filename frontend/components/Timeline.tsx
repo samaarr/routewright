@@ -42,9 +42,10 @@ interface SortableStopRowProps {
   isLast: boolean;
   animationDelay: string;
   onStayEdit: (stopId: string, minutes: number) => void;
+  tz?: string;
 }
 
-function SortableStopRow({ id, stop, isFirst, isLast, animationDelay, onStayEdit }: SortableStopRowProps) {
+function SortableStopRow({ id, stop, isFirst, isLast, animationDelay, onStayEdit, tz }: SortableStopRowProps) {
   const {
     attributes,
     listeners,
@@ -74,6 +75,7 @@ function SortableStopRow({ id, stop, isFirst, isLast, animationDelay, onStayEdit
           isLast={isLast}
           dragHandleProps={listeners as Parameters<typeof StopCard>[0]["dragHandleProps"]}
           onStayEdit={(m) => onStayEdit(id, m)}
+          tz={tz}
         />
       </div>
     </li>
@@ -166,6 +168,7 @@ export default function Timeline({
                       isLast={si === totalStops - 1}
                       animationDelay={`${Math.min(idx * 40, 400)}ms`}
                       onStayEdit={onStayEdit}
+                      tz={plan.timezone}
                     />
                   );
                 }
@@ -203,6 +206,7 @@ export default function Timeline({
               isFirst={false}
               isLast={false}
               dragHandleProps={undefined}
+              tz={plan.timezone}
             />
           </div>
         ) : null}

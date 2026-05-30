@@ -120,6 +120,7 @@ export interface Plan {
   generated_at: string;
   city: string;
   mode: TransportMode;
+  timezone: string; // IANA zone derived from the first stop's coordinates, e.g. "Europe/London"
   timeline: TimelineItem[];
   overview_map_url: string;
   warnings: PlanWarning[];

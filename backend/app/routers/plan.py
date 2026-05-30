@@ -226,6 +226,7 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
         generated_at=req.start_time,
         city=req.city,
         mode=req.mode,
+        timezone=trip_timezone,
         timeline=timeline,
         overview_map_url=_overview_url([s.query for s in req.stops], req.city),
         warnings=warnings,

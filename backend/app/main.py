@@ -48,7 +48,7 @@ async def _rate_limit_handler(_request: Request, _exc: RateLimitExceeded) -> JSO
         status_code=429,
         content={
             "error": "rate_limit_exceeded",
-            "detail": "Daily limit reached — try again tomorrow.",
+            "detail": "Too many requests — please try again later.",
         },
     )
 
