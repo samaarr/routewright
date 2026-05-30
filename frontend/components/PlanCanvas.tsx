@@ -36,8 +36,16 @@ export default function PlanCanvas({
       <div id="timeline-anchor" />
 
       {/* Pane header — sticky so it stays visible as the timeline scrolls */}
-      <div className="sticky top-0 z-10 mb-6 flex items-baseline justify-between border-b border-border-subtle bg-pane-bg pb-4">
-        <span className="text-display-large">Your day</span>
+      <div className="sticky top-0 z-10 mb-6 flex items-center justify-between border-b border-border-subtle bg-pane-bg pb-4">
+        <span className="flex items-center gap-2 text-display-large">
+          Your day
+          {isReordering && (
+            <span
+              className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-text-tertiary border-t-transparent"
+              aria-label="Updating route"
+            />
+          )}
+        </span>
         {plan && (
           <a
             href={plan.overview_map_url}
@@ -72,7 +80,6 @@ export default function PlanCanvas({
             onReorder={onReorder}
             onLegRefresh={onLegRefresh}
             onStayEdit={onStayEdit}
-            isReordering={isReordering}
             refreshingLegIdx={refreshingLegIdx}
           />
         ) : (

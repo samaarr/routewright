@@ -116,7 +116,9 @@ function SortableStopRow({ stop, index, total, pinned, onUpdate, onRemove, onTog
         value={stop.query}
         onChange={(e) => onUpdate(e.target.value)}
         required
+        title={stop.query || `Stop ${index + 1}`}
         className="input-base"
+        style={{ textOverflow: "ellipsis" }}
       />
 
       {/* Pin icon — only on first/last; shows affordance for fixed_first/fixed_last */}

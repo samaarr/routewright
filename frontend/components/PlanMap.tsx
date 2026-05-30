@@ -128,15 +128,11 @@ function NumberedPin({ n, coral }: { n: number; coral?: boolean }) {
   );
 }
 
-function EmptyState({ city }: { city: string }) {
+function EmptyState() {
   return (
     <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
       <div className="rounded-lg border border-border-subtle bg-pane-bg/90 px-6 py-4 shadow-subtle backdrop-blur-sm text-center">
-        <p className="text-body text-text-tertiary">
-          {city
-            ? `Plan your ${city} day to see the route`
-            : "Enter stops to see your route on the map"}
-        </p>
+        <p className="text-body text-text-tertiary">Enter stops to see your route on the map</p>
       </div>
     </div>
   );
@@ -204,7 +200,6 @@ function OrderToggle({
 
 interface Props {
   stops: StopItem[];
-  city: string;
   optimiseState: OptimiseMapState;
   onApply: () => void;
   onDismiss: () => void;
@@ -213,7 +208,6 @@ interface Props {
 
 export default function PlanMap({
   stops,
-  city,
   optimiseState,
   onApply,
   onDismiss,
@@ -322,7 +316,7 @@ export default function PlanMap({
         </div>
       )}
 
-      {stops.length === 0 && <EmptyState city={city} />}
+      {stops.length === 0 && <EmptyState />}
     </APIProvider>
   );
 }

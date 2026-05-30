@@ -50,9 +50,10 @@ function HoursStatusLine({
   if (status === "unknown") return null;
 
   if (status === "open") {
+    const closesAt = detail?.closes_at;
     return (
       <p className="mt-0.5 text-xs text-text-tertiary">
-        Open{detail?.closes_at ? ` · until ${detail.closes_at}` : ""}
+        {closesAt === "00:00" ? "Open 24 hours" : `Open${closesAt ? ` · until ${closesAt}` : ""}`}
       </p>
     );
   }

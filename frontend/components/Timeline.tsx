@@ -30,7 +30,6 @@ interface Props {
   onReorder: (newIds: string[]) => void;
   onLegRefresh: (legTimelineIndex: number) => void;
   onStayEdit: (stopId: string, minutes: number) => void;
-  isReordering: boolean;
   refreshingLegIdx: number | null;
 }
 
@@ -89,7 +88,6 @@ export default function Timeline({
   onReorder,
   onLegRefresh,
   onStayEdit,
-  isReordering,
   refreshingLegIdx,
 }: Props) {
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -153,12 +151,6 @@ export default function Timeline({
             w-6 (gripper, 1.5rem) + w-12 (time, 3rem) + ½×w-4 (dot centre, 0.5rem) = 5rem
           */}
           <div className="relative">
-            {isReordering && (
-              <div className="absolute inset-0 z-20 flex items-center justify-center rounded bg-pane-bg/80">
-                <p className="text-body text-text-tertiary">Updating route…</p>
-              </div>
-            )}
-
             <ol className="relative overflow-hidden before:absolute before:bottom-4 before:left-[5rem] before:top-4 before:border-l-2 before:border-dashed before:border-border-subtle">
               {plan.timeline.map((item, idx) => {
                 if (item.item_type === "stop") {

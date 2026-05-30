@@ -117,6 +117,19 @@ function TabButton({
 }
 
 // ---------------------------------------------------------------------------
+// State model (invariant)
+//
+// Pre-plan:   form = user input. map/timeline = empty.
+// Planned:    form = user input. map/timeline = user order. Optimise btn visible (bottom-centre).
+// Optimised:  form = user input + subtle hint. map/timeline = optimised order. Toggle visible.
+// My order:   form = user input. map/timeline = user order. Toggle visible. Hint gone.
+// Custom:     form = new manual order. map/timeline = same. Toggle gone, Optimise btn reappears.
+//
+// THE INVARIANT: form.stops always reflects the user's typed/dragged input — it never mutates
+// from toggle interactions. Toggle flips only affect the plan fetch and displayStopIds.
+// Only user-initiated actions (text edit, add/remove stop, drag) mutate form.stops.
+// ---------------------------------------------------------------------------
+
 // Root component
 // ---------------------------------------------------------------------------
 
@@ -133,6 +146,11 @@ export default function PlannerPage() {
 
   // Optimise state
   const [optimisePhase, setOptimisePhase] = useState<OptimisePhase>({ kind: "none" });
+
+  // Current stop ID order used for the plan, timeline, and map.
+  // Diverges from form.stops order when "Optimised" view is active.
+  // form.stops is always the user's typed/dragged order (the invariant above).
+  const [displayStopIds, setDisplayStopIds] = useState<string[]>([]);
 
   // Pin state — fixed_first / fixed_last for the next optimise call
   const [fixedFirst, setFixedFirst] = useState(false);
@@ -174,6 +192,7 @@ export default function PlannerPage() {
     try {
       const result = await postPlan(toPayload(formState));
       setPlan(result);
+      setDisplayStopIds(formState.stops.map((s) => s.id));
       setPlanVersion((v) => v + 1);
       setStatus("idle");
       focusTimeline();
@@ -189,8 +208,10 @@ export default function PlannerPage() {
     const idToStop = new Map(prevStops.map((s) => [s.id, s]));
     const newStops = newIds.map((id) => idToStop.get(id)!);
     const newForm = { ...form, stops: newStops };
-    // Direct setForm (not handleFormChange) so drag-reorder doesn't wipe optimise state
     setForm(newForm);
+    setDisplayStopIds(newIds);
+    // A manual drag always invalidates accepted optimise — the stored orders are stale
+    setOptimisePhase({ kind: "none" });
     setRefreshing({ kind: "reorder" });
     setTimelineError(null);
     try {
@@ -199,6 +220,7 @@ export default function PlannerPage() {
       setRefreshing({ kind: "none" });
     } catch {
       setForm({ ...form, stops: prevStops });
+      setDisplayStopIds(prevStops.map((s) => s.id));
       setRefreshing({ kind: "none" });
       setTimelineError("Couldn't update — your previous order is restored. Try again?");
     }
@@ -215,9 +237,16 @@ export default function PlannerPage() {
     setRefreshing({ kind: "reorder" });
     setTimelineError(null);
     try {
-      const result = await postPlan(toPayload(newForm));
+      // Preserve current display order (may be optimised) with the updated stay duration
+      const idToStop = new Map(newForm.stops.map((s) => [s.id, s]));
+      const orderedStops =
+        displayStopIds.length > 0
+          ? displayStopIds.map((id) => idToStop.get(id)!)
+          : newForm.stops;
+      const result = await postPlan(toPayload({ ...newForm, stops: orderedStops }));
       setPlan(result);
       setRefreshing({ kind: "none" });
+      // displayStopIds unchanged — same order, just updated stay
     } catch {
       setForm({ ...form, stops: prevStops });
       setRefreshing({ kind: "none" });
@@ -305,16 +334,16 @@ export default function PlannerPage() {
     const originalIds = form.stops.map((s) => s.id);
 
     const idToStop = new Map(form.stops.map((s) => [s.id, s]));
-    const newStops = optimisedIds.map((id) => idToStop.get(id)!);
-    const newForm = { ...form, stops: newStops };
+    const orderedStops = optimisedIds.map((id) => idToStop.get(id)!);
 
-    setForm(newForm);
+    // form.stops stays in the user's typed order — only the plan fetch uses the optimised order
     setRefreshing({ kind: "reorder" });
     setTimelineError(null);
 
     try {
-      const result = await postPlan(toPayload(newForm));
+      const result = await postPlan(toPayload({ ...form, stops: orderedStops }));
       setPlan(result);
+      setDisplayStopIds(optimisedIds);
       setRefreshing({ kind: "none" });
       setOptimisePhase({
         kind: "accepted",
@@ -325,7 +354,6 @@ export default function PlannerPage() {
         isFlipping: false,
       });
     } catch {
-      setForm({ ...form });
       setRefreshing({ kind: "none" });
       setTimelineError("Couldn't apply optimised order — try again?");
     }
@@ -339,16 +367,16 @@ export default function PlannerPage() {
     const ids = to === "optimised" ? optimisedIds : originalIds;
     setOptimisePhase({ ...optimisePhase, isFlipping: true });
 
+    // form.stops is invariant under toggle flips — only the plan fetch uses the target order
     const idToStop = new Map(form.stops.map((s) => [s.id, s]));
-    const newStops = ids.map((id) => idToStop.get(id)!);
-    const newForm = { ...form, stops: newStops };
+    const orderedStops = ids.map((id) => idToStop.get(id)!);
 
-    setForm(newForm);
     setRefreshing({ kind: "reorder" });
 
     try {
-      const result = await postPlan(toPayload(newForm));
+      const result = await postPlan(toPayload({ ...form, stops: orderedStops }));
       setPlan(result);
+      setDisplayStopIds(ids);
       setRefreshing({ kind: "none" });
       setOptimisePhase({
         kind: "accepted",
@@ -359,10 +387,6 @@ export default function PlannerPage() {
         isFlipping: false,
       });
     } catch {
-      // Revert
-      const revertIds = to === "optimised" ? originalIds : optimisedIds;
-      const revertStops = revertIds.map((id) => idToStop.get(id)!);
-      setForm({ ...form, stops: revertStops });
       setRefreshing({ kind: "none" });
       setOptimisePhase({ ...optimisePhase, isFlipping: false });
       setTimelineError("Couldn't switch order — try again?");
@@ -380,7 +404,12 @@ export default function PlannerPage() {
   const isReordering = refreshing.kind === "reorder";
   const refreshingLegIdx =
     refreshing.kind === "leg" ? refreshing.legTimelineIndex : null;
-  const stopIds = form.stops.map((s) => s.id);
+  // When a plan is active, stopIds must match the plan's stop order for correct dnd-kit behaviour.
+  // displayStopIds tracks that order; form.stops is the user's input order (may differ in optimised view).
+  const stopIds =
+    plan !== null && displayStopIds.length > 0
+      ? displayStopIds
+      : form.stops.map((s) => s.id);
   const stopCount = form.stops.length;
   const totalDuration = plan ? computeTotalDuration(plan) : "";
   const canOptimise = plan !== null && stopCount >= 3;
@@ -410,6 +439,16 @@ export default function PlannerPage() {
         <div className="mb-4 rounded-md border border-error-border bg-error-bg px-3 py-2 text-body text-error-text">
           {errorMsg}
         </div>
+      )}
+      {optimisePhase.kind === "accepted" && optimisePhase.view === "optimised" && (
+        <button
+          type="button"
+          onClick={() => handleToggleView("original")}
+          className="mb-4 flex w-full items-center gap-1.5 rounded-md bg-accent-soft px-3 py-2 text-left text-xs text-accent transition-colors hover:bg-accent-soft/70"
+        >
+          <span aria-hidden="true">↻</span>
+          <span>Your typed order — Optimised view active</span>
+        </button>
       )}
       <PlanForm
         form={form}
@@ -446,32 +485,30 @@ export default function PlannerPage() {
     <>
       <PlanMap
         stops={mapStops}
-        city={form.city}
         optimiseState={optimiseMapState}
         onApply={handleApplyOptimise}
         onDismiss={handleDismissOptimise}
         onToggleView={handleToggleView}
       />
 
-      {/* Optimise button — floats above the map at top-right.
-          z-20 keeps it above the chip (z-10) and the Google Maps controls. */}
-      {canOptimise && optimisePhase.kind === "none" && (
-        <div className="absolute right-3 top-3 z-20">
-          <button
-            type="button"
-            onClick={handleOptimise}
-            className="flex items-center gap-1.5 rounded-lg border border-accent bg-pane-bg/95 px-3 py-2 text-xs font-medium text-accent shadow-raised backdrop-blur-sm transition-colors hover:bg-accent-soft"
-          >
-            Optimise route ↗
-          </button>
-        </div>
-      )}
-      {canOptimise && optimisePhase.kind === "loading" && (
-        <div className="absolute right-3 top-3 z-20">
-          <div className="flex items-center gap-1.5 rounded-lg border border-border-subtle bg-pane-bg/95 px-3 py-2 text-xs text-text-muted shadow-raised backdrop-blur-sm">
-            <span className="inline-block h-3 w-3 animate-spin rounded-full border border-current border-t-transparent" />
-            Optimising…
-          </div>
+      {/* Optimise button — bottom-centre, same position as the toggle/chip once accepted.
+          z-20 keeps it above the Google Maps controls (z-10). */}
+      {canOptimise && (optimisePhase.kind === "none" || optimisePhase.kind === "loading") && (
+        <div className="absolute bottom-3 left-0 right-0 z-20 flex justify-center">
+          {optimisePhase.kind === "none" ? (
+            <button
+              type="button"
+              onClick={handleOptimise}
+              className="flex items-center gap-1.5 rounded-full border border-accent bg-pane-bg/95 px-4 py-2 text-sm font-medium text-accent shadow-raised backdrop-blur-sm transition-colors hover:bg-accent-soft"
+            >
+              Optimise route ↗
+            </button>
+          ) : (
+            <div className="flex items-center gap-1.5 rounded-full border border-border-subtle bg-pane-bg/95 px-4 py-2 text-sm text-text-muted shadow-raised backdrop-blur-sm">
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border border-current border-t-transparent" />
+              Optimising…
+            </div>
+          )}
         </div>
       )}
     </>
