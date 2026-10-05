@@ -7,14 +7,14 @@ FastAPI service for parsing free-text place lists, optimising the visit order wi
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install --require-hashes -r requirements-dev.lock
 cp .env.example .env  # fill in API keys
 uvicorn app.main:app --reload
 ```
 
 Visit:
 
-- http://localhost:8000/docs — OpenAPI / Swagger UI
+- API docs are disabled; generate the schema offline with `app.openapi()` if needed.
 - http://localhost:8000/healthz — health check
 
 ## Structure

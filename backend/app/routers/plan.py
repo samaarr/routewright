@@ -17,7 +17,8 @@ from urllib.parse import quote_plus
 from fastapi import APIRouter, HTTPException, Request
 
 from app.core.config import settings
-from app.core.limiter import limiter
+from app.core.limiter import PLAN_LIMITS, limiter, request_cost
+from app.core.provider_semaphore import get_provider_semaphore
 from app.models.request import PlanRequest
 from app.models.response import LegItem, Plan, StopItem
 from app.models.response import Warning as PlanWarning
@@ -49,7 +50,7 @@ _FOOD_PLACE_TYPES = {
 
 
 @router.post("/plan", response_model=Plan)
-@limiter.limit("50/day")
+@limiter.limit(PLAN_LIMITS, cost=request_cost)
 async def plan(request: Request, req: PlanRequest) -> Plan:
     """Generate a timeline from the user's ordered stops.
 
@@ -62,15 +63,17 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
              gracefully on any leg failure.
     """
     # Phase 1: geocode all stops sequentially (cache-first).
+    # Wrapped in the provider semaphore so burst plans don't exhaust quota.
     places: list[GeocodedPlace] = []
     for stop in req.stops:
         try:
-            place = await geocode_cached(
-                stop.query,
-                req.city,
-                settings.cache_db_path,
-                settings.cache_ttl_days,
-            )
+            async with get_provider_semaphore():
+                place = await geocode_cached(
+                    stop.query,
+                    req.city,
+                    settings.cache_db_path,
+                    settings.cache_ttl_days,
+                )
         except GeocoderError as exc:
             raise HTTPException(
                 status_code=400,
@@ -132,6 +135,9 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
             stays.append(minutes)
             stay_sources.append("default")
 
+    if sum(stays) > 12 * 60:
+        raise HTTPException(422, "Total visits must not exceed 12 hours")
+
     # Phase 3: pre-chain — compute each leg's departure time from stays alone,
     # treating leg travel time as 0. This lets us fan out all leg fetches
     # simultaneously in Phase 4. See CLAUDE.md for accuracy trade-off.
@@ -143,18 +149,26 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
         leg_depart_times.append(pre_cursor)
 
     # Phase 4: fetch all legs in parallel; collect exceptions instead of raising.
-    leg_tasks = [
-        fetch_leg(
-            origin_lat=places[i].lat,
-            origin_lng=places[i].lng,
-            destination_lat=places[i + 1].lat,
-            destination_lng=places[i + 1].lng,
-            depart_at=leg_depart_times[i],
-            mode=req.mode,
-        )
-        for i in range(n_legs)
-    ]
-    raw_results: list[Any] = list(await asyncio.gather(*leg_tasks, return_exceptions=True))
+    # Each leg call acquires the semaphore independently so concurrent plans
+    # from different requests share the global quota cap.
+    async def _fetch_with_sem(i: int) -> Any:
+        async with get_provider_semaphore():
+            return await fetch_leg(
+                origin_lat=places[i].lat,
+                origin_lng=places[i].lng,
+                destination_lat=places[i + 1].lat,
+                destination_lng=places[i + 1].lng,
+                depart_at=leg_depart_times[i],
+                mode=req.mode,
+            )
+
+    raw_results: list[Any] = list(
+        await asyncio.gather(*[_fetch_with_sem(i) for i in range(n_legs)], return_exceptions=True)
+    )
+
+    for result in raw_results:
+        if isinstance(result, HTTPException):
+            raise result
 
     # Phase 5: walk forward with real leg durations; degrade any failed leg.
     timeline: list[StopItem | LegItem] = []

@@ -6,10 +6,14 @@ reordered stop list, path-length stats, and any infeasibility flags.
 The caller re-POSTs the result to /api/plan for pricing.
 """
 
+from functools import partial
+
 from fastapi import APIRouter, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
-from app.core.limiter import limiter
+from app.core.limiter import OPTIMISE_LIMITS, limiter, request_cost
+from app.core.provider_semaphore import get_provider_semaphore, solver_slot
 from app.models.request import PlanRequest
 from app.models.response import OptimisedStop, OptimiseResponse
 from app.services.geocache import geocode_cached
@@ -26,7 +30,7 @@ def _path_km(matrix: list[list[float]], order: list[int]) -> float:
 
 
 @router.post("/optimise", response_model=OptimiseResponse)
-@limiter.limit("50/day")
+@limiter.limit(OPTIMISE_LIMITS, cost=request_cost)
 async def optimise(request: Request, req: PlanRequest) -> OptimiseResponse:
     """Return stops in hours-aware haversine-optimal order with path-length stats.
 
@@ -38,12 +42,13 @@ async def optimise(request: Request, req: PlanRequest) -> OptimiseResponse:
     places = []
     for stop in req.stops:
         try:
-            place = await geocode_cached(
-                stop.query,
-                req.city,
-                settings.cache_db_path,
-                settings.cache_ttl_days,
-            )
+            async with get_provider_semaphore():
+                place = await geocode_cached(
+                    stop.query,
+                    req.city,
+                    settings.cache_db_path,
+                    settings.cache_ttl_days,
+                )
         except GeocoderError as exc:
             raise HTTPException(
                 status_code=400,
@@ -56,17 +61,24 @@ async def optimise(request: Request, req: PlanRequest) -> OptimiseResponse:
         s.stay_minutes if s.stay_minutes is not None else DEFAULT_STAY_MINUTES for s in req.stops
     ]
 
+    if sum(stays) > 12 * 60:
+        raise HTTPException(422, "Total visits must not exceed 12 hours")
+
     n = len(places)
     matrix = build_haversine_matrix(places)
     original_order = list(range(n))
-    optimised_idx, flags = optimise_order_with_hours(
-        places,
-        stays,
-        req.start_time,
-        trip_timezone,
-        fixed_first=req.fixed_first,
-        fixed_last=req.fixed_last,
-    )
+    async with solver_slot():
+        optimised_idx, flags = await run_in_threadpool(
+            partial(
+                optimise_order_with_hours,
+                places,
+                stays,
+                req.start_time,
+                trip_timezone,
+                fixed_first=req.fixed_first,
+                fixed_last=req.fixed_last,
+            )
+        )
 
     return OptimiseResponse(
         stops=[

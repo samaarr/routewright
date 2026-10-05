@@ -155,9 +155,10 @@ class OptimiseResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
     version: str
-    env: str
 
 
 class ErrorResponse(BaseModel):
     error: str
     detail: str | None = None
+    # Structured field-level validation errors; omitted on non-validation errors.
+    errors: list[dict[str, object]] | None = None

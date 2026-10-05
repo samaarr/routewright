@@ -4,7 +4,7 @@ Stage 1: pure distance via OR-Tools TSP.
 Stage 2: opening-hours soft constraints via OR-Tools time dimension.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -188,7 +188,7 @@ def test_optimise_endpoint_returns_reordered_stops(
             {"query": "Temple Bar"},
             {"query": "Guinness Storehouse"},
         ],
-        "start_time": datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc).isoformat(),
+        "start_time": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
         "mode": "transit",
     }
     resp = client.post("/api/optimise", json=payload)
@@ -215,7 +215,7 @@ def test_optimise_endpoint_two_stops_unchanged(
             {"query": "Trinity College"},
             {"query": "Temple Bar"},
         ],
-        "start_time": datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc).isoformat(),
+        "start_time": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
         "mode": "transit",
     }
     resp = client.post("/api/optimise", json=payload)

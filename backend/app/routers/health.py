@@ -2,7 +2,6 @@
 
 from fastapi import APIRouter
 
-from app.core.config import settings
 from app.models.response import HealthResponse
 
 router = APIRouter(tags=["health"])
@@ -18,4 +17,4 @@ async def healthz() -> HealthResponse:
     Always returns 200 OK if the process is alive. We don't probe downstream
     APIs here — that would couple liveness to third parties.
     """
-    return HealthResponse(status="ok", version=APP_VERSION, env=settings.app_env)
+    return HealthResponse(status="ok", version=APP_VERSION)

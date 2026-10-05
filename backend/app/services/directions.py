@@ -16,6 +16,7 @@ Key facts that shape this module:
     - duration in the response is a string like "300s" (seconds + "s" suffix)
 """
 
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -23,6 +24,7 @@ from typing import Any, Literal
 import httpx
 
 from app.core.config import settings
+from app.core.provider_semaphore import consume_provider_budget
 
 ROUTES_ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes"
 
@@ -98,16 +100,23 @@ async def fetch_leg(
         "X-Goog-FieldMask": field_mask,
     }
 
-    if client is None:
-        async with httpx.AsyncClient(timeout=10.0) as one_shot:
-            response = await one_shot.post(ROUTES_ENDPOINT, json=body, headers=headers)
-    else:
-        response = await client.post(ROUTES_ENDPOINT, json=body, headers=headers)
+    await consume_provider_budget()
+    try:
+        if client is None:
+            async with httpx.AsyncClient(timeout=10.0) as one_shot:
+                response = await one_shot.post(ROUTES_ENDPOINT, json=body, headers=headers)
+        else:
+            response = await client.post(ROUTES_ENDPOINT, json=body, headers=headers)
+    except httpx.HTTPError as exc:
+        raise DirectionsError("Provider temporarily unavailable") from exc
 
     if response.status_code != 200:
-        raise DirectionsError(f"Routes API returned {response.status_code}: {response.text[:200]}")
+        raise DirectionsError("Routes provider request failed")
 
-    return _parse_response(response.json(), depart_at, mode)
+    try:
+        return _parse_response(response.json(), depart_at, mode)
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise DirectionsError("Provider returned invalid route") from exc
 
 
 def _build_request_body(
@@ -152,7 +161,7 @@ def _parse_response(response_json: dict[str, Any], depart_at: datetime, mode: st
         raise DirectionsError("Routes API returned no routes")
 
     route = routes[0]
-    duration_str = route.get("duration", "0s")
+    duration_str = route.get("duration")
     # Format is "<seconds>s" — e.g. "180s". Defensive parse.
     duration_seconds = _parse_duration(duration_str)
     distance_meters = int(route.get("distanceMeters", 0))
@@ -185,17 +194,15 @@ def _parse_response(response_json: dict[str, Any], depart_at: datetime, mode: st
 
 
 def _parse_duration(duration_str: str) -> int:
-    """Parse Google's duration format ('300s') to integer seconds."""
-    if not duration_str:
-        return 0
-    s = duration_str.strip()
-    if s.endswith("s"):
-        s = s[:-1]
+    if not isinstance(duration_str, str) or not duration_str.endswith("s"):
+        raise DirectionsError("Provider returned invalid duration")
     try:
-        # Float because Google sometimes returns e.g. "300.5s"
-        return int(float(s))
-    except ValueError:
-        return 0
+        value = float(duration_str[:-1])
+    except ValueError as exc:
+        raise DirectionsError("Provider returned invalid duration") from exc
+    if not math.isfinite(value) or value < 0 or value > 86400:
+        raise DirectionsError("Provider returned invalid duration")
+    return int(value)
 
 
 def _format_duration(seconds: int) -> str:

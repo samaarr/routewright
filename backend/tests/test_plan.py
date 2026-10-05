@@ -13,6 +13,11 @@ from fastapi.testclient import TestClient
 from app.services.directions import DirectionsError, LegResult
 
 
+def _future_start() -> str:
+    """Return an ISO 8601 start time 2 hours from now, always valid."""
+    return (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+
+
 def _valid_payload() -> dict:
     return {
         "city": "Dublin, Ireland",
@@ -21,7 +26,7 @@ def _valid_payload() -> dict:
             {"query": "Temple Bar"},
             {"query": "Guinness Storehouse", "stay_minutes": 90},
         ],
-        "start_time": datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc).isoformat(),
+        "start_time": _future_start(),
         "mode": "transit",
     }
 

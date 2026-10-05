@@ -28,6 +28,10 @@ next-env.d.ts
 .env
 .env.local
 .env.*.local
+.env.production
+.env.staging
+*.pem
+*.key
 !.env.example
 !.env.local.example
 

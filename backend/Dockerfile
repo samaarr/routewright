@@ -18,9 +18,9 @@ FROM base AS builder
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY pyproject.toml README.md ./
+COPY requirements.lock ./
 RUN pip install --upgrade pip && \
-    pip install .
+    pip install --require-hashes -r requirements.lock
 
 # --- Final stage ---
 FROM base AS final
@@ -37,4 +37,4 @@ USER app
 EXPOSE 8000
 
 # Railway and Vercel both inject PORT. Default to 8000 for local docker run.
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "umask 077; exec uvicorn app.main:app --no-proxy-headers --workers 1 --limit-concurrency 40 --host 0.0.0.0 --port ${PORT:-8000}"]

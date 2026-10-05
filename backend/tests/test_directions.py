@@ -32,8 +32,9 @@ def test_parse_duration_handles_float() -> None:
 
 
 def test_parse_duration_handles_missing() -> None:
-    assert _parse_duration("") == 0
-    assert _parse_duration("notanumber") == 0
+    for value in ["", "notanumber", "-1s", "nans", "infs"]:
+        with pytest.raises(DirectionsError):
+            _parse_duration(value)
 
 
 def test_format_duration_under_an_hour() -> None:
@@ -202,7 +203,7 @@ async def test_fetch_leg_raises_on_empty_routes() -> None:
 async def test_fetch_leg_raises_on_http_error() -> None:
     transport = _mock_transport_returning({"error": "bad"}, status_code=400)
     async with httpx.AsyncClient(transport=transport) as client:
-        with pytest.raises(DirectionsError, match="400"):
+        with pytest.raises(DirectionsError, match="request failed"):
             await fetch_leg(
                 origin_lat=0,
                 origin_lng=0,

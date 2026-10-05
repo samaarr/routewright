@@ -135,7 +135,7 @@ async def test_geocode_empty_places_raises_geocoder_error() -> None:
 async def test_geocode_http_error_raises_geocoder_error() -> None:
     transport, _ = _make_transport(status=400, body={"error": {"message": "Invalid request"}})
     async with _client(transport) as client:
-        with pytest.raises(GeocoderError, match="400"):
+        with pytest.raises(GeocoderError, match="request failed"):
             await geocode("Trinity College", "Dublin, Ireland", client=client)
 
 

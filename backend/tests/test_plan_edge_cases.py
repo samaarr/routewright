@@ -23,7 +23,7 @@ def _base_payload() -> dict:
             {"query": "Trinity College"},
             {"query": "Temple Bar"},
         ],
-        "start_time": datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc).isoformat(),
+        "start_time": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
         "mode": "transit",
     }
 

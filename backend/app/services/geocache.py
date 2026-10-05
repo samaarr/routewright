@@ -21,7 +21,9 @@ Schema migration (opening_hours_json column added):
 """
 
 import contextlib
+import hashlib
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -57,7 +59,7 @@ _ADD_HOURS_COLUMN_SQL = "ALTER TABLE geocache ADD COLUMN opening_hours_json TEXT
 
 
 def _make_key(query: str, city: str) -> str:
-    return f"{query.strip().lower()}|{city.strip().lower()}"
+    return hashlib.sha256(f"{query.strip().lower()}|{city.strip().lower()}".encode()).hexdigest()
 
 
 async def get_cached(
@@ -114,13 +116,14 @@ async def put_cached(
     db_path: str,
 ) -> None:
     """Write a GeocodedPlace to the cache, creating the DB/table if needed."""
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(db_path).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     hours_json: str | None = None
     if place.opening_hours is not None:
         hours_json = json.dumps(opening_hours_to_json_list(place.opening_hours))
 
     async with aiosqlite.connect(db_path) as db:
+        Path(db_path).chmod(0o600)
         await db.execute(_CREATE_TABLE_SQL)
         # Migrate existing databases that pre-date opening_hours_json.
         with contextlib.suppress(Exception):
@@ -148,6 +151,28 @@ async def put_cached(
         await db.commit()
 
 
+async def purge_expired(db_path: str, ttl_days: int) -> int:
+    """Delete cache rows older than ttl_days. Returns the number deleted.
+
+    Runs opportunistically; safe to call from a background task or startup.
+    Silently returns 0 if the database does not exist yet.
+    """
+    if not Path(db_path).exists():
+        return 0
+    Path(db_path).chmod(0o600)
+    cutoff = int(time.time()) - ttl_days * 86400
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute(
+                "DELETE FROM geocache WHERE cached_at < ? OR length(query_key) != 64", (cutoff,)
+            )
+            await db.commit()
+            deleted: int = cursor.rowcount or 0
+            return deleted
+    except Exception:
+        return 0
+
+
 async def geocode_cached(
     query: str,
     city: str,
@@ -165,5 +190,10 @@ async def geocode_cached(
         return cached
 
     place = await geocode(query, city, client=client)
-    await put_cached(key, place, db_path)
+    try:
+        await put_cached(key, place, db_path)
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "cache_write_failed exception_type=%s", type(exc).__name__
+        )
     return place

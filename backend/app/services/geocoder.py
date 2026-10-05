@@ -28,12 +28,14 @@ Timezone assumption:
 """
 
 import dataclasses
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
 from app.core.config import settings
+from app.core.provider_semaphore import consume_provider_budget
 
 PLACES_ENDPOINT = "https://places.googleapis.com/v1/places:searchText"
 
@@ -114,16 +116,23 @@ async def geocode(
         "X-Goog-FieldMask": _FIELD_MASK,
     }
 
-    if client is None:
-        async with httpx.AsyncClient(timeout=10.0) as one_shot:
-            response = await one_shot.post(PLACES_ENDPOINT, json=body, headers=headers)
-    else:
-        response = await client.post(PLACES_ENDPOINT, json=body, headers=headers)
+    await consume_provider_budget()
+    try:
+        if client is None:
+            async with httpx.AsyncClient(timeout=10.0) as one_shot:
+                response = await one_shot.post(PLACES_ENDPOINT, json=body, headers=headers)
+        else:
+            response = await client.post(PLACES_ENDPOINT, json=body, headers=headers)
+    except httpx.HTTPError as exc:
+        raise GeocoderError("Provider temporarily unavailable") from exc
 
     if response.status_code != 200:
-        raise GeocoderError(f"Places API returned {response.status_code}: {response.text[:200]}")
+        raise GeocoderError("Places provider request failed")
 
-    return _parse_response(response.json(), query)
+    try:
+        return _parse_response(response.json(), query)
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise GeocoderError("Provider returned invalid place") from exc
 
 
 def _build_request_body(query: str, city: str) -> dict[str, Any]:
@@ -197,7 +206,11 @@ def opening_hours_from_json_list(data: list[dict[str, Any]]) -> list[OpeningPeri
 def _parse_response(response_json: dict[str, Any], original_query: str) -> GeocodedPlace:
     """Parse a Places API Text Search response into a GeocodedPlace.
 
-    Raises GeocoderError if the places array is empty (no match found).
+    Raises GeocoderError if the places array is empty, if the provider
+    returns a missing/empty place_id, or if the location is absent or has
+    non-finite coordinate values.  Zero coordinates (0.0, 0.0) are rejected
+    because that location is in the Gulf of Guinea and indicates a missing
+    value rather than a real place.
     """
     places = response_json.get("places") or []
     if not places:
@@ -206,10 +219,31 @@ def _parse_response(response_json: dict[str, Any], original_query: str) -> Geoco
     place = places[0]
 
     place_id: str = place.get("id", "")
+    if not place_id:
+        raise GeocoderError(f"provider returned no place_id for: {original_query!r}")
+
     name: str = (place.get("displayName") or {}).get("text", original_query)
     location: dict[str, Any] = place.get("location") or {}
-    lat: float = float(location.get("latitude", 0.0))
-    lng: float = float(location.get("longitude", 0.0))
+
+    raw_lat = location.get("latitude")
+    raw_lng = location.get("longitude")
+    if raw_lat is None or raw_lng is None:
+        raise GeocoderError(f"provider returned no location for: {original_query!r}")
+
+    try:
+        lat = float(raw_lat)
+        lng = float(raw_lng)
+    except (ValueError, TypeError) as exc:
+        raise GeocoderError("Provider returned invalid coordinates") from exc
+    if not -90 <= lat <= 90 or not -180 <= lng <= 180:
+        raise GeocoderError("Provider returned out-of-range coordinates")
+    if not math.isfinite(lat) or not math.isfinite(lng):
+        raise GeocoderError(f"provider returned non-finite coordinates for: {original_query!r}")
+    if lat == 0.0 and lng == 0.0:
+        raise GeocoderError(
+            f"provider returned null-island coordinates (0,0) for: {original_query!r}"
+        )
+
     primary_type: str | None = place.get("primaryType") or None
     types: list[str] = place.get("types") or []
     opening_hours = _parse_opening_hours(place.get("regularOpeningHours"))

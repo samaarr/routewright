@@ -1,17 +1,7 @@
-"""Per-IP rate limiter shared across routers.
+"""Client identity is derived only through explicitly trusted proxy networks."""
 
-Trusts X-Forwarded-For from Railway's proxy layer. The first IP in the
-chain is the real client; subsequent hops are infra-controlled.
-
-Whitelisted IPs (RATE_LIMIT_WHITELIST_IPS env var) bypass the limit via
-a UUID bucket key — each request gets a fresh bucket so the counter never
-accumulates. slowapi 0.1.9 has no exempt_when hook; this is the workaround.
-
-KNOWN LIMITATION: state is in-memory. A multi-replica deployment would
-need Redis as the storage backend (slowapi supports it via limits[redis]).
-"""
-
-from uuid import uuid4
+from ipaddress import ip_address, ip_network
+from typing import Any, cast
 
 from fastapi import Request
 from slowapi import Limiter
@@ -19,21 +9,47 @@ from slowapi import Limiter
 from app.core.config import settings
 
 
-def _whitelist() -> frozenset[str]:
-    raw = settings.rate_limit_whitelist_ips
-    return frozenset(ip.strip() for ip in raw.split(",") if ip.strip())
-
-
 def _client_ip(request: Request) -> str:
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    ip = (
-        forwarded_for.split(",")[0].strip()
-        if forwarded_for
-        else (request.client.host if request.client else "unknown")
-    )
-    if ip in _whitelist():
-        return f"__exempt__{uuid4()}"
-    return ip
+    peer = request.client.host if request.client else "unknown"
+    try:
+        networks = [
+            ip_network(v.strip()) for v in settings.trusted_proxy_ips.split(",") if v.strip()
+        ]
+        address = ip_address(peer)
+        if not any(address in network for network in networks):
+            return str(address)
+        values = request.headers.get("x-forwarded-for", "").split(",")
+        if len(values) > 16:
+            return peer
+        chain = [ip_address(value.strip()) for value in values] + [address]
+        for hop in reversed(chain):
+            if not any(hop in network for network in networks):
+                return str(hop)
+    except ValueError:
+        pass
+    return peer
 
 
-limiter = Limiter(key_func=_client_ip)
+def request_cost(request: Request) -> int:
+    """Stable exempt identity; no fresh UUID counters per request."""
+    whitelist = {v.strip() for v in settings.rate_limit_whitelist_ips.split(",") if v.strip()}
+    return 0 if _client_ip(request) in whitelist else 1
+
+
+limiter = Limiter(
+    key_func=_client_ip,
+    storage_uri=settings.rate_limit_storage_uri,
+    storage_options=cast(
+        Any,
+        (
+            {"socket_connect_timeout": 2, "socket_timeout": 2}
+            if settings.rate_limit_storage_uri.startswith(("redis://", "rediss://"))
+            else {}
+        ),
+    ),
+)
+PLAN_LIMITS = (
+    f"{settings.max_requests_per_ip_per_day}/day;{settings.max_requests_per_ip_per_minute}/minute"
+)
+REFRESH_LIMITS = PLAN_LIMITS
+OPTIMISE_LIMITS = PLAN_LIMITS

@@ -14,7 +14,7 @@ def test_healthz_returns_ok(client: TestClient) -> None:
     body = response.json()
     assert body["status"] == "ok"
     assert "version" in body
-    assert "env" in body
+    assert "env" not in body
 
 
 def test_healthz_no_auth_required(client: TestClient) -> None:

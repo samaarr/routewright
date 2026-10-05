@@ -126,18 +126,18 @@ routewright/
 cd backend
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install --require-hashes -r requirements-dev.lock
 cp .env.example .env  # fill in API keys
 uvicorn app.main:app --reload
 ```
 
-Open http://localhost:8000/docs for the auto-generated OpenAPI UI.
+Interactive API docs are disabled. See [SECURITY.md](SECURITY.md) for security and production setup.
 
 ### Frontend
 
 ```bash
 cd frontend
-npm install
+npm ci
 cp .env.local.example .env.local  # set NEXT_PUBLIC_API_URL
 npm run dev
 ```
