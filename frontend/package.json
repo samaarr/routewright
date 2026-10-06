@@ -42,6 +42,12 @@
     "node": "^22.13.0 || >=24"
   },
   "overrides": {
-    "postcss": "8.5.29"
+    "tailwindcss": {
+      "postcss-selector-parser": "^7.1.6",
+      "postcss-nested": "^7.0.2"
+    },
+    "next": {
+      "postcss": "$postcss"
+    }
   }
 }
