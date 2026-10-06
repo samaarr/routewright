@@ -184,10 +184,10 @@ claimed beyond what the code and tests show.
 | 0 | Baseline + working record | COMPLETE |
 | 1 | Validate non-EEA Google integration (EEA rationale superseded) | COMPLETE |
 | — | D48 desktop map/plan tab layout | COMPLETE (commit 3499c1c) |
-| 2 | Contracts + shared engine boundaries | PARTIAL — models, codegen, CI drift check and engine protocols done (c8cb60b). Missing: POST-compatible streamed transport (item 5), runtime event validation/bounded parsing (item 7), hours evaluator and call-accounting interface in the engine (item 8) |
-| 3 | Verify selections, durations, time before routing | PARTIAL — offline timezone derivation, one-zone-per-trip check, DST gap/occurrence handling done (c07f3c7). Missing: server-side place verification (v2 currently trusts client lat/lng), once-per-place details fetch, place-specific default durations (v2 resolver gets an empty defaults map → 60-min fallback), city-change handling, viewport/outside-area warning, suggestion debounce + limits, D38 cache migration (item 11) |
-| 4 | Ordinary planning with sequential transit | PARTIAL — `/api/v2/plan` sequential legs, partial-failure results, no 15-min fallback, 60 s deadline (c07f3c7). Missing: streamed progress (emitter is a no-op), verified cancel/disconnect cleanup, per-call accounting review. v1 `/api/plan` unchanged and still used by the frontend |
-| 5 | Opening-hours rules | PARTIAL — `hours_source` qualifier and `is_disqualifying_for_optimisation` (b511637), applied to v1 only. Missing: hours evaluation in the v2 engine (stops report "unknown"), date-specific hours path |
+| 2 | Contracts + shared engine boundaries | PARTIAL — models, codegen, CI drift check, engine protocols (c8cb60b); Places adapter protocol, hours evaluator wired into the engine, deadline-bounded awaits, typed admission/budget errors (V2-VH, uncommitted). Missing: POST-compatible streamed transport (item 5), runtime event validation/bounded parsing (item 7), a call-accounting *interface* beyond the in-process `OperationContext` counters (item 8) |
+| 3 | Verify selections, durations, time before routing | PARTIAL — DONE (V2-VH): server-side Place Details verification of city + stops by selected ID (items 1-2, server half), one lookup per distinct place (item 3), durations resolved once with explicit-wins-everywhere and place-type defaults (item 4), offline city/stop zones with no fallback (item 5), departure-zone match, chronological occurrence, invalid-date/range checks (item 6). Missing: frontend selection UX + text-edit invalidation (item 1, client half), city-change handling (item 7), D44 viewport/outside-area warning (item 8), suggestions debounce/limits D34-36 (items 9-10), D38 cache migration (item 11) |
+| 4 | Ordinary planning with sequential transit | PARTIAL — `/api/v2/plan` sequential legs, partial-failure results, no 15-min fallback (c07f3c7); 60 s deadline now bounds in-flight provider awaits incl. verification and admission waits, with slot release verified (V2-VH). Missing: streamed progress (emitter is a no-op), client-disconnect cancellation, solver bounding (n/a until comparison). v1 `/api/plan` unchanged and still used by the frontend |
+| 5 | Opening-hours rules | DONE FOR v2 PLANNING (V2-VH) — date-specific hours within documented 7-day coverage, qualified weekly fallback, documented always-open shape only, malformed/missing → unknown, arrival-at-closing closed, overnight/week-boundary, truncated endpoints, special days, warnings kept on the original order, reusable `hours_eligibility()`. Not yet exercised by comparison/acceptance (Step 8). v1 `/api/plan` keeps its weekly-only logic |
 | 6 | Frontend state + streaming | PENDING |
 | 7 | Suffix refresh via shared engine | PENDING |
 | 8 | Compare one local candidate with fresh original | PENDING |
@@ -217,17 +217,13 @@ correction prompt keeps it in scope.
 
 ## Key files per remaining work
 
-### Step 5 remainder — hours in v2
-- `backend/app/services/engine.py` — evaluate hours per KnownStop from actual
-  computed arrive/depart; clear hours on UnknownStops
-- `backend/app/routers/plan_v2.py` — supply opening hours (needs Step 3
-  server-side place verification to fetch them)
-
-### Step 3 remainder — verification + cache
-- `backend/app/routers/plan_v2.py`, `backend/app/services/verifier.py` —
-  verify place IDs/coordinates server-side before routing
+### Step 3 remainder — cache, area warning, suggestions
+(Verification and hours in v2 were completed by V2-VH; see that section.)
 - `backend/app/services/geocache.py` — D38 migration to IDs/coordinates only,
   30-day non-extending expiry
+- `backend/app/services/place_details.py` — add `viewport` to the city mask
+  when the D44 outside-area warning is implemented
+- New suggestion endpoints (D34-36) with Autocomplete session tokens
 
 ### Step 6 — Frontend
 - `backend/app/routers/plan_v2.py` — streamed transport
@@ -431,9 +427,144 @@ Previously uncommitted work committed in four chunks on main:
   (missing `hours_source`) and were regenerated here
 - 3499c1c feat(layout) — D48
 
+## V2 verified planning + opening-hours integration (V2-VH) — 2026-10-06
+
+Executed NEXT_STEP_V2_INTEGRATION_PROMPT.md. **Uncommitted** (not authorised
+to commit). Baseline before edits: 241 passed, 1 skipped.
+
+### Gaps confirmed against code before editing
+
+All four observed gaps were real: `verify_stops` copied browser lat/lng and
+name into `VerifiedStop`; trip zone came from the first stop with a `"UTC"`
+fallback; `DepartureInput.timezone` was never checked against the city; v2
+called `resolve_durations(..., {})` (flat 60 min) and set every stop's hours
+to `"unknown"`. Also found: endpoints were forced to 0 even when explicit
+(contradicting D11), an occurrence on an unambiguous time was silently
+ignored, `2026-02-30` raised an uncaught ValueError (500), and the deadline
+was only checked between calls.
+
+### Requirements finished (runtime behaviour, not just models)
+
+- **Server-side verification (D13, D37, D45)** — `services/place_details.py`
+  (Place Details (New) GET by ID, minimal masks), `GooglePlacesAdapter`
+  (shared semaphore + fail-closed budget, no retries), `verify_itinerary()`.
+  Provider name/coordinates replace submitted hints. Moved / permanently
+  closed / ID-mismatch / no-location / 404 / 400 → `place_invalid` (422) with
+  the affected instance IDs and any `moved_place_id` surfaced, never adopted.
+  5xx/401/403/network → `place_temporary` (503); provider 429 or exhausted
+  budget → `quota_exceeded` (429); admission busy / usage-control down →
+  `provider_capacity` (503). Malformed IDs are rejected before admission and
+  cost no budget. Any verification failure → zero routing calls (tested).
+- **One lookup per distinct place per operation (D37)** — repeated visits
+  share the lookup; city shares a stop lookup when it is also a stop (stop
+  mask is a superset). Lookups are sequential so the first failure is
+  deterministic and stops further spend. Details are request-scoped; nothing
+  new is written to the persistent cache.
+- **Timezones (D40, D41)** — `tz.resolve_timezone()` returns None instead of
+  falling back; city zone from verified city coordinates; unresolved city or
+  stop zone → `timezone_unresolved`; other-zone stop → `timezone_conflict`
+  with instance ID; submitted departure zone ≠ city zone →
+  `departure_timezone_mismatch` (checked before any stop lookup).
+- **Departure (D14, D29)** — chronological occurrence (1 = earlier instant);
+  occurrence on a once-only time rejected; impossible dates rejected; v1's
+  supported range reused (−7 / +100 days; walking/driving must be future);
+  all → 422 with a code, before any provider call.
+- **Durations (D11)** — explicit wins at every position incl. endpoints and
+  zero; unspecified endpoints 0; unspecified middle stops use
+  `stay_defaults.lookup_stay_minutes` on verified primaryType/types; keyed by
+  instance ID; duplicate instance IDs rejected (request validator + resolver).
+- **Hours in the v2 engine (D24, D42, D43)** — `services/venue_hours.py`
+  parses `currentOpeningHours`/`regularOpeningHours`; `plan_sequential`
+  assesses each KnownStop against its actual arrival/departure in the trip
+  zone; UnknownStops get no timing or hours. `HoursDetail` now carries
+  `always_open`, `exceptions_unconfirmed`, `coverage_start/end`,
+  `special_day`, `unknown_reason`. Plan-level `warnings` (with
+  `affects_instance_id` + `code`) for closed-on-arrival, zero-minute
+  closure, closing during visit and unknown hours. Visits are never
+  shortened, delayed or dropped. `hours_eligibility()` is the reusable
+  ok/warning/disqualifying rule for the later comparison stage.
+- **Deadline** — `DeadlineScope.bound()` wraps every Place Details and
+  routing await with the remaining time (incl. semaphore waits); on expiry
+  the inner task is cancelled and the provider slot released; budget already
+  consumed is not refunded (tested). Mid-route expiry → PartialPlan with
+  `deadline_exceeded`.
+- **Contracts** — additive: `HoursDetail` fields above, `Warning.affects_instance_id`
+  / `code`, `PlanFailureReason += "provider_capacity"`. TS types regenerated.
+
+### Provider-call accounting per v2 plan
+
+At most `1 + D` Place Details calls (D = distinct stop place IDs; city shared
+when it is also a stop) followed by at most `N − 1` routing calls; none if
+verification fails. Worst case at the 12-stop cap: 13 details + 11 routes =
+24 provider calls per plan request, all against the shared
+`provider_calls_per_day` budget (default 2000). Per-IP limits still count one
+plan request as 1. Counters are kept in `OperationContext` (places/routing)
+but not yet exported as metrics (D46, B2).
+
+### Billing — corrected facts and open discrepancy
+
+- Place Details (New): `regularOpeningHours`/`currentOpeningHours` →
+  **Enterprise**; `displayName`/`primaryType`/`businessStatus` → Pro;
+  `id`/`movedPlaceId`/`location`/`types` → Essentials. Every v2 **stop**
+  lookup is a Place Details Enterprise event; **city** lookups (no hours) are
+  Pro.
+- Text Search (New): `places.regularOpeningHours` → **Enterprise**. The
+  legacy v1 geocoder comment claiming Pro was wrong and is corrected in
+  `geocoder.py` (comment only; behaviour unchanged).
+- **Unresolved:** CLAUDE.md/AGENTS.md still say RouteWright "sits in the 5K
+  Pro tier (~217 free generations/month)". With hours requested, both v1
+  geocoding and v2 stop verification fall in Enterprise (1K free
+  events/month). Not edited here; needs a product/billing decision on
+  whether to keep the free-tier estimate, adjust budget/quotas, or both.
+- **Proposal, not implemented:** consider a separate per-request or per-day
+  Place Details cap (e.g. count details calls separately from routing in the
+  provider budget) — TODO.md still lists "place-call accounting separately
+  from the routing-call allowance" as an open decision. Existing limits are
+  unchanged.
+
+### Checks run (actual results, 2026-10-06)
+
+- `backend/.venv/bin/python -m pytest -q` — **308 passed, 1 skipped**
+  (skip = `test_security_redis.py`, needs `SECURITY_TEST_REDIS_URL`; Redis
+  integration NOT verified). New/changed: test_venue_hours 20,
+  test_place_details 21, test_plan_v2_verified 28, test_engine_sequential 21
+  (offline-only verifier tests replaced by provider-backed ones),
+  test_contracts 45, test_hours 36.
+- Mutation spot-checks: reverting to submitted coordinates fails
+  `test_forged_selection_location_ignored`; forcing endpoint durations to 0
+  fails three duration tests.
+- `ruff check .` clean; `ruff format --check .` clean (only touched files
+  were formatted); `mypy app` (strict) — no issues in 33 files.
+- `npm run gen:types` → `check:types-drift` clean → `npm run type-check`
+  and `npm run lint` clean. `npm run build` not run.
+- No live Google calls were made; production keys/quotas/CSP unverified (B4).
+
+### Remaining gaps (not done in this task)
+
+- Frontend still uses v1 `/api/plan`; no reducer/streaming (Step 6).
+- Streaming transport + runtime event validation; client-disconnect
+  cancellation (only the deadline cancels today).
+- D38 cache migration — legacy v1 cache still stores names/types/hours.
+- D44 outside-area warning (viewport not requested yet); D34-36 suggestion
+  endpoints and Autocomplete session tokens (Place Details calls are not
+  session-linked, so each bills as a standalone Enterprise/Pro event).
+- Refresh (Step 7) and comparison/acceptance (Step 8); `hours_eligibility`
+  not yet consumed by any candidate ranking.
+- `businessStatus` CLOSED_TEMPORARILY / FUTURE_OPENING are not surfaced.
+- `closed_on_arrival.opens_at` is HH:MM without a date.
+- Hours compare wall-clock times; a visit spanning a DST transition can be
+  off by the transition offset. Date-specific coverage is anchored to the
+  server's local date at fetch time and may differ from Google's "today"
+  near midnight.
+- Unknown hours produce an `info` warning for every hour-less stop (e.g.
+  hotels, stations) — check with product whether that is too noisy.
+- v1 `geocoder._parse_opening_hours` still treats any missing close as 24 h;
+  only the v2 path enforces the documented always-open shape.
+- Not release-ready: Steps 6-10 and B2/B4 remain open.
+
 ## Next action
 
-1. **Step 5 remainder:** hours evaluation in the v2 engine.
-2. **Step 3 remainder:** server-side place verification for v2, D38 cache
-   migration.
+1. Review and commit V2-VH (not yet committed).
+2. Resolve the billing-tier discrepancy and the place-call accounting decision.
 3. **Step 6:** streamed transport + frontend migration to `/api/v2/plan`.
+4. Step 3 remainder: D38 cache migration, D44 area warning, D34-36 suggestions.
