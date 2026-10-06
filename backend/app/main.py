@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 
+from app.core import logredact
 from app.core.config import settings
 from app.core.limiter import limiter
 from app.core.provider_semaphore import reset_gates
@@ -24,6 +25,9 @@ from app.services.geocache import purge_expired
 
 logging.basicConfig(level=settings.log_level)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+# uvicorn logs WebSocket handshakes with the client address on uvicorn.error
+# (not the access log); the container also runs with --ws none.
+logredact.install("uvicorn", "uvicorn.error")
 log = logging.getLogger("routewright")
 
 

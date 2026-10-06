@@ -8,6 +8,7 @@ from fastapi import Request
 from slowapi import Limiter
 
 from app.core.config import settings
+from app.core.logredact import redact_addresses
 
 
 def _client_ip(request: Request) -> str:
@@ -40,17 +41,6 @@ def request_cost(request: Request) -> int:
 _EXCEEDED = "ratelimit %s (%s) exceeded at endpoint: %s"
 
 
-def _redact_addresses(text: str) -> str:
-    def scrub(token: str) -> str:
-        try:
-            ip_address(token.strip("()[],;'\""))
-        except ValueError:
-            return token
-        return "[redacted]"
-
-    return " ".join(scrub(token) for token in text.split(" "))
-
-
 class _ClientKeyFilter(logging.Filter):
     """Keep client identities out of slowapi's log records (D-9).
 
@@ -64,7 +54,7 @@ class _ClientKeyFilter(logging.Filter):
             record.msg = "ratelimit %s exceeded at endpoint: %s"
             record.args = (record.args[0], record.args[2])
         else:
-            record.msg = _redact_addresses(record.getMessage())
+            record.msg = redact_addresses(record.getMessage())
             record.args = None
         return True
 
