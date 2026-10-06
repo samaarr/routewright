@@ -191,7 +191,7 @@ claimed beyond what the code and tests show.
 | 6 | Frontend state + streaming | COMPLETE (SSV): items 1-7; frontend now plans only via `/api/v2/plan/stream`. Item 6 pins: default on, visible, preserved through edits; their effect on optimisation arrives with Step 8 |
 | 7 | Suffix refresh via shared engine | COMPLETE — backend e4f5f27 (`/api/v2/refresh[/stream]`, planned departure never now, unchanged prefix, ≤ N−1−k calls, failure → unknown downstream); refresh UI committed with this record ("Refresh from here" / "Try again", previous timings labelled while refreshing, atomic suffix replacement, cancel/incomplete keep the previous plan). Step 8 hook (refresh cancels optimisation) applies once optimisation exists |
 | 8 | Compare one local candidate with fresh original | COMPLETE — backend 6329b9d; final-walk arrival fix 25de41b (applies to planning, refresh and comparison); comparison UI with the approved decisions (Compare on a current complete plan ≥ 3 stops, real phases + Cancel, "Your order — recalculated.", "Estimated journey-time saving: X min.", atomic "Use this order" with explicit stays and no network calls, edits invalidate). Live Google verification of the response shape and deployment checks remain (Step 9/10) |
-| 9 | Metrics, security regression, deployment verification | PENDING (B2, B4) |
+| 9 | Metrics, security regression, deployment verification | LOCALLY COMPLETE except the container check — audit fix e3192f5, shared-Redis tests d39edd9 (passed against a local container), journey-time presentation 9c946ac, aggregate metrics 7cc0670, security regressions + bundle check ef3af78, docs + PRODUCTION_VERIFICATION.md. Container non-root//healthz/no-IP-log check NOT run (Docker daemon unresponsive). All deployment items unverified (B4) |
 | 10 | Review, release readiness, completion report | PENDING |
 
 ---
@@ -239,12 +239,12 @@ correction prompt keeps it in scope.
 Implemented in commit 3499c1c (desktop uses the tablet map/plan tab toggle).
 No longer blocks release under D49.
 
-### B2 — Metrics retention/storage unspecified (D46)
-Decision 46 approves collecting operational metrics but leaves
-retention/storage unspecified. This blocks Step 9 finalization. Does not
-block earlier stages.
+### B2 — Metrics retention/storage — RESOLVED (Step 9 decision)
+Aggregate JSON log lines via the platform (Railway); retention = the Railway
+plan's log retention (Hobby 7 / Pro 30 / Enterprise up to 90 days, per docs
+2026-10-06). The actual plan and value are unverified (PRODUCTION_VERIFICATION.md §8).
 
-### B3 — npm audit: disk space (still failing, 2026-10-06)
+### B3 — npm audit — RESOLVED by e3192f5 (scoped npm overrides, no --force, no new exception)
 `npm run security:audit` now fails with "Unaccepted security finding:
 tailwindcss": a newly published moderate advisory for dev-only
 `postcss-selector-parser` (GHSA-rj75-hqrm-r3gf, via tailwindcss →
@@ -862,10 +862,47 @@ B3, dev-only postcss-selector-parser via tailwindcss).
 - The leg line shows the provider's route `duration`; comparison totals use
   arrival − planned departure (includes waiting), so the two can differ.
 
+## Step 9 — metrics, security, verification (2026-10-06)
+
+### Commits
+- e3192f5 fix(deps): `postcss-selector-parser` ^7.1.6 / `postcss-nested` ^7.0.2
+  under tailwindcss and `postcss` for next via scoped overrides. No --force;
+  the only exception is still braces@3.0.3 (dev, expires 2026-11-04).
+- d39edd9 test(redis): `tests/test_security_redis.py` (4) — shared limits,
+  shared provider budget, fail-closed admission, release. Skipped unless
+  `SECURITY_TEST_REDIS_URL` is set; passed against a disposable local
+  redis:7.4-alpine (db 15).
+- 9c946ac fix(durations): `journey_seconds` (arrival − planned departure,
+  includes waiting) drives the leg display, totals and comparison saving;
+  Google's travel time shown separately; summaries carry no durations.
+- 7cc0670 feat(metrics): `app/core/opmetrics.py` — one JSON line per v2
+  operation (operation, transport, outcome, failure, elapsed_ms, stop_count,
+  provider call counts). Excludes names, coordinates, dates, IPs, operation
+  IDs, plans, secrets, raw provider text; no comparison savings and no split
+  of comparison results (D46 permitted use). uvicorn `--no-access-log`.
+  (Amended locally after fixing the Redis worker's stdout parsing; unpushed.)
+- ef3af78 test(security): `tests/test_security_v2.py` (12) — trusted-proxy
+  identity, headers on JSON + stream endpoints, HSTS only when enabled in
+  production, generic 503, server key only in the request header and never in
+  responses. `npm run security:bundle` scans the built bundle for the probe
+  key; CI builds with `GOOGLE_MAPS_API_KEY` set to a probe and runs it.
+
+### Checks (actual results, 2026-10-06)
+Backend 423 passed, 4 skipped (Redis env unset; 415 with Redis at 7cc0670);
+ruff, format, mypy clean. Frontend: unit 88, browser 31, types drift clean,
+type-check and lint clean, security smoke passed, `security:audit` passes,
+bundle check passed on 69 files (negative control detected).
+
+### Not verified
+- Container check (non-root, /healthz, no client IPs in app logs, request
+  reaching the intended container): Docker Desktop stopped responding after
+  an ENOSPC during the image build and was not restarted without approval.
+- Everything in PRODUCTION_VERIFICATION.md: Railway streaming/disconnect,
+  live walking-step `staticDuration`, key restrictions, live map CSP,
+  HTTPS/HSTS/proxy, actual log retention, Railway Redis, storage encryption.
+
 ## Next action
 
-1. Decide selection-lookup limits (D36) and the B3 audit fix.
-2. Monthly free-tier enforcement remains deferred; existing limits retained.
-3. **Step 9:** metrics (needs D46 retention decision), security regression
-   checks and deployment verification, incl. live checks of the Routes
-   response shape (final-walk staticDuration) and 60 s streaming support.
+1. Container check once Docker responds (reuse the existing image).
+2. **Step 10:** final review and release blockers (see TODO.md).
+3. Monthly free-tier enforcement remains deferred; existing limits retained.

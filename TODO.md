@@ -782,9 +782,14 @@ that application code has been implemented.
 - [ ] Define refresh partial-result/in-progress UI and how input edits invalidate
   refresh responses. Decision 22 approves progress/cancellation/disconnect
   behaviour; Decision 23 sets their deadlines to sixty seconds.
-- [ ] Define aggregate metrics retention/storage and acceptance criteria under
-  Decision 46, including permitted use before collecting provider-derived
-  comparison outcomes; preserve privacy controls and exclude trip details.
+- [x] Define aggregate metrics retention/storage under Decision 46 (Step 9,
+  2026-10-06): one JSON log line per v2 operation via Railway's log platform,
+  retained per the Railway plan (Hobby 7 / Pro 30 / Enterprise up to 90 days;
+  actual plan unverified); bounded labels; excluded fields tested
+  (`tests/test_opmetrics.py`). See `app/core/opmetrics.py`.
+- [ ] Confirm permitted use before collecting the frequency of alternatives
+  meeting the five-minute threshold (Decision 46). Until then comparisons log
+  only `compared`/`incomplete`/`no_different_order`, with no savings.
 - [ ] Review and approve SYSTEM_DESIGN_IMPLEMENTATION_PROMPT.md, prepared on
   2026-10-05 with stages, tests, rollout requirements and explicit exclusions.
   Creating the prompt does not settle remaining integration/metrics decisions.
@@ -955,9 +960,21 @@ jobs. This does not verify the deployment's settings. See
 [SECURITY.md](SECURITY.md) for the configuration and verification steps.
 
 - [ ] Verify production HTTPS redirects/HSTS, trusted proxy topology, shared
-  Redis configuration, restricted separate Google browser/server keys, and
-  encrypted storage/backup settings.
+  Redis configuration, restricted separate Google browser/server keys (the
+  server key must allow Places Autocomplete), and encrypted storage/backup
+  settings. Checklist: [PRODUCTION_VERIFICATION.md](PRODUCTION_VERIFICATION.md).
 - [ ] Check live Google Maps loading under the production CSP; the browser smoke
   test used no Maps key.
+- [ ] Verify Railway streaming (60 s, no buffering) and disconnect propagation,
+  live transit walking-step `staticDuration`, and the actual log retention.
+- [ ] Run the local container check (non-root, `/healthz`, no client IPs in
+  application logs); not run on 2026-10-06 because Docker was unresponsive.
+- [x] Shared-Redis regression tests (`tests/test_security_redis.py`) pass
+  against a local disposable Redis (2026-10-06); still run them in the
+  deployment network.
+- [x] Server-key bundle leak check runs in CI (`npm run security:bundle`
+  after a build with a probe key).
+- [x] npm audit (postcss-selector-parser/postcss) fixed with scoped overrides,
+  no --force and no new exception (e3192f5).
 - [ ] Resolve or reassess the development-only `braces@3.0.3` advisory exception
   before it expires on **2026-11-04**. Do not silently extend the exception.
