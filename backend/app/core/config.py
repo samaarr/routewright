@@ -54,8 +54,10 @@ class Settings(BaseSettings):
     trusted_proxy_count: int = Field(
         default=0,
         ge=0,
-        description="Number of trusted reverse-proxy hops that inject X-Forwarded-For.",
+        description="Obsolete: any non-zero value is rejected at startup. Use TRUSTED_PROXY_IPS.",
     )
+    # Comma-separated IPs/CIDRs of the ingress proxies that sanitise
+    # X-Forwarded-For; empty means forwarded headers are never trusted.
     trusted_proxy_ips: str = ""
     rate_limit_storage_uri: str = "memory://"
     provider_calls_per_day: int = Field(default=2000, ge=1)

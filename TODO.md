@@ -1,5 +1,45 @@
 # System-design decisions and future work
 
+## Latest scope direction — 2026-10-06
+
+The product manager defers new monthly per-SKU free-tier enforcement during
+development. This supersedes the earlier instruction to implement it first.
+Preserve existing security/rate/global provider limits; do not add the proposed
+reservation/accounting layer now. Reservation option A/B was not selected.
+Continue product implementation: selection endpoints/area warnings/minimal
+cache, frontend state/streaming/v2 migration, suffix refresh, then comparison
+and acceptance. Focus on approved functional/nonfunctional behaviour, not new
+agent workflows or repeated meta-design decisions.
+
+Free-tier-only remains the future cost requirement. Do not claim existing limits
+guarantee zero charges or authorise paid overflow. Use mocked providers for
+development verification; preserve a central outbound-call accounting seam for
+later per-SKU controls and identify browser map loads separately. No new live
+Google testing or production deployment is authorised by this scope change.
+Revisit enforcement with actual SKU allowances, existing account-wide usage,
+atomic persistent counters, month boundaries and browser protections before
+claiming a free-tier-safe public release. Do not disable hours or reintroduce
+prohibited caching as a cost workaround.
+
+## Latest cost requirement — 2026-10-06
+
+The product manager requires remaining within the free tier. In this Google
+billing discussion, treat zero paid Google Maps usage as a hard requirement:
+stop issuing calls before verified free allowances are exceeded, rather than
+allowing paid overflow or treating alerts as spending caps. Do not disable
+opening hours to reduce the SKU tier. Exact counter architecture/admission UX
+still requires a concrete proposal. Cover each actual SKU and browser map loads,
+all projects sharing the billing account, existing usage and persistent atomic
+monthly accounting; the current 2000/day aggregate limit is insufficient.
+Indian billing determines non-EEA terms, but India PRICE eligibility additionally
+requires a large majority of usage in India. Verify actual billing SKUs; do not
+assume the India 7000/month Enterprise allowance applies to an Irish-focused app.
+Until eligibility is verified, design against the lower global free allowances.
+Sources verified 2026-10-06:
+https://developers.google.com/maps/billing-and-pricing/india-overview
+https://developers.google.com/maps/billing-and-pricing/pricing
+https://developers.google.com/maps/billing-and-pricing/pricing-india
+
 **Confirmed correction (2026-10-05):** The product manager confirms that the
 API project's linked billing account address is India. Apply the non-EEA
 service-specific terms. The previous EEA billing assumption is superseded;
@@ -696,7 +736,8 @@ that application code has been implemented.
   launch, resolve it as a separate decision at that time.
 
   **Correction 2026-10-05:** Original framing as "EEA compliance gate"
-  superseded. Normal deployment checks (TRUSTED_PROXY_COUNT, Redis, key
+  superseded. Normal deployment checks (TRUSTED_PROXY_IPS for the verified
+  ingress — TRUSTED_PROXY_COUNT is obsolete and rejected at startup — Redis, key
   restrictions, HTTPS/CSP, storage) remain required.
 
 ## Decisions still required before implementation

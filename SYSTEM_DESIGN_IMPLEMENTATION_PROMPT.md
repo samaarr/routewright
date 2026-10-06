@@ -1,5 +1,27 @@
 # RouteWright staged implementation prompt
 
+**Latest execution scope (2026-10-06):** The product manager defers the new
+monthly free-tier enforcement layer during development; this supersedes the
+earlier "implement enforcement first" direction. Keep existing limits. Proceed
+with selection endpoints, outside-area warnings and minimal-cache migration,
+then Step 6 frontend state/streaming/v2 migration, Step 7 refresh, Step 8
+comparison/acceptance. No reservation design was approved. Preserve a shared
+provider accounting interface for later controls without implementing new
+monthly limits now. Free-tier-only remains the future requirement; mocked tests
+are the development default and current limits are not a zero-charge guarantee.
+Do not infer paid overflow or production deployment approval. Keep further
+communication focused on product behaviour and implementation, not agent-layer
+process or repeated decisions already settled.
+
+**Cost requirement added 2026-10-06:** No paid Google Maps usage is authorised.
+Before production release, implement reviewed per-SKU free-allowance enforcement
+including browser map loads and all usage sharing the billing account. Deny
+further work when allowance is exhausted/unverifiable; alerts and 2000/day are
+not monthly free-tier guarantees. Keep opening hours. India billing alone does
+not establish India pricing eligibility; verify actual SKUs and existing usage,
+and use conservative global allowances until confirmed. The precise accounting
+and admission design remains to be approved, not silently invented.
+
 **Confirmed correction (2026-10-05):** The product manager confirms that the
 API project's linked billing account address is India. Apply the non-EEA
 service-specific terms. The previous EEA billing assumption is superseded;

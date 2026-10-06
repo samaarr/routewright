@@ -184,11 +184,11 @@ claimed beyond what the code and tests show.
 | 0 | Baseline + working record | COMPLETE |
 | 1 | Validate non-EEA Google integration (EEA rationale superseded) | COMPLETE |
 | — | D48 desktop map/plan tab layout | COMPLETE (commit 3499c1c) |
-| 2 | Contracts + shared engine boundaries | PARTIAL — models, codegen, CI drift check, engine protocols (c8cb60b); Places adapter protocol, hours evaluator wired into the engine, deadline-bounded awaits, typed admission/budget errors (V2-VH, uncommitted). Missing: POST-compatible streamed transport (item 5), runtime event validation/bounded parsing (item 7), a call-accounting *interface* beyond the in-process `OperationContext` counters (item 8) |
-| 3 | Verify selections, durations, time before routing | PARTIAL — DONE (V2-VH): server-side Place Details verification of city + stops by selected ID (items 1-2, server half), one lookup per distinct place (item 3), durations resolved once with explicit-wins-everywhere and place-type defaults (item 4), offline city/stop zones with no fallback (item 5), departure-zone match, chronological occurrence, invalid-date/range checks (item 6). Missing: frontend selection UX + text-edit invalidation (item 1, client half), city-change handling (item 7), D44 viewport/outside-area warning (item 8), suggestions debounce/limits D34-36 (items 9-10), D38 cache migration (item 11) |
-| 4 | Ordinary planning with sequential transit | PARTIAL — `/api/v2/plan` sequential legs, partial-failure results, no 15-min fallback (c07f3c7); 60 s deadline now bounds in-flight provider awaits incl. verification and admission waits, with slot release verified (V2-VH). Missing: streamed progress (emitter is a no-op), client-disconnect cancellation, solver bounding (n/a until comparison). v1 `/api/plan` unchanged and still used by the frontend |
-| 5 | Opening-hours rules | DONE FOR v2 PLANNING (V2-VH) — date-specific hours within documented 7-day coverage, qualified weekly fallback, documented always-open shape only, malformed/missing → unknown, arrival-at-closing closed, overnight/week-boundary, truncated endpoints, special days, warnings kept on the original order, reusable `hours_eligibility()`. Not yet exercised by comparison/acceptance (Step 8). v1 `/api/plan` keeps its weekly-only logic |
-| 6 | Frontend state + streaming | PENDING |
+| 2 | Contracts + shared engine boundaries | COMPLETE for planning (SSV, 2026-10-06): items 1-8 implemented and tested — NDJSON POST stream (item 5), frontend runtime validation + bounded parsing (item 7), provider accounting seam (item 8). Exception: item 3's comparison-only outcomes (unchanged candidate, comparison ineligibility) are defined with their behaviour in Step 8 |
+| 3 | Verify selections, durations, time before routing | COMPLETE (SSV): items 1-11 — explicit selection UI with text-edit invalidation, backend suggestions/selection, city-change handling, D44 area warnings, debounce/limits, D38 cache migration. Interim choice: selection lookups share the D36 bucket (see unresolved choices) |
+| 4 | Ordinary planning with sequential transit | COMPLETE (SSV): streamed progress, disconnect cancellation releasing capacity (verified), one 60 s deadline incl. verification/admission, accounting. Item 8 solver bounding applies once comparison exists (Step 8). Deployment check of 60 s streaming through Railway/Vercel proxies remains (deployment-only) |
+| 5 | Opening-hours rules | DONE FOR v2 PLANNING (V2-VH; DST fix in SSV) — instant-based comparison across clock changes, next-opening date. Comparison/acceptance retention is Step 8. v1 `/api/plan` keeps its weekly-only logic |
+| 6 | Frontend state + streaming | COMPLETE (SSV): items 1-7; frontend now plans only via `/api/v2/plan/stream`. Item 6 pins: default on, visible, preserved through edits; their effect on optimisation arrives with Step 8 |
 | 7 | Suffix refresh via shared engine | PENDING |
 | 8 | Compare one local candidate with fresh original | PENDING |
 | 9 | Metrics, security regression, deployment verification | PENDING (B2, B4) |
@@ -217,28 +217,19 @@ correction prompt keeps it in scope.
 
 ## Key files per remaining work
 
-### Step 3 remainder — cache, area warning, suggestions
-(Verification and hours in v2 were completed by V2-VH; see that section.)
-- `backend/app/services/geocache.py` — D38 migration to IDs/coordinates only,
-  30-day non-extending expiry
-- `backend/app/services/place_details.py` — add `viewport` to the city mask
-  when the D44 outside-area warning is implemented
-- New suggestion endpoints (D34-36) with Autocomplete session tokens
-
-### Step 6 — Frontend
-- `backend/app/routers/plan_v2.py` — streamed transport
-- `frontend/components/PlannerPage.tsx`, `frontend/lib/api.ts` — reducer
-  state, consume v2 PlanResult and stream events, cancel
-
 ### Step 7 — Refresh
-- `backend/app/routers/refresh_leg.py` — start from planned departure, not
-  `datetime.now()`; recompute suffix via engine
-- `backend/app/services/engine.py` — implement `refresh_suffix`
+- `backend/app/routers/refresh_leg.py` → replace with a v2 suffix refresh using
+  `engine.refresh_suffix` (planned departure, not `datetime.now()`), streamed
+  like `/api/v2/plan/stream`
+- `frontend/components/v2/TimelineV2.tsx` — enable the per-journey refresh
+  button (currently disabled with an explanation)
 
 ### Step 8 — Comparison
 - `backend/app/routers/optimise.py`, `backend/app/services/engine.py` —
-  implement `compare_orders`; fix optimiser's first/last stay mismatch;
-  wire `is_disqualifying_for_optimisation`
+  `compare_orders`; fix the optimiser's first/last stay mismatch; use
+  `hours_eligibility`; pins from the request
+- `frontend/components/PlannerPage.tsx` — replace the "optimisation is coming"
+  note with the comparison flow
 
 ---
 
@@ -253,14 +244,33 @@ Decision 46 approves collecting operational metrics but leaves
 retention/storage unspecified. This blocks Step 9 finalization. Does not
 block earlier stages.
 
-### B3 — npm audit: disk space
+### B3 — npm audit: disk space (still failing, 2026-10-06)
+`npm run security:audit` now fails with "Unaccepted security finding:
+tailwindcss": a newly published moderate advisory for dev-only
+`postcss-selector-parser` (GHSA-rj75-hqrm-r3gf, via tailwindcss →
+postcss-nested) is not covered by the braces-only exception. Lockfile was not
+changed by SSV. Runtime (`--omit=dev`) audit is clean. Needs `npm audit fix`
+(no --force) or a reviewed exception.
+
+### B3 (original note)
 `postcss-selector-parser` safe fix and Next.js 14 advisory remain unresolved
 due to ENOSPC during previous session. Run `npm audit fix` (no --force) in
 `frontend/` once disk space is freed.
 
 ### B4 — Production deployment unverified
-TRUSTED_PROXY_COUNT=1 not yet set in Railway. Two separate Google API keys
-(browser-restricted + IP-restricted) not yet provisioned.
+Trusted-proxy configuration (corrected 2026-10-06 against the code): the
+backend trusts `X-Forwarded-For` only when the connection peer is listed in
+`TRUSTED_PROXY_IPS` (exact IPs/CIDRs of the ingress that sanitises the
+header). `app/core/limiter.py` then walks the chain from the right and uses
+the first hop that is not a trusted proxy (more than 16 entries → the peer is
+used). `TRUSTED_PROXY_COUNT` is obsolete: any non-zero value is rejected at
+startup in every environment, as is a `/0` trust-all entry
+(`main.validate_production`). The container runs uvicorn with
+`--no-proxy-headers` so the app sees the real peer. Still to do on Railway:
+verify the ingress topology, then set `TRUSTED_PROXY_IPS` (leave it empty
+until verified; do NOT set `TRUSTED_PROXY_COUNT`). Two separate Google API
+keys (browser-restricted + IP-restricted) are not yet provisioned; the
+server key must now also allow Places Autocomplete.
 
 ---
 
@@ -274,7 +284,7 @@ TRUSTED_PROXY_COUNT=1 not yet set in Railway. Two separate Google API keys
 
 ---
 
-## Step 2 status (historical log — spec Step 2 is PARTIAL, see Stage checklist)
+## Step 2 status (historical log — current status in Stage checklist)
 
 Completed 2026-10-06. All contracts implemented, 43/43 new tests pass.
 No EEA-only constraints introduced.
@@ -327,7 +337,7 @@ D21 (refresh planned departure), D26-29 (timezone) — implemented in Steps 3+.
 
 ---
 
-## Step 3 status (historical log — covers parts of spec Steps 3–4, both PARTIAL)
+## Step 3 status (historical log — parts of spec Steps 3–4; current status in Stage checklist)
 
 Completed 2026-10-06. 228 tests pass (25 new), 1 skipped (Redis). Mypy clean.
 
@@ -378,7 +388,7 @@ D26-28 (timezone derivation offline).
   (SSE/NDJSON) wired in Step 5
 - Opening-hours enforcement (D15/D42-43): Step 4
 
-## Step 4 status (historical log — covers part of spec Step 5, PARTIAL)
+## Step 4 status (historical log — part of spec Step 5; current status in Stage checklist)
 
 Completed 2026-10-06. 241 tests pass (13 new), 1 skipped (Redis). Ruff + mypy clean.
 
@@ -562,9 +572,118 @@ but not yet exported as metrics (D46, B2).
   only the v2 path enforces the documented always-open shape.
 - Not release-ready: Steps 6-10 and B2/B4 remain open.
 
+## Selections, streaming and v2 frontend (SSV) — 2026-10-06
+
+Scope: remaining Step 3 + streaming and frontend migration (Steps 2, 4, 6).
+Committed 2026-10-06: 889f310 (selection, accounting seam, area warnings,
+minimal cache, hours DST fix), 3f8ea5a (streaming + cancellation), 0b5e8fa
+(frontend v2 migration + tests + CI). Each commit's backend checks and the
+frontend type-check/lint/drift checks were run on that commit's exact tree
+(334 → 348 backend tests). No live Google calls; no deploy/push.
+
+### Baseline (before edits)
+308 backend tests passed, 1 skipped (Redis); ruff/mypy clean; frontend
+type-check/lint clean. Re-inspection found two defects that this task fixed:
+opening-hours comparisons used wall-clock times (wrong "closes soon"/closing
+checks across DST changes), and `opens_at` lacked a date when the next opening
+was on another day.
+
+### Requirement checklist → status
+| Requirement (prompt) | Status | Where |
+|---|---|---|
+| Backend city/place suggestions, explicit selection, identifying fields only | Done | `routers/selection.py`, `services/autocomplete.py` |
+| Place suggestions guided by selected city (bias, not restriction) | Done | `locationBias.rectangle` from city viewport |
+| No matches vs invalid input vs provider failure vs rate limit vs budget vs usage-control | Done | 200 `no_matches`; 422; 503 `provider_unavailable`; 429 `rate_limit_exceeded`; 429 `quota_exceeded`; 503 `usage_control_unavailable` |
+| Combined 30/min + 100/day per verified IP, incl. manual search | Done | `limiter.shared_limit` scope `selection-search` |
+| Trusted-proxy handling, shared counters, fail-closed accounting preserved | Done | existing limiter/provider budget reused |
+| Count suggestion/detail calls separately from routing | Done | `core/provider_accounting.py` (per-kind seam, no new limits) |
+| Autocomplete session handling per Google's rules, no claimed discount | Done | tokens sent with suggestions + concluding selection lookup; see below |
+| Outside-area warnings from verified viewport; unavailable when missing; wrap/boundary | Done | `services/area.py`, `lib/v2/area.ts`, plan warnings `outside_city_area` / `area_unavailable` |
+| Warnings recalculated on city/stop change; kept in v2 results incl. unknown stops | Done | `stopChecks()`; `_area_warnings` |
+| D38 minimal cache, 30-day non-extending expiry, legacy rich data removed | Done | `services/geocache.py` (migration + VACUUM + secure_delete) |
+| v1 endpoint still works with rich details | Done | `geocode_cached` fetches fresh rich details, stores only coords |
+| POST stream, phases, completed-leg progress, distinct outcomes | Done | `/api/v2/plan/stream` NDJSON; plan/partial, timeout, error, cancelled |
+| One 60 s deadline incl. verification/admission; disconnect stops work; capacity released; bounded queue | Done | `PlanStream` (watcher + sentinel wake-up), `DeadlineScope.bound` |
+| Pre-stream vs post-header errors; no-store/security headers | Done | HTTP 422/429 before stream; terminal events after |
+| Reducer state, op identity/revision, late events rejected | Done | `lib/v2/state.ts` |
+| Explicit selection inputs, edit invalidation, 300 ms/2-char/manual Search, stale results ignored | Done | `components/v2/SearchSelect.tsx`, `lib/v2/search.ts` |
+| City change keeps stops/durations/local clock; tz label + warnings update | Done | reducer `citySelected` |
+| Repeated-time occurrence selection; clear invalid-time errors | Done | `lib/v2/time.ts`, form radiogroup |
+| Plan only on explicit Plan; Cancel; honest progress | Done | no percentages/countdowns; "Planned N of M journeys" |
+| Render partial results + hours qualifications/warnings | Done | `components/v2/TimelineV2.tsx` |
+| Runtime validation; malformed/truncated ⇒ incomplete | Done | `lib/v2/validate.ts`, `lib/v2/ndjson.ts` |
+| Ordinary planning moved to v2; desktop tabs preserved | Done | `PlannerPage.tsx` |
+| Refresh/optimise cannot apply legacy results | Done | v1 UI/client removed; refresh disabled with explanation; optimise replaced by a note |
+
+### Files changed (high level)
+Backend new: `core/provider_accounting.py`, `routers/selection.py`,
+`services/area.py`, `services/autocomplete.py`, tests `test_selection.py`,
+`test_plan_v2_stream.py`, `sample_streams.py` (contract sample generator).
+Backend modified: `plan_v2.py` (shared `execute_plan`, JSON + stream
+endpoints, area warnings), `place_details.py` (purpose masks, viewport,
+session tokens, Essentials selection lookup), `verifier.py`, `adapter.py`,
+`engine.py`, `venue_hours.py` (instant comparison), `geocache.py` (D38),
+`errors.py`, `provider_semaphore.py`, `limiter.py`, models, `main.py`.
+Frontend new: `lib/v2/{validate,ndjson,client,state,time,area,search}.ts`,
+`components/v2/{SearchSelect,PlanFormV2,TimelineV2}.tsx`, `tests/unit/*`,
+`tests/e2e/planner.e2e.mjs`. Modified: `PlannerPage.tsx`, `PlanMap.tsx`
+(generic pins), `package.json` (test scripts), `tsconfig.json`
+(`allowImportingTsExtensions`), CI. Removed (dead after migration): v1
+`PlanForm`, `StopList`, `Timeline`, `StopCard`, `LegCard`, `PlanCanvas`,
+`EmptyTimeline`, `WarningBadge`, `lib/api.ts`, `lib/types.ts`.
+
+### Provider calls and billing (verified against Google docs, 2026-10-06)
+- Suggestions: Autocomplete (New) — billed per request ("Autocomplete
+  Requests") for the first 12 requests of a session; only requests 13+ in a
+  session concluded by Place Details are free; abandoned sessions bill per
+  request. So debounce/limits, not sessions, are what reduce cost.
+- City selection and plan-time city verification: Place Details **Pro**
+  (`id,displayName,formattedAddress,location,viewport`).
+- Stop selection: Place Details **Essentials** (`id,location,formattedAddress`).
+- Plan-time stop verification: Place Details **Enterprise** (hours), one per
+  distinct place. Routing: Compute Routes, ≤ N−1 per plan.
+- Per plan from a fresh form (N stops, D distinct): ~searches + 1 city
+  select + N stop selects (setup) then 1 + D details + ≤ N−1 routes (plan).
+
+### Checks run (actual results)
+Backend: `pytest -q` **348 passed, 1 skipped** (Redis test skipped — not
+verified); ruff check + format check clean; mypy strict clean (37 files).
+Frontend: `check:types-drift` clean; `type-check` clean; `lint` 0 problems;
+`test:unit` **57 passed** (incl. cross-language contract test that parses real
+backend stream/selection output); `build` OK; `test:e2e` **14 passed**
+(Playwright, production build, mocked API, Google blocked);
+`security:smoke` passed; `security:audit` **FAILED** (pre-existing B3, see
+Blockers). Mutation spot-checks: removing the disconnect sentinel, the
+reducer's revision check, or the NDJSON terminal requirement each fails tests.
+Visual check via screenshots at 1440px and 390px.
+
+### Deployment-only checks (not verifiable locally)
+- 60 s NDJSON streaming through Railway and any proxy/CDN (buffering,
+  idle timeouts, disconnect propagation) — TODO open decision.
+- Shared Redis counters for the new `selection-search` and `plan-v2` scopes
+  (Redis test skipped locally); trusted proxy IPs (B4).
+- API key restrictions must include Places Autocomplete; CSP with live maps.
+
+### Remaining defects / unresolved choices
+1. **Selection lookup limits (D36 open):** selections currently count in the
+   combined 30/min + 100/day search bucket. Needs a product decision.
+2. **Free-tier enforcement deferred** (2026-10-06 direction): only the seam
+   exists; the 2000/day budget is not a free-tier guarantee.
+3. **v1 endpoints** (`/api/plan`, `/api/optimise`, `/api/refresh-leg`) remain
+   live but unused by the UI; v1 now makes a fresh Text Search (Enterprise)
+   per stop because rich caching was removed. Consider retiring them.
+4. The coordinate cache is written on selection, but the read path (selection
+   without a session token) is not used by the current UI.
+5. Each open stream holds one of `max_concurrent_requests` (20) for up to 60 s.
+6. Unknown-hours `info` warnings may be noisy for hotels/stations.
+7. `businessStatus` temporary closure not surfaced; date-specific coverage is
+   anchored to the server's local date at fetch time.
+8. README/CLAUDE.md still describe the v1 architecture and Pro-tier estimate.
+9. `npm run security:audit` failure (B3).
+
 ## Next action
 
-1. V2-VH committed (d63ef89, 791af55).
-2. Resolve the billing-tier discrepancy and the place-call accounting decision.
-3. **Step 6:** streamed transport + frontend migration to `/api/v2/plan`.
-4. Step 3 remainder: D38 cache migration, D44 area warning, D34-36 suggestions.
+1. Decide selection-lookup limits (D36) and the B3 audit fix.
+2. Monthly free-tier enforcement remains deferred; existing limits retained.
+3. **Step 7:** suffix refresh from planned departure via the shared engine.
+4. **Step 8:** compare one local candidate with a fresh original; acceptance.

@@ -1,5 +1,12 @@
 # RouteWright system-design handoff
 
+**Latest scope (2026-10-06):** Defer new per-SKU monthly free-tier enforcement
+during development; preserve existing controls and record it for future scope.
+Next product work: selections/area warnings/cache migration, then streaming/v2
+frontend, refresh and comparison. Do not restart meta-design discussion or
+implement a reservation scheme (none approved). Free-tier-only remains the
+future cost constraint, not a guarantee provided by current daily counters.
+
 **Confirmed correction (2026-10-05):** The product manager confirms that the
 API project's linked billing account address is India. Apply the non-EEA
 service-specific terms. The previous EEA billing assumption is superseded;
