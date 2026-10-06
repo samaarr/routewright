@@ -48,6 +48,7 @@ from starlette.types import Message
 
 from app.core.deadline import DeadlineExceededError, DeadlineScope
 from app.core.limiter import OPTIMISE_LIMITS, PLAN_LIMITS, REFRESH_LIMITS, limiter, request_cost
+from app.core.opmetrics import OperationMetrics, OperationType
 from app.models.request import ComparisonRequest, ItineraryRequest, RefreshRequest
 from app.models.response import (
     ComparisonOutcome,
@@ -670,6 +671,75 @@ async def execute_compare(
     )
 
 
+# ---------------------------------------------------------------------------
+# Aggregate operational metrics (Step 9, D46): bounded categories only
+# ---------------------------------------------------------------------------
+
+_COMPARISON_CATEGORY = {
+    "no_different_order": "no_different_order",
+    "recommended": "compared",  # result categories deliberately not split (D46)
+    "not_faster": "compared",
+    "hours_ineligible": "compared",
+    "original_incomplete": "incomplete",
+    "candidate_incomplete": "incomplete",
+}
+
+
+def _result_category(result: object) -> tuple[str, str | None]:
+    if isinstance(result, CompletePlan | RefreshComplete):
+        return "complete", None
+    if isinstance(result, PartialPlan | RefreshPartial):
+        if result.failure_reason == "deadline_exceeded":
+            return "timeout", "deadline_exceeded"
+        return "partial", result.failure_reason
+    if isinstance(result, ComparisonResult):
+        failure = None
+        if result.status == "original_incomplete" and isinstance(result.original, PartialPlan):
+            failure = result.original.failure_reason
+        return _COMPARISON_CATEGORY[result.status], failure
+    return "error", "other"
+
+
+def _outcome_category(outcome: OperationOutcome) -> tuple[str, str | None]:
+    if isinstance(outcome, PlanOutcome | RefreshOutcome | ComparisonOutcome):
+        return _result_category(outcome.result)
+    if isinstance(outcome, TimeoutOutcome):
+        return "timeout", "deadline_exceeded"
+    if isinstance(outcome, ErrorOutcome):
+        return "error", outcome.code
+    return "cancelled", None
+
+
+def _failure_category(exc: BaseException) -> tuple[str, str | None]:
+    if isinstance(exc, HTTPException):
+        detail: dict[str, Any] = exc.detail if isinstance(exc.detail, dict) else {}
+        code = str(detail.get("error", "other"))
+        return ("rejected" if exc.status_code == 422 else "error"), code
+    if isinstance(exc, DeadlineExceededError):
+        return "timeout", "deadline_exceeded"
+    failure = describe_failure(exc)
+    if failure is None:
+        return "error", "internal_error"
+    return ("rejected" if failure.status == 422 else "error"), failure.code
+
+
+async def _measured(
+    operation: OperationType,
+    stop_count: int,
+    run: Callable[[], Awaitable[Any]],
+) -> Any:
+    """Run a JSON endpoint body and emit exactly one metrics line."""
+    metrics = OperationMetrics(operation, "json", stop_count)
+    metrics.activate()
+    try:
+        result = await run()
+    except BaseException as exc:
+        metrics.finish(*_failure_category(exc))
+        raise
+    metrics.finish(*_result_category(result))
+    return result
+
+
 def _validated_departure(req: ItineraryRequest) -> datetime:
     try:
         return resolve_departure(req.departure, mode=req.mode, now=_now())
@@ -716,6 +786,11 @@ def _validated_refresh(req: RefreshRequest) -> None:
 @limiter.shared_limit(PLAN_LIMITS, scope=_PLAN_V2_SCOPE, cost=request_cost)
 async def plan_v2(request: Request, req: ItineraryRequest) -> PlanResult:
     """Verify selections, then plan sequentially; one JSON response."""
+    result: PlanResult = await _measured("plan", len(req.stops), lambda: _plan_json(req))
+    return result
+
+
+async def _plan_json(req: ItineraryRequest) -> PlanResult:
     deadline = DeadlineScope()
     ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
     departure_utc = _validated_departure(req)
@@ -739,6 +814,14 @@ async def plan_v2(request: Request, req: ItineraryRequest) -> PlanResult:
 # ---------------------------------------------------------------------------
 # Streaming endpoint
 # ---------------------------------------------------------------------------
+
+
+def _stream_operation(req: ItineraryRequest) -> OperationType:
+    if isinstance(req, ComparisonRequest):
+        return "compare"
+    if isinstance(req, RefreshRequest):
+        return "refresh"
+    return "plan"
 
 
 class _QueueEmitter:
@@ -779,9 +862,10 @@ class PlanStream:
         ctx: OperationContext,
         deadline: DeadlineScope,
         receive: Receive | None,
+        metrics: OperationMetrics | None = None,
     ) -> None:
         """Plan stream for an ItineraryRequest (needs ``departure_utc``), or a
-        refresh stream for a RefreshRequest."""
+        refresh/comparison stream for a RefreshRequest/ComparisonRequest."""
         self.req = req
         self.departure_utc = departure_utc
         self.places = places
@@ -792,6 +876,7 @@ class PlanStream:
         self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=MAX_QUEUED_EVENTS)
         self.emitter = _QueueEmitter(self.queue)
         self.disconnected = False
+        self.metrics = metrics
 
     def _terminal(self, outcome: OperationOutcome) -> TerminalEvent:
         return TerminalEvent(
@@ -813,6 +898,8 @@ class PlanStream:
 
     async def _produce(self) -> None:
         outcome: OperationOutcome
+        if self.metrics is not None:
+            self.metrics.activate()  # provider calls in this task count toward it
         try:
             result: PlanResult | RefreshResult | ComparisonResult
             if isinstance(self.req, ComparisonRequest):
@@ -858,6 +945,8 @@ class PlanStream:
             else:
                 outcome = PlanOutcome(result=result)
         except asyncio.CancelledError:
+            if self.metrics is not None:
+                self.metrics.finish("cancelled")
             raise
         except DeadlineExceededError:
             outcome = self._timeout()
@@ -873,6 +962,8 @@ class PlanStream:
                 outcome = ErrorOutcome(
                     code=failure.code, message=failure.message, details=failure.details
                 )
+        if self.metrics is not None:
+            self.metrics.finish(*_outcome_category(outcome))
         await self.queue.put(self._terminal(outcome))
 
     async def _watch_disconnect(self, producer: "asyncio.Task[None]") -> None:
@@ -897,6 +988,8 @@ class PlanStream:
                     event = await asyncio.wait_for(self.queue.get(), timeout=timeout)
                 except TimeoutError:
                     producer.cancel()
+                    if self.metrics is not None:
+                        self.metrics.finish("timeout", "deadline_exceeded")
                     event = self._terminal(self._timeout())
                 if event is _DISCONNECTED or self.disconnected:
                     return
@@ -917,7 +1010,12 @@ async def plan_v2_stream(request: Request, req: ItineraryRequest) -> StreamingRe
     after the response starts is reported as stream events."""
     deadline = DeadlineScope()
     ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
-    departure_utc = _validated_departure(req)
+    metrics = OperationMetrics(_stream_operation(req), "stream", len(req.stops))
+    try:
+        departure_utc = _validated_departure(req)
+    except HTTPException as exc:
+        metrics.finish(*_failure_category(exc))
+        raise
     stream = PlanStream(
         req,
         departure_utc=departure_utc,
@@ -926,6 +1024,7 @@ async def plan_v2_stream(request: Request, req: ItineraryRequest) -> StreamingRe
         ctx=ctx,
         deadline=deadline,
         receive=request.receive,
+        metrics=metrics,
     )
     return StreamingResponse(
         stream.events(),
@@ -943,6 +1042,11 @@ async def plan_v2_stream(request: Request, req: ItineraryRequest) -> StreamingRe
 @limiter.shared_limit(REFRESH_LIMITS, scope=_REFRESH_V2_SCOPE, cost=request_cost)
 async def refresh_v2(request: Request, req: RefreshRequest) -> RefreshResult:
     """Recompute the timetable from leg k at its planned departure; one JSON response."""
+    result: RefreshResult = await _measured("refresh", len(req.stops), lambda: _refresh_json(req))
+    return result
+
+
+async def _refresh_json(req: RefreshRequest) -> RefreshResult:
     deadline = DeadlineScope()
     ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
     _validated_refresh(req)
@@ -969,7 +1073,12 @@ async def refresh_v2_stream(request: Request, req: RefreshRequest) -> StreamingR
     semantics as planning; the terminal outcome is a RefreshOutcome."""
     deadline = DeadlineScope()
     ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
-    _validated_refresh(req)
+    metrics = OperationMetrics("refresh", "stream", len(req.stops))
+    try:
+        _validated_refresh(req)
+    except HTTPException as exc:
+        metrics.finish(*_failure_category(exc))
+        raise
     stream = PlanStream(
         req,
         places=places_adapter(),
@@ -977,6 +1086,7 @@ async def refresh_v2_stream(request: Request, req: RefreshRequest) -> StreamingR
         ctx=ctx,
         deadline=deadline,
         receive=request.receive,
+        metrics=metrics,
     )
     return StreamingResponse(
         stream.events(),
@@ -994,6 +1104,13 @@ async def refresh_v2_stream(request: Request, req: RefreshRequest) -> StreamingR
 @limiter.shared_limit(OPTIMISE_LIMITS, scope=_COMPARE_V2_SCOPE, cost=request_cost)
 async def compare_v2(request: Request, req: ComparisonRequest) -> ComparisonResult:
     """Compare the current order with one local candidate; one JSON response."""
+    result: ComparisonResult = await _measured(
+        "compare", len(req.stops), lambda: _compare_json(req)
+    )
+    return result
+
+
+async def _compare_json(req: ComparisonRequest) -> ComparisonResult:
     deadline = DeadlineScope()
     ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
     departure_utc = _validated_departure(req)
@@ -1021,7 +1138,12 @@ async def compare_v2_stream(request: Request, req: ComparisonRequest) -> Streami
     alternative_route; terminal ComparisonOutcome (or timeout/error)."""
     deadline = DeadlineScope()
     ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
-    departure_utc = _validated_departure(req)
+    metrics = OperationMetrics(_stream_operation(req), "stream", len(req.stops))
+    try:
+        departure_utc = _validated_departure(req)
+    except HTTPException as exc:
+        metrics.finish(*_failure_category(exc))
+        raise
     stream = PlanStream(
         req,
         departure_utc=departure_utc,
@@ -1030,6 +1152,7 @@ async def compare_v2_stream(request: Request, req: ComparisonRequest) -> Streami
         ctx=ctx,
         deadline=deadline,
         receive=request.receive,
+        metrics=metrics,
     )
     return StreamingResponse(
         stream.events(),

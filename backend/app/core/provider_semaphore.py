@@ -8,6 +8,7 @@ from typing import TypeVar
 from fastapi import HTTPException
 from limits import RateLimitItemPerDay
 
+from app.core import opmetrics
 from app.core.config import settings
 from app.core.limiter import limiter
 from app.core.provider_accounting import ProviderCallKind, accounting
@@ -78,6 +79,7 @@ async def consume_provider_budget(kind: ProviderCallKind = "unclassified") -> No
         # Conservatively wait a day; the provider budget cannot become a fabricated leg.
         raise HTTPException(429, BUDGET_EXHAUSTED_DETAIL, headers={"Retry-After": "86400"})
     accounting.record(kind)
+    opmetrics.record_call(kind)
 
 
 async def run_in_solver_slot(fn: Callable[[], _T], *, wait_seconds: float) -> _T:

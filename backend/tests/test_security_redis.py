@@ -86,16 +86,17 @@ def test_selection_limit_is_shared_across_processes() -> None:
     store = redis.Redis.from_url(uri)
     store.flushdb()
     try:
-        first = json.loads(
-            subprocess.check_output(
-                [sys.executable, "-c", _SUGGEST_WORKER, "20"], env=_redis_env(uri), text=True
+
+        def run(n: str) -> list[int]:
+            out = subprocess.check_output(
+                [sys.executable, "-c", _SUGGEST_WORKER, n], env=_redis_env(uri), text=True
             )
-        )
-        second = json.loads(
-            subprocess.check_output(
-                [sys.executable, "-c", _SUGGEST_WORKER, "11"], env=_redis_env(uri), text=True
-            )
-        )
+            # stdout also carries the per-request metrics lines; the result is last.
+            codes: list[int] = json.loads(out.strip().splitlines()[-1])
+            return codes
+
+        first = run("20")
+        second = run("11")
         assert first == [200] * 20
         assert second[:10] == [200] * 10
         assert second[10] == 429  # 31st request across both processes

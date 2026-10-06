@@ -26,7 +26,8 @@ unexpired entry exists; with a session token the lookup is always made, since
 it is what concludes the autocomplete session.
 """
 
-from typing import NoReturn
+from collections.abc import Awaitable, Callable
+from typing import Any, NoReturn, TypeVar
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -37,6 +38,7 @@ from app.core.limiter import (
     limiter,
     request_cost,
 )
+from app.core.opmetrics import OperationMetrics, OperationType
 from app.models.request import PlaceSuggestionQuery, SelectionRequest, SuggestionQuery
 from app.models.response import (
     SelectedCity,
@@ -59,6 +61,27 @@ from app.services.errors import (
 from app.services.tz import resolve_timezone
 
 router = APIRouter(prefix="/api/v2", tags=["selection"])
+
+_R = TypeVar("_R")
+
+
+async def _measured(operation: OperationType, run: Callable[[], Awaitable[_R]]) -> _R:
+    """One aggregate metrics line per selection request (no query text, IDs or IPs)."""
+    metrics = OperationMetrics(operation, "json")
+    metrics.activate()
+    try:
+        result = await run()
+    except HTTPException as exc:
+        detail: dict[str, Any] = exc.detail if isinstance(exc.detail, dict) else {}
+        metrics.finish(
+            "rejected" if exc.status_code == 422 else "error", str(detail.get("error", "other"))
+        )
+        raise
+    except Exception:
+        metrics.finish("error", "internal_error")
+        raise
+    metrics.finish(result.status if isinstance(result, SuggestionsResponse) else "ok")
+    return result
 
 
 def suggestion_adapter() -> GoogleSuggestionAdapter:
@@ -126,6 +149,10 @@ async def _remember(place_id: str, lat: float, lng: float) -> None:
 @router.post("/suggest/cities", response_model=SuggestionsResponse)
 @limiter.shared_limit(SELECTION_SEARCH_LIMITS, scope=SELECTION_SEARCH_SCOPE, cost=request_cost)
 async def suggest_cities(request: Request, body: SuggestionQuery) -> SuggestionsResponse:
+    return await _measured("suggest_city", lambda: _suggest_cities(body))
+
+
+async def _suggest_cities(body: SuggestionQuery) -> SuggestionsResponse:
     try:
         items = await suggestion_adapter().suggest(
             body.query, kind="city", session_token=body.session_token, bias=None
@@ -138,6 +165,10 @@ async def suggest_cities(request: Request, body: SuggestionQuery) -> Suggestions
 @router.post("/suggest/places", response_model=SuggestionsResponse)
 @limiter.shared_limit(SELECTION_SEARCH_LIMITS, scope=SELECTION_SEARCH_SCOPE, cost=request_cost)
 async def suggest_places(request: Request, body: PlaceSuggestionQuery) -> SuggestionsResponse:
+    return await _measured("suggest_place", lambda: _suggest_places(body))
+
+
+async def _suggest_places(body: PlaceSuggestionQuery) -> SuggestionsResponse:
     v = body.city_viewport
     bias = Viewport(v.low_lat, v.low_lng, v.high_lat, v.high_lng) if v else None
     try:
@@ -152,6 +183,10 @@ async def suggest_places(request: Request, body: PlaceSuggestionQuery) -> Sugges
 @router.post("/select/city", response_model=SelectedCity)
 @limiter.shared_limit(SELECTION_SEARCH_LIMITS, scope=SELECTION_SEARCH_SCOPE, cost=request_cost)
 async def select_city(request: Request, body: SelectionRequest) -> SelectedCity:
+    return await _measured("select_city", lambda: _select_city(body))
+
+
+async def _select_city(body: SelectionRequest) -> SelectedCity:
     try:
         d = await places_adapter().fetch_details(
             body.place_id, role="city", session_token=body.session_token
@@ -185,6 +220,10 @@ async def select_city(request: Request, body: SelectionRequest) -> SelectedCity:
 @router.post("/select/place", response_model=SelectedPlace)
 @limiter.shared_limit(SELECTION_SEARCH_LIMITS, scope=SELECTION_SEARCH_SCOPE, cost=request_cost)
 async def select_place(request: Request, body: SelectionRequest) -> SelectedPlace:
+    return await _measured("select_place", lambda: _select_place(body))
+
+
+async def _select_place(body: SelectionRequest) -> SelectedPlace:
     if body.session_token is None:
         cached = await geocache.get_coordinates(
             body.place_id, settings.cache_db_path, settings.cache_ttl_days
