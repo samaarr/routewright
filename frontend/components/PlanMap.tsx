@@ -7,7 +7,13 @@ import {
   AdvancedMarker,
   useMap,
 } from "@vis.gl/react-google-maps";
-import type { StopItem } from "@/lib/types";
+// Minimal pin shape: selected draft stops (before planning) or verified plan
+// stops (after) both satisfy it.
+export interface MapPin {
+  lat: number;
+  lng: number;
+  name: string;
+}
 
 const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
 const MAP_ID  = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID ?? "DEMO_MAP_ID";
@@ -43,7 +49,7 @@ function TransitLayerOverlay() {
   return null;
 }
 
-interface MapFitterProps { stops: StopItem[] }
+interface MapFitterProps { stops: MapPin[] }
 
 function MapFitter({ stops }: MapFitterProps) {
   const map = useMap();
@@ -61,7 +67,7 @@ function MapFitter({ stops }: MapFitterProps) {
   return null;
 }
 
-interface RouteLayerProps { stops: StopItem[] }
+interface RouteLayerProps { stops: MapPin[] }
 
 function RouteLayer({ stops }: RouteLayerProps) {
   const map = useMap();
@@ -212,7 +218,7 @@ function OrderToggle({
 // ---------------------------------------------------------------------------
 
 interface Props {
-  stops: StopItem[];
+  stops: MapPin[];
   optimiseState: OptimiseMapState;
   onApply: () => void;
   onDismiss: () => void;
