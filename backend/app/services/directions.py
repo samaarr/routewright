@@ -100,7 +100,7 @@ async def fetch_leg(
         "X-Goog-FieldMask": field_mask,
     }
 
-    await consume_provider_budget()
+    await consume_provider_budget("routes_compute")
     try:
         if client is None:
             async with httpx.AsyncClient(timeout=10.0) as one_shot:

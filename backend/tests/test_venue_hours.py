@@ -217,3 +217,38 @@ def test_utc_inputs_are_assessed_in_trip_timezone() -> None:
     arrive = datetime(2026, 10, 21, 16, 30, tzinfo=timezone.utc)
     status, _ = _assess(_weekly_daily(9, 17), None, arrive, arrive)
     assert status == "closed_on_arrival"
+
+
+def test_closes_soon_uses_real_elapsed_time_across_spring_forward() -> None:
+    """Dublin, Sun 2027-03-28: clocks jump 01:00 GMT → 02:00 IST.
+
+    Arriving 00:50 GMT at a venue closing 02:15 IST is 25 real minutes before
+    closing (wall-clock difference would wrongly say 85 minutes).
+    """
+    raw = {"periods": [{"open": _pt(0, 0), "close": _pt(0, 2, 15)}]}
+    hours = parse_venue_hours(raw, None, _FETCHED, _TZ)
+    arrive = datetime(2027, 3, 28, 0, 50, tzinfo=timezone.utc)
+    status, detail = assess_hours(hours, arrive, arrive, _TZ)
+    assert status == "closes_soon"
+    assert detail.closes_at == "02:15"
+
+
+def test_visit_across_fall_back_finishes_before_real_closing() -> None:
+    """Dublin, Sun 2026-10-25: 02:00 IST → 01:00 GMT. 00:30 IST + 2h30 real time
+    ends at 02:00 GMT, exactly at a 02:00 closing — allowed."""
+    raw = {"periods": [{"open": _pt(6, 20), "close": _pt(0, 2)}]}
+    hours = parse_venue_hours(raw, None, _FETCHED, _TZ)
+    arrive = datetime(2026, 10, 24, 23, 30, tzinfo=timezone.utc)  # 00:30 IST
+    depart = arrive + timedelta(minutes=150)  # 02:00 GMT
+    assert assess_hours(hours, arrive, depart, _TZ)[0] == "open"
+    assert assess_hours(hours, arrive, depart + timedelta(minutes=1), _TZ)[0] == (
+        "closes_during_visit"
+    )
+
+
+def test_next_opening_on_another_day_carries_its_date() -> None:
+    status, detail = _assess(_weekly_daily(9, 17), None, _local(21, 18), _local(21, 19))
+    assert status == "closed_on_arrival"
+    assert (detail.opens_at, detail.opens_on) == ("09:00", date(2026, 10, 22))
+    same_day, d2 = _assess(_weekly_daily(9, 17), None, _local(21, 8), _local(21, 9))
+    assert same_day == "closed_on_arrival" and d2.opens_on is None

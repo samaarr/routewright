@@ -26,6 +26,7 @@ export type MapUrl = string;
 export type HoursStatus = "open" | "closed_on_arrival" | "closes_during_visit" | "closes_soon" | "unknown";
 export type ClosesAt = string | null;
 export type OpensAt = string | null;
+export type OpensOn = string | null;
 export type HoursSource = ("date_specific" | "weekly") | null;
 export type AlwaysOpen = boolean;
 export type ExceptionsUnconfirmed = boolean;
@@ -142,13 +143,46 @@ export type OutcomeType3 = "error";
 export type Code1 = string;
 export type Message1 = string;
 export type OperationOutcome = (PlanOutcome | RefreshOutcome | CancelledOutcome | ErrorOutcome) | null;
+export type Status = "ok" | "no_matches";
+export type PlaceId2 = string;
+export type PrimaryText = string;
+export type SecondaryText = string | null;
+export type Suggestions = SuggestionItem[];
+export type PlaceId3 = string;
+export type Name2 = string;
+export type SecondaryText1 = string | null;
+export type Lat1 = number;
+export type Lng1 = number;
+/**
+ * IANA zone resolved offline from coordinates.
+ */
+export type Timezone2 = string;
+export type LowLat = number;
+export type LowLng = number;
+export type HighLat = number;
+export type HighLng = number;
+export type PlaceId4 = string;
+export type Lat2 = number;
+export type Lng2 = number;
+export type SecondaryText2 = string | null;
+/**
+ * Null when no timezone can be resolved (planning blocks).
+ */
+export type Timezone3 = string | null;
+export type Source = "provider" | "cache";
+export type Role = ("city" | "stop") | null;
+export type Reason1 = string | null;
+export type PlaceId5 = string | null;
+export type InstanceIds = string[] | null;
+export type MovedPlaceId = string | null;
+export type RetryAfterSeconds = number | null;
 export type GeneratedAt = string;
 export type City2 = string;
 export type Mode3 = "transit" | "walking" | "driving";
 /**
  * IANA timezone for the trip city, e.g. 'Europe/London'. Derived from the first stop's coordinates. Used by the frontend to display arrival times in destination time regardless of the user's browser timezone.
  */
-export type Timezone2 = string;
+export type Timezone4 = string;
 export type ItemType4 = "stop";
 /**
  * What the user typed.
@@ -157,10 +191,10 @@ export type Query = string;
 /**
  * Resolved place name from geocoder.
  */
-export type Name2 = string;
+export type Name3 = string;
 export type Address1 = string | null;
-export type Lat1 = number;
-export type Lng1 = number;
+export type Lat3 = number;
+export type Lng3 = number;
 export type ArriveAt2 = string;
 export type DepartAt2 = string;
 export type StayMinutes1 = number;
@@ -202,7 +236,7 @@ export type Timeline2 = (StopItem | LegItem)[];
 export type OverviewMapUrl2 = string;
 export type Warnings2 = Warning[];
 export type Query1 = string;
-export type Name3 = string;
+export type Name4 = string;
 export type StayMinutes2 = number | null;
 export type Stops = OptimisedStop[];
 /**
@@ -249,6 +283,10 @@ export interface ContractRoot {
   planned_leg?: PlannedLeg | null;
   failed_leg?: FailedLeg | null;
   unknown_stop?: UnknownStop | null;
+  suggestions_response?: SuggestionsResponse | null;
+  selected_city?: SelectedCity | null;
+  selected_place?: SelectedPlace | null;
+  error_details?: ErrorDetails | null;
   plan?: Plan | null;
   optimise_response?: OptimiseResponse | null;
   error_response?: ErrorResponse | null;
@@ -308,6 +346,7 @@ export interface KnownStop {
 export interface HoursDetail {
   closes_at?: ClosesAt;
   opens_at?: OpensAt;
+  opens_on?: OpensOn;
   hours_source?: HoursSource;
   always_open?: AlwaysOpen;
   exceptions_unconfirmed?: ExceptionsUnconfirmed;
@@ -542,6 +581,91 @@ export interface ErrorOutcome {
   [k: string]: unknown;
 }
 /**
+ * ``no_matches`` is a successful search with nothing to choose from.
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "SuggestionsResponse".
+ */
+export interface SuggestionsResponse {
+  status: Status;
+  suggestions?: Suggestions;
+  [k: string]: unknown;
+}
+/**
+ * One suggestion. Identifying text and the provider ID only.
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "SuggestionItem".
+ */
+export interface SuggestionItem {
+  place_id: PlaceId2;
+  primary_text: PrimaryText;
+  secondary_text?: SecondaryText;
+  [k: string]: unknown;
+}
+/**
+ * A verified city selection: trip context for timezone, bias and area checks.
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "SelectedCity".
+ */
+export interface SelectedCity {
+  place_id: PlaceId3;
+  name: Name2;
+  secondary_text?: SecondaryText1;
+  lat: Lat1;
+  lng: Lng1;
+  timezone: Timezone2;
+  /**
+   * Null when the provider supplied no usable viewport.
+   */
+  viewport?: ViewportOut | null;
+  [k: string]: unknown;
+}
+/**
+ * Provider-suggested map area for a city. Not an administrative boundary.
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "ViewportOut".
+ */
+export interface ViewportOut {
+  low_lat: LowLat;
+  low_lng: LowLng;
+  high_lat: HighLat;
+  high_lng: HighLng;
+  [k: string]: unknown;
+}
+/**
+ * A verified stop selection (coordinates for map pin and area/timezone preview).
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "SelectedPlace".
+ */
+export interface SelectedPlace {
+  place_id: PlaceId4;
+  lat: Lat2;
+  lng: Lng2;
+  secondary_text?: SecondaryText2;
+  timezone?: Timezone3;
+  source: Source;
+  [k: string]: unknown;
+}
+/**
+ * Structured context for an error outcome. Never raw provider text.
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "ErrorDetails".
+ */
+export interface ErrorDetails {
+  role?: Role;
+  reason?: Reason1;
+  place_id?: PlaceId5;
+  instance_ids?: InstanceIds;
+  moved_place_id?: MovedPlaceId;
+  retry_after_seconds?: RetryAfterSeconds;
+  [k: string]: unknown;
+}
+/**
  * Full timeline response.
  *
  * This interface was referenced by `ContractRoot`'s JSON-Schema
@@ -551,7 +675,7 @@ export interface Plan {
   generated_at: GeneratedAt;
   city: City2;
   mode: Mode3;
-  timezone: Timezone2;
+  timezone: Timezone4;
   timeline: Timeline2;
   overview_map_url: OverviewMapUrl2;
   warnings?: Warnings2;
@@ -566,10 +690,10 @@ export interface Plan {
 export interface StopItem {
   item_type?: ItemType4;
   query: Query;
-  name: Name2;
+  name: Name3;
   address?: Address1;
-  lat: Lat1;
-  lng: Lng1;
+  lat: Lat3;
+  lng: Lng3;
   arrive_at: ArriveAt2;
   depart_at: DepartAt2;
   stay_minutes: StayMinutes1;
@@ -622,7 +746,7 @@ export interface OptimiseResponse {
  */
 export interface OptimisedStop {
   query: Query1;
-  name: Name3;
+  name: Name4;
   stay_minutes?: StayMinutes2;
   [k: string]: unknown;
 }

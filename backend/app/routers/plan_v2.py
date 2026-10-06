@@ -1,26 +1,26 @@
-"""POST /api/v2/plan -- verified sequential planning with opening-hours assessment.
+"""POST /api/v2/plan -- verified sequential planning.
 
-Flow (one 60-second deadline covers all of it, including in-flight awaits):
+``execute_plan`` orchestrates:
 
 1. Departure syntax, calendar validity, clock-change handling and supported
-   range — no provider calls (D14, D29).
-2. Server-side verification by Place Details: city, departure-zone match, then
-   stops (D13, D37, D40, D41, D45). Any failure here returns a structured
-   error and makes ZERO routing calls.
-3. Fixed stay durations from the original order and provider-verified place
-   types (D11).
-4. Sequential routing: each leg departs at the previous stop's actual arrival
-   plus its fixed stay; a failed leg keeps the valid prefix and leaves the
-   rest unknown (D1, D2). Each known stop's hours are assessed against its
-   actual visit (D24, D42, D43) and surfaced as warnings.
+   range — no provider calls (D14, D29). Failures are HTTP 422.
+2. Verification: Place Details for the city, departure-zone match, then stops
+   (D13, D37, D40, D41, D45). Any failure makes ZERO routing calls.
+3. Fixed stay durations from the original order and verified place types (D11).
+4. Routing: each leg departs at the previous stop's actual arrival plus its
+   fixed stay; a failed leg keeps the valid prefix and leaves the rest
+   unknown (D1, D2). Known stops get opening-hours assessment (D24, D42, D43);
+   every verified stop gets an outside-area check against the city viewport
+   (D25, D44).
 
-Provider calls for one plan: at most 1 (city, shared if it is also a stop)
-+ distinct stop place IDs Place Details calls, then at most N-1 routing
-calls. All go through the shared provider budget; no automatic retries.
-
-The legacy /api/plan endpoint is unchanged and still serves the frontend.
+One 60-second DeadlineScope bounds verification, admission waits and every
+in-flight provider await (D19, D23). Provider calls per plan: 1 city lookup +
+1 per distinct stop place, then at most N-1 routing calls; all through the
+shared budget and accounting seam. The legacy /api/plan endpoint is unchanged.
 """
 
+import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, NoReturn
 from urllib.parse import quote_plus
@@ -32,6 +32,7 @@ from app.core.limiter import PLAN_LIMITS, limiter, request_cost
 from app.models.request import ItineraryRequest
 from app.models.response import (
     CompletePlan,
+    ErrorDetails,
     FailedLeg,
     KnownStop,
     PartialPlan,
@@ -41,12 +42,18 @@ from app.models.response import (
     WarningSeverity,
 )
 from app.services.adapter import GooglePlacesAdapter, GoogleRoutesAdapter
+from app.services.area import (
+    AREA_UNAVAILABLE_MESSAGE,
+    OUTSIDE_AREA_MESSAGE,
+    area_status,
+)
 from app.services.departure import DepartureError, resolve_departure
 from app.services.engine import (
     DuplicateInstanceIdError,
     OperationCancelledError,
     OperationContext,
     PlacesAdapter,
+    ProgressEmitter,
     RoutesAdapter,
     place_type_defaults,
     plan_sequential,
@@ -59,16 +66,20 @@ from app.services.errors import (
     QuotaExceededError,
     TimezoneConflictError,
     TimezoneUnresolvedError,
+    UsageControlUnavailableError,
 )
 from app.services.hours import hours_eligibility
-from app.services.verifier import verify_itinerary
+from app.services.verifier import VerifiedItinerary, verify_itinerary
+
+log = logging.getLogger("routewright.plan_v2")
 
 router = APIRouter(prefix="/api/v2", tags=["plan_v2"])
 
+# v2 planning endpoints share one per-IP counter (existing plan limits).
+_PLAN_V2_SCOPE = "plan-v2"
+
 
 class _NullEmitter:
-    """No-op progress emitter -- HTTP streaming is wired in a later stage."""
-
     async def emit(self, event: object) -> None:
         return
 
@@ -86,6 +97,115 @@ def routes_adapter() -> RoutesAdapter:
 def _now() -> datetime:
     """Clock for the departure-range check (patched in tests)."""
     return datetime.now(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Failure mapping (shared by the JSON and streaming endpoints)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PlanFailure:
+    status: int
+    code: str
+    message: str
+    details: ErrorDetails | None = None
+    headers: dict[str, str] | None = None
+
+
+def describe_failure(exc: BaseException) -> PlanFailure | None:
+    """Map a domain exception to a user-safe failure, or None if unexpected."""
+    if isinstance(exc, PlaceVerificationError):
+        return PlanFailure(
+            422,
+            "place_invalid",
+            "A selected place could not be verified. Please select it again.",
+            ErrorDetails(
+                role=exc.role,
+                reason=exc.reason,
+                place_id=exc.place_id,
+                moved_place_id=exc.moved_place_id,
+            ),
+        )
+    if isinstance(exc, ProviderTemporaryError):
+        return PlanFailure(
+            503, "place_temporary", "Place verification is temporarily unavailable. Try again."
+        )
+    if isinstance(exc, QuotaExceededError):
+        return PlanFailure(
+            429,
+            "quota_exceeded",
+            "The daily provider allowance has been reached. Try again tomorrow.",
+        )
+    if isinstance(exc, UsageControlUnavailableError):
+        return PlanFailure(
+            503,
+            "usage_control_unavailable",
+            "Usage checks are unavailable, so no requests were sent. Try again shortly.",
+            ErrorDetails(retry_after_seconds=60),
+            {"Retry-After": "60"},
+        )
+    if isinstance(exc, ProviderCapacityError):
+        return PlanFailure(
+            503,
+            "provider_capacity",
+            "The service is busy. Try again shortly.",
+            ErrorDetails(retry_after_seconds=2),
+            {"Retry-After": "2"},
+        )
+    if isinstance(exc, TimezoneUnresolvedError):
+        return PlanFailure(
+            422,
+            "timezone_unresolved",
+            f"The timezone for {exc.name} could not be determined. "
+            + ("Select another city." if exc.role == "city" else "Select another place."),
+            ErrorDetails(
+                role=exc.role, instance_ids=[exc.instance_id] if exc.instance_id else None
+            ),
+        )
+    if isinstance(exc, TimezoneConflictError):
+        return PlanFailure(
+            422,
+            "timezone_conflict",
+            f"{exc.stop_name} is in {exc.detected_tz}, but this trip is in "
+            f"{exc.expected_tz}. Trips must stay within one timezone.",
+            ErrorDetails(role="stop", instance_ids=[exc.instance_id] if exc.instance_id else None),
+        )
+    if isinstance(exc, DepartureError):
+        return PlanFailure(422, exc.code, str(exc))
+    if isinstance(exc, DuplicateInstanceIdError):
+        return PlanFailure(
+            422, "duplicate_instance_id", "Each stop must have a unique instance_id."
+        )
+    if isinstance(exc, DeadlineExceededError | OperationCancelledError):
+        return PlanFailure(503, "deadline_exceeded", "The request took too long. Try again.")
+    return None
+
+
+def _with_instance_ids(failure: PlanFailure, req: ItineraryRequest) -> PlanFailure:
+    d = failure.details
+    if d is None or d.role != "stop" or d.instance_ids is not None or d.place_id is None:
+        return failure
+    ids = [s.instance_id for s in req.stops if s.selection.place_id == d.place_id]
+    return PlanFailure(
+        failure.status,
+        failure.code,
+        failure.message,
+        d.model_copy(update={"instance_ids": ids}),
+        failure.headers,
+    )
+
+
+def _raise_http(failure: PlanFailure) -> NoReturn:
+    detail: dict[str, Any] = {"error": failure.code, "message": failure.message}
+    if failure.details is not None:
+        detail.update(failure.details.model_dump(exclude_none=True))
+    raise HTTPException(status_code=failure.status, detail=detail, headers=failure.headers)
+
+
+# ---------------------------------------------------------------------------
+# Result assembly
+# ---------------------------------------------------------------------------
 
 
 def _overview_url(lats_lngs: list[tuple[float, float]]) -> str:
@@ -108,14 +228,6 @@ def _overview_url(lats_lngs: list[tuple[float, float]]) -> str:
     return url
 
 
-def _fail(
-    status: int, code: str, message: str, headers: dict[str, str] | None = None, **extra: Any
-) -> NoReturn:
-    detail: dict[str, Any] = {"error": code, "message": message}
-    detail.update({k: v for k, v in extra.items() if v is not None})
-    raise HTTPException(status_code=status, detail=detail, headers=headers)
-
-
 def _hours_warnings(timeline: list[Any]) -> list[Warning]:
     """Warnings for the user's own order. Nothing is dropped or reordered."""
     warnings: list[Warning] = []
@@ -135,7 +247,10 @@ def _hours_warnings(timeline: list[Any]) -> list[Warning]:
             else ""
         )
         if status == "closed_on_arrival":
-            opens = f" It opens at {detail.opens_at}." if detail and detail.opens_at else ""
+            opens = ""
+            if detail and detail.opens_at:
+                when = f" on {detail.opens_on.isoformat()}" if detail.opens_on else ""
+                opens = f" It opens at {detail.opens_at}{when}."
             if item.stay_minutes > 0:
                 message = f"{item.name} appears to be closed when you arrive.{opens}"
                 code, severity = "hours_closed_on_arrival", "warning"
@@ -167,128 +282,118 @@ def _hours_warnings(timeline: list[Any]) -> list[Warning]:
     return warnings
 
 
-@router.post("/plan", response_model=PlanResult)
-@limiter.limit(PLAN_LIMITS, cost=request_cost)
-async def plan_v2(request: Request, req: ItineraryRequest) -> PlanResult:
-    """Verify selections, then plan sequentially with opening-hours assessment."""
-    deadline = DeadlineScope()
-    ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
+def _area_warnings(itinerary: VerifiedItinerary) -> list[Warning]:
+    """D44: compare every verified stop (known or unknown timing) with the viewport."""
+    viewport = itinerary.city.viewport
+    if viewport is None:
+        return [Warning(severity="info", message=AREA_UNAVAILABLE_MESSAGE, code="area_unavailable")]
+    return [
+        Warning(
+            severity="warning",
+            message=OUTSIDE_AREA_MESSAGE,
+            affects_stop_index=i,
+            affects_instance_id=stop.instance_id,
+            code="outside_city_area",
+        )
+        for i, stop in enumerate(itinerary.stops)
+        if area_status(viewport, stop.lat, stop.lng) == "outside"
+    ]
 
-    # 1. Departure validity — before any provider call.
-    try:
-        departure_utc = resolve_departure(req.departure, mode=req.mode, now=_now())
-    except DepartureError as exc:
-        _fail(422, exc.code, str(exc))
 
-    # 2. Verification — no routing calls happen unless this fully succeeds.
-    def stop_ids_for(place_id: str) -> list[str]:
-        return [s.instance_id for s in req.stops if s.selection.place_id == place_id]
+async def execute_plan(
+    req: ItineraryRequest,
+    *,
+    departure_utc: datetime,
+    places: PlacesAdapter,
+    routes: RoutesAdapter,
+    emitter: ProgressEmitter,
+    ctx: OperationContext,
+    deadline: DeadlineScope,
+) -> PlanResult:
+    """Verify, resolve durations and route. Raises domain errors before routing."""
+    itinerary = await verify_itinerary(req, places, ctx, deadline)
 
-    try:
-        itinerary = await verify_itinerary(req, places_adapter(), ctx, deadline)
-    except PlaceVerificationError as exc:
-        _fail(
-            422,
-            "place_invalid",
-            "A selected place could not be verified. Please select it again.",
-            role=exc.role,
-            reason=exc.reason,
-            place_id=exc.place_id,
-            instance_ids=stop_ids_for(exc.place_id) if exc.role == "stop" else None,
-            moved_place_id=exc.moved_place_id,
-        )
-    except ProviderTemporaryError:
-        _fail(
-            503,
-            "place_temporary",
-            "Place verification is temporarily unavailable. Try again shortly.",
-        )
-    except QuotaExceededError:
-        _fail(429, "quota_exceeded", "The daily provider allowance has been reached.")
-    except ProviderCapacityError:
-        _fail(
-            503,
-            "provider_capacity",
-            "The service is busy. Try again shortly.",
-            headers={"Retry-After": "2"},
-        )
-    except TimezoneUnresolvedError as exc:
-        _fail(
-            422,
-            "timezone_unresolved",
-            f"The timezone for {exc.name} could not be determined. "
-            + ("Select another city." if exc.role == "city" else "Select another place."),
-            role=exc.role,
-            instance_ids=[exc.instance_id] if exc.instance_id else None,
-        )
-    except TimezoneConflictError as exc:
-        _fail(
-            422,
-            "timezone_conflict",
-            f"{exc.stop_name} is in {exc.detected_tz}, but this trip is in "
-            f"{exc.expected_tz}. Trips must stay within one timezone.",
-            role="stop",
-            instance_ids=[exc.instance_id] if exc.instance_id else None,
-        )
-    except DepartureError as exc:  # zone mismatch, found after city verification
-        _fail(422, exc.code, str(exc))
-    except DeadlineExceededError:
-        _fail(503, "deadline_exceeded", "The request took too long. Try again.")
-
-    # 3. Fixed durations from the original order and verified place types.
-    try:
-        durations = resolve_durations(
-            [(s.instance_id, s.stay_minutes) for s in req.stops],
-            place_type_defaults(itinerary.stops),
-        )
-    except DuplicateInstanceIdError:
-        _fail(422, "duplicate_instance_id", "Each stop must have a unique instance_id.")
-
-    # 4. Sequential routing + hours.
-    try:
-        timeline = await plan_sequential(
-            stops=itinerary.stops,
-            durations=durations,
-            departure=departure_utc,
-            mode=req.mode,
-            routes=routes_adapter(),
-            emitter=_NullEmitter(),
-            ctx=ctx,
-            deadline=deadline,
-            trip_timezone=itinerary.timezone,
-        )
-    except (OperationCancelledError, DeadlineExceededError):
-        _fail(503, "deadline_exceeded", "The request took too long. Try again.")
+    durations = resolve_durations(
+        [(s.instance_id, s.stay_minutes) for s in req.stops],
+        place_type_defaults(itinerary.stops),
+    )
+    timeline = await plan_sequential(
+        stops=itinerary.stops,
+        durations=durations,
+        departure=departure_utc,
+        mode=req.mode,
+        routes=routes,
+        emitter=emitter,
+        ctx=ctx,
+        deadline=deadline,
+        trip_timezone=itinerary.timezone,
+    )
 
     overview_url = _overview_url([(v.lat, v.lng) for v in itinerary.stops])
-    warnings = _hours_warnings(timeline)
-
+    warnings = _hours_warnings(timeline) + _area_warnings(itinerary)
     failed = next(
         ((i, item) for i, item in enumerate(timeline) if isinstance(item, FailedLeg)), None
     )
-    if failed is not None:
-        failed_idx, failed_leg = failed
-        leg_index = sum(1 for item in timeline[:failed_idx] if isinstance(item, PlannedLeg))
-        return PartialPlan(
+    if failed is None:
+        return CompletePlan(
             operation_id=req.operation_id,
             input_revision=req.input_revision,
             city=itinerary.city.name,
             mode=req.mode,
             timezone=itinerary.timezone,
             timeline=timeline,
-            failed_at_leg_index=leg_index,
-            failure_reason=failed_leg.failure_reason,
             overview_map_url=overview_url,
             warnings=warnings,
         )
-
-    return CompletePlan(
+    failed_idx, failed_leg = failed
+    leg_index = sum(1 for item in timeline[:failed_idx] if isinstance(item, PlannedLeg))
+    return PartialPlan(
         operation_id=req.operation_id,
         input_revision=req.input_revision,
         city=itinerary.city.name,
         mode=req.mode,
         timezone=itinerary.timezone,
         timeline=timeline,
+        failed_at_leg_index=leg_index,
+        failure_reason=failed_leg.failure_reason,
         overview_map_url=overview_url,
         warnings=warnings,
     )
+
+
+def _validated_departure(req: ItineraryRequest) -> datetime:
+    try:
+        return resolve_departure(req.departure, mode=req.mode, now=_now())
+    except DepartureError as exc:
+        failure = describe_failure(exc)
+        assert failure is not None
+        _raise_http(failure)
+
+
+# ---------------------------------------------------------------------------
+# JSON endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.post("/plan", response_model=PlanResult)
+@limiter.shared_limit(PLAN_LIMITS, scope=_PLAN_V2_SCOPE, cost=request_cost)
+async def plan_v2(request: Request, req: ItineraryRequest) -> PlanResult:
+    """Verify selections, then plan sequentially; one JSON response."""
+    deadline = DeadlineScope()
+    ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
+    departure_utc = _validated_departure(req)
+    try:
+        return await execute_plan(
+            req,
+            departure_utc=departure_utc,
+            places=places_adapter(),
+            routes=routes_adapter(),
+            emitter=_NullEmitter(),
+            ctx=ctx,
+            deadline=deadline,
+        )
+    except Exception as exc:
+        failure = describe_failure(exc)
+        if failure is None:
+            raise
+        _raise_http(_with_instance_ids(failure, req))

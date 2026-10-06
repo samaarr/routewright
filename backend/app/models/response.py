@@ -39,6 +39,7 @@ class HoursDetail(BaseModel):
 
     closes_at: str | None = None  # e.g. "17:00" — for open/closes_during_visit/closes_soon
     opens_at: str | None = None  # e.g. "14:00" — for closed_on_arrival
+    opens_on: date | None = None  # local date of opens_at when not the arrival date
     hours_source: HoursSource | None = (
         None  # "weekly" for regularOpeningHours; "date_specific" for currentOpeningHours
     )
@@ -355,6 +356,17 @@ class CancelledOutcome(BaseModel):
     reason: str
 
 
+class ErrorDetails(BaseModel):
+    """Structured context for an error outcome. Never raw provider text."""
+
+    role: Literal["city", "stop"] | None = None
+    reason: str | None = None
+    place_id: str | None = None
+    instance_ids: list[str] | None = None
+    moved_place_id: str | None = None
+    retry_after_seconds: int | None = None
+
+
 class ErrorOutcome(BaseModel):
     """Terminal outcome for an unrecoverable error.
 
@@ -442,6 +454,62 @@ StreamEvent: TypeAlias = Annotated[
 
 
 # ---------------------------------------------------------------------------
+# City/place suggestion and selection responses (D34-D36, D44)
+# ---------------------------------------------------------------------------
+
+
+class SuggestionItem(BaseModel):
+    """One suggestion. Identifying text and the provider ID only."""
+
+    place_id: str
+    primary_text: str
+    secondary_text: str | None = None
+
+
+class SuggestionsResponse(BaseModel):
+    """``no_matches`` is a successful search with nothing to choose from."""
+
+    status: Literal["ok", "no_matches"]
+    suggestions: list[SuggestionItem] = Field(default_factory=list)
+
+
+class ViewportOut(BaseModel):
+    """Provider-suggested map area for a city. Not an administrative boundary."""
+
+    low_lat: float
+    low_lng: float
+    high_lat: float
+    high_lng: float
+
+
+class SelectedCity(BaseModel):
+    """A verified city selection: trip context for timezone, bias and area checks."""
+
+    place_id: str
+    name: str
+    secondary_text: str | None = None
+    lat: float
+    lng: float
+    timezone: str = Field(..., description="IANA zone resolved offline from coordinates.")
+    viewport: ViewportOut | None = Field(
+        default=None, description="Null when the provider supplied no usable viewport."
+    )
+
+
+class SelectedPlace(BaseModel):
+    """A verified stop selection (coordinates for map pin and area/timezone preview)."""
+
+    place_id: str
+    lat: float
+    lng: float
+    secondary_text: str | None = None
+    timezone: str | None = Field(
+        default=None, description="Null when no timezone can be resolved (planning blocks)."
+    )
+    source: Literal["provider", "cache"]
+
+
+# ---------------------------------------------------------------------------
 # Schema export root — used by scripts/export_schema.py only
 # ---------------------------------------------------------------------------
 
@@ -462,6 +530,10 @@ class ContractRoot(BaseModel):
     planned_leg: PlannedLeg | None = None
     failed_leg: FailedLeg | None = None
     unknown_stop: UnknownStop | None = None
+    suggestions_response: SuggestionsResponse | None = None
+    selected_city: SelectedCity | None = None
+    selected_place: SelectedPlace | None = None
+    error_details: ErrorDetails | None = None
     # Legacy v1 types (preserved for the existing /api/plan endpoint)
     plan: Plan | None = None
     optimise_response: OptimiseResponse | None = None

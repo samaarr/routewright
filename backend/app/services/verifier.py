@@ -13,14 +13,16 @@ routing calls and no further Places calls):
 Lookups are sequential rather than concurrent: the first failure identifies
 one specific selection deterministically and no further calls are spent.
 Submitted names/coordinates are display hints and are never used.
-If the city's place ID is also a stop, the stop-mask lookup (a superset of
-the city fields) is made once and shared.
+The city is always looked up with the city mask (it needs ``viewport`` for
+D44 area warnings, which the stop mask does not request), so a city that is
+also a stop costs one city lookup plus one stop lookup.
 """
 
 from dataclasses import dataclass
 
 from app.core.deadline import DeadlineScope
 from app.models.request import ItineraryRequest
+from app.services.area import Viewport
 from app.services.departure import DepartureTimezoneMismatchError
 from app.services.engine import OperationContext, PlacesAdapter, VerifiedStop
 from app.services.errors import PlaceRole, TimezoneConflictError, TimezoneUnresolvedError
@@ -36,6 +38,7 @@ class VerifiedCity:
     lat: float
     lng: float
     timezone: str
+    viewport: Viewport | None = None
 
 
 @dataclass(frozen=True)
@@ -64,22 +67,29 @@ async def verify_itinerary(
         DeadlineExceededError: the overall deadline expired, including while
             a lookup was in flight.
     """
-    details: dict[str, PlaceDetails] = {}
-    stop_place_ids = {s.selection.place_id for s in req.stops}
+    details: dict[tuple[str, PlaceRole], PlaceDetails] = {}
 
     async def lookup(place_id: str, role: PlaceRole) -> PlaceDetails:
-        if place_id not in details:
+        key = (place_id, role)
+        if key not in details:
             ctx.record_places_call()
-            details[place_id] = await deadline.bound(places.fetch_details(place_id, role=role))
-        return details[place_id]
+            details[key] = await deadline.bound(places.fetch_details(place_id, role=role))
+        return details[key]
 
-    # 1. City (stop mask if the same place is also a stop, so it is fetched once).
+    # 1. City.
     city_id = req.city.place_id
-    city_details = await lookup(city_id, "stop" if city_id in stop_place_ids else "city")
+    city_details = await lookup(city_id, "city")
     city_tz = resolve_timezone(city_details.lat, city_details.lng)
     if city_tz is None:
         raise TimezoneUnresolvedError(role="city", name=city_details.name)
-    city = VerifiedCity(city_id, city_details.name, city_details.lat, city_details.lng, city_tz)
+    city = VerifiedCity(
+        city_id,
+        city_details.name,
+        city_details.lat,
+        city_details.lng,
+        city_tz,
+        city_details.viewport,
+    )
 
     # 2. Departure zone must match before any stop lookups are spent.
     if req.departure.timezone != city_tz:

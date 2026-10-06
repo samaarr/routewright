@@ -25,15 +25,18 @@ Rules applied here:
   allowed. Periods are expanded to concrete local datetimes and merged when
   contiguous, so overnight and Saturday->Sunday periods need no special cases.
 
-Times are compared as wall-clock times in the trip timezone (venue hours are
-wall-clock). Across a DST transition this can be off by the transition offset
-for the affected hour; v1 accepts that.
+Venue hours are wall-clock times in the trip timezone. Each period boundary is
+converted to an absolute instant before comparison, so visits, "closes soon"
+thresholds and closing checks stay correct across clock changes. A boundary
+that falls in a repeated (fall-back) hour is taken as its first occurrence; a
+boundary inside a skipped (spring-forward) hour maps to the instant the clock
+jumps over it. Displayed times remain the venue's wall-clock times.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -270,23 +273,44 @@ def _hm(dt: datetime) -> str:
     return f"{dt.hour:02d}:{dt.minute:02d}"
 
 
+def _instant(wall: datetime, tz: ZoneInfo) -> datetime:
+    """Wall-clock local time → aware UTC instant (fold=0: first occurrence)."""
+    return wall.replace(tzinfo=tz, fold=0).astimezone(timezone.utc)
+
+
 def _classify(
-    intervals: list[_Interval], arrive: datetime, depart: datetime, base: HoursDetail
+    intervals: list[_Interval],
+    arrive_utc: datetime,
+    depart_utc: datetime,
+    tz: ZoneInfo,
+    base: HoursDetail,
 ) -> tuple[HoursStatus, HoursDetail]:
     merged = _merge(intervals)
-    active = next((iv for iv in merged if iv.open_at <= arrive < iv.close_at), None)
+    arrive_local_date = arrive_utc.astimezone(tz).date()
+    active = next(
+        (iv for iv in merged if _instant(iv.open_at, tz) <= arrive_utc < _instant(iv.close_at, tz)),
+        None,
+    )
     if active is None:
-        upcoming = [iv.open_at for iv in merged if iv.open_at > arrive]
-        opens_at = _hm(min(upcoming)) if upcoming else None
-        return "closed_on_arrival", base.model_copy(update={"opens_at": opens_at})
+        upcoming = [iv.open_at for iv in merged if _instant(iv.open_at, tz) > arrive_utc]
+        if not upcoming:
+            return "closed_on_arrival", base
+        nxt = min(upcoming)
+        return "closed_on_arrival", base.model_copy(
+            update={
+                "opens_at": _hm(nxt),
+                "opens_on": nxt.date() if nxt.date() != arrive_local_date else None,
+            }
+        )
     if active.close_truncated:
         # Real closing time lies beyond the data window: open for the visit,
         # but no closing time can be stated.
         return "open", base
+    close_utc = _instant(active.close_at, tz)
     detail = base.model_copy(update={"closes_at": _hm(active.close_at)})
-    if depart > active.close_at:
+    if depart_utc > close_utc:
         return "closes_during_visit", detail
-    if active.close_at - arrive <= timedelta(minutes=CLOSES_SOON_MINUTES):
+    if close_utc - arrive_utc <= timedelta(minutes=CLOSES_SOON_MINUTES):
         return "closes_soon", detail
     return "open", detail
 
@@ -305,7 +329,9 @@ def assess_hours(
     if hours is None:
         return _unknown("missing")
     tz = ZoneInfo(trip_timezone)
-    arrive = arrive_at.astimezone(tz).replace(tzinfo=None)
+    arrive_utc = arrive_at.astimezone(timezone.utc)
+    depart_utc = depart_at.astimezone(timezone.utc)
+    arrive = arrive_at.astimezone(tz).replace(tzinfo=None)  # local dates for coverage
     depart = depart_at.astimezone(tz).replace(tzinfo=None)
 
     ds = hours.date_specific
@@ -319,7 +345,7 @@ def assess_hours(
         if ds.always_open:
             return "open", base.model_copy(update={"always_open": True})
         intervals = [_Interval(p.open_at, p.close_at, p.close_truncated) for p in ds.periods]
-        return _classify(intervals, arrive, depart, base)
+        return _classify(intervals, arrive_utc, depart_utc, tz, base)
 
     wk = hours.weekly
     if wk is not None:
@@ -328,7 +354,7 @@ def assess_hours(
             return "open", base.model_copy(update={"always_open": True})
         first = arrive.date() - timedelta(days=1)  # a period may have opened yesterday
         last = depart.date() + timedelta(days=1)
-        return _classify(_weekly_intervals(wk, first, last), arrive, depart, base)
+        return _classify(_weekly_intervals(wk, first, last), arrive_utc, depart_utc, tz, base)
 
     if ds is not None:
         return _unknown("outside_coverage")

@@ -12,31 +12,38 @@ Verified against the official docs (2026-10-06):
 
 Billing (Place Details SKUs, per the field table in the docs):
     id, movedPlaceId                   → Essentials (IDs Only)
-    location, types                    → Essentials
+    location, types, viewport,
+    formattedAddress                   → Essentials
     displayName, primaryType,
     businessStatus                     → Pro
     regularOpeningHours,
     currentOpeningHours                → Enterprise
-A request is billed at the highest tier of any requested field, so every
-stop lookup is a **Place Details Enterprise** event because hours are
-required for D42/D43. City lookups request no hours and bill as Pro.
-NOTE: the legacy Text Search comment in geocoder.py claims requesting
-regularOpeningHours keeps v1 geocoding in the Pro tier; current docs list
-opening hours as Enterprise there too. That discrepancy is recorded in
-IMPLEMENTATION_PROGRESS.md and is not resolved by this module.
+A request is billed at the highest tier of any requested field. Masks per
+purpose (see DetailsPurpose):
+    stop_verification → Enterprise (hours are required for D42/D43)
+    city              → Pro (displayName); viewport adds no tier
+    stop_selection    → Essentials (id, location, formattedAddress)
 
-Details are request-scoped. Nothing here writes to the persistent cache.
+Autocomplete sessions: a Place Details call that carries the session token of
+the Autocomplete requests concludes the session (``sessionToken`` query
+parameter). It is still billed by its own field-mask SKU. See autocomplete.py
+for what a session does and does not save.
+
+Rich details are request-scoped. Only place ID + coordinates may be persisted,
+via geocache.put_coordinates (D38).
 """
 
 import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
 from app.core.config import settings
+from app.core.provider_accounting import ProviderCallKind
+from app.services.area import Viewport, parse_viewport
 from app.services.errors import (
     PlaceRole,
     PlaceVerificationError,
@@ -46,16 +53,33 @@ from app.services.errors import (
 
 PLACE_DETAILS_URL = "https://places.googleapis.com/v1/places/{place_id}"
 
+DetailsPurpose = Literal["stop_verification", "city", "stop_selection"]
+
 # Stop verification needs identity, location, type (stay defaults), relocation
 # status and both hours sources. No address, photos, ratings or reviews.
 STOP_FIELD_MASK = (
     "id,displayName,location,primaryType,types,businessStatus,movedPlaceId,"
     "regularOpeningHours,currentOpeningHours"
 )
-# City verification needs identity, name and location (timezone resolution).
-# The viewport for D44 outside-area warnings is not requested until that
-# warning is implemented.
-CITY_FIELD_MASK = "id,displayName,location"
+# City selection and verification: identity, name, address context, location
+# (offline timezone) and viewport (D44 outside-area warnings). Shared by both
+# so a selected city is verified with the same fields it was chosen with.
+CITY_FIELD_MASK = "id,displayName,formattedAddress,location,viewport"
+# Stop selection only needs coordinates (area warning, timezone preview, map
+# pin) and address context. The name shown is the suggestion's own text; the
+# provider name is confirmed at plan time by stop verification.
+STOP_SELECTION_FIELD_MASK = "id,location,formattedAddress"
+
+_MASKS: dict[DetailsPurpose, str] = {
+    "stop_verification": STOP_FIELD_MASK,
+    "city": CITY_FIELD_MASK,
+    "stop_selection": STOP_SELECTION_FIELD_MASK,
+}
+_KINDS: dict[DetailsPurpose, ProviderCallKind] = {
+    "stop_verification": "place_details_enterprise",
+    "city": "place_details_pro",
+    "stop_selection": "place_details_essentials",
+}
 
 # Google place IDs are URL-safe tokens. Rejecting anything else before the
 # call keeps arbitrary input out of the request path and costs no quota.
@@ -75,10 +99,38 @@ class PlaceDetails:
     regular_hours_raw: Any = None
     current_hours_raw: Any = None
     fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    formatted_address: str | None = None
+    viewport: Viewport | None = None
 
 
-def field_mask_for(role: PlaceRole) -> str:
-    return STOP_FIELD_MASK if role == "stop" else CITY_FIELD_MASK
+@dataclass(frozen=True)
+class SelectedLocation:
+    """Result of a stop-selection lookup (Essentials fields only)."""
+
+    place_id: str
+    lat: float
+    lng: float
+    formatted_address: str | None
+    fetched_at: datetime
+
+
+def field_mask_for(purpose: DetailsPurpose) -> str:
+    return _MASKS[purpose]
+
+
+def call_kind_for(purpose: DetailsPurpose) -> ProviderCallKind:
+    return _KINDS[purpose]
+
+
+def role_for(purpose: DetailsPurpose) -> PlaceRole:
+    return "city" if purpose == "city" else "stop"
+
+
+_SESSION_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
+def valid_session_token(token: str) -> bool:
+    return bool(_SESSION_TOKEN_RE.fullmatch(token))
 
 
 def validate_place_id(place_id: str, role: PlaceRole) -> None:
@@ -86,31 +138,27 @@ def validate_place_id(place_id: str, role: PlaceRole) -> None:
         raise PlaceVerificationError(place_id, reason="invalid_id", role=role)
 
 
-async def fetch_place_details(
+async def _get_details_json(
     place_id: str,
     *,
-    role: PlaceRole,
-    client: httpx.AsyncClient | None = None,
-) -> PlaceDetails:
-    """Issue one Place Details request. The caller handles budget/admission.
-
-    Raises:
-        PlaceVerificationError: the selection is confirmed invalid.
-        ProviderTemporaryError: network/provider failure; the place may be fine.
-        QuotaExceededError: provider-side quota (HTTP 429).
-    """
+    purpose: DetailsPurpose,
+    session_token: str | None,
+    client: httpx.AsyncClient | None,
+) -> Any:
+    role = role_for(purpose)
     validate_place_id(place_id, role)
     url = PLACE_DETAILS_URL.format(place_id=place_id)
     headers = {
         "X-Goog-Api-Key": settings.google_maps_api_key,
-        "X-Goog-FieldMask": field_mask_for(role),
+        "X-Goog-FieldMask": field_mask_for(purpose),
     }
+    params = {"sessionToken": session_token} if session_token else None
     try:
         if client is None:
             async with httpx.AsyncClient(timeout=10.0) as one_shot:
-                response = await one_shot.get(url, headers=headers)
+                response = await one_shot.get(url, headers=headers, params=params)
         else:
-            response = await client.get(url, headers=headers)
+            response = await client.get(url, headers=headers, params=params)
     except httpx.HTTPError as exc:
         raise ProviderTemporaryError("Place verification temporarily unavailable") from exc
 
@@ -126,10 +174,74 @@ async def fetch_place_details(
         raise ProviderTemporaryError("Place verification temporarily unavailable")
 
     try:
-        payload = response.json()
+        return response.json()
     except ValueError as exc:
         raise ProviderTemporaryError("Provider returned an unreadable response") from exc
-    return parse_place_details(payload, place_id, role)
+
+
+async def fetch_place_details(
+    place_id: str,
+    *,
+    purpose: DetailsPurpose,
+    session_token: str | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> PlaceDetails:
+    """Issue one verification Place Details request (stop_verification or city).
+
+    The caller handles budget/admission.
+
+    Raises:
+        PlaceVerificationError: the selection is confirmed invalid.
+        ProviderTemporaryError: network/provider failure; the place may be fine.
+        QuotaExceededError: provider-side quota (HTTP 429).
+    """
+    payload = await _get_details_json(
+        place_id, purpose=purpose, session_token=session_token, client=client
+    )
+    return parse_place_details(payload, place_id, role_for(purpose))
+
+
+async def fetch_selected_location(
+    place_id: str,
+    *,
+    session_token: str | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> SelectedLocation:
+    """Essentials lookup for a stop the user just selected (concludes a session)."""
+    payload = await _get_details_json(
+        place_id, purpose="stop_selection", session_token=session_token, client=client
+    )
+    if not isinstance(payload, dict):
+        raise ProviderTemporaryError("Provider returned an unreadable response")
+    if payload.get("id") != place_id:
+        raise PlaceVerificationError(place_id, reason="identity_changed", role="stop")
+    lat, lng = _location(payload, place_id, "stop")
+    address = payload.get("formattedAddress")
+    return SelectedLocation(
+        place_id=place_id,
+        lat=lat,
+        lng=lng,
+        formatted_address=address if isinstance(address, str) and address else None,
+        fetched_at=datetime.now(timezone.utc),
+    )
+
+
+def _location(payload: dict[str, Any], requested_id: str, role: PlaceRole) -> tuple[float, float]:
+    location = payload.get("location") or {}
+    try:
+        lat = float(location["latitude"])
+        lng = float(location["longitude"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PlaceVerificationError(requested_id, reason="no_location", role=role) from exc
+    if (
+        not math.isfinite(lat)
+        or not math.isfinite(lng)
+        or not -90 <= lat <= 90
+        or not -180 <= lng <= 180
+        or (lat == 0.0 and lng == 0.0)
+    ):
+        raise PlaceVerificationError(requested_id, reason="no_location", role=role)
+    return lat, lng
 
 
 def parse_place_details(payload: Any, requested_id: str, role: PlaceRole) -> PlaceDetails:
@@ -152,20 +264,8 @@ def parse_place_details(payload: Any, requested_id: str, role: PlaceRole) -> Pla
     if not isinstance(name, str) or not name.strip():
         raise PlaceVerificationError(requested_id, reason="incomplete_details", role=role)
 
-    location = payload.get("location") or {}
-    try:
-        lat = float(location["latitude"])
-        lng = float(location["longitude"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise PlaceVerificationError(requested_id, reason="no_location", role=role) from exc
-    if (
-        not math.isfinite(lat)
-        or not math.isfinite(lng)
-        or not -90 <= lat <= 90
-        or not -180 <= lng <= 180
-        or (lat == 0.0 and lng == 0.0)
-    ):
-        raise PlaceVerificationError(requested_id, reason="no_location", role=role)
+    lat, lng = _location(payload, requested_id, role)
+    address = payload.get("formattedAddress")
 
     primary = payload.get("primaryType")
     types = payload.get("types")
@@ -178,4 +278,6 @@ def parse_place_details(payload: Any, requested_id: str, role: PlaceRole) -> Pla
         types=[t for t in types if isinstance(t, str)] if isinstance(types, list) else [],
         regular_hours_raw=payload.get("regularOpeningHours"),
         current_hours_raw=payload.get("currentOpeningHours"),
+        formatted_address=address if isinstance(address, str) and address else None,
+        viewport=parse_viewport(payload.get("viewport")),
     )

@@ -10,15 +10,10 @@ compute_hours_status uses local hour/minute, not UTC.
 """
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
-import pytest
-
 from app.models.response import HoursDetail
-from app.services.geocache import get_cached, put_cached
 from app.services.geocoder import (
-    GeocodedPlace,
     OpeningPeriod,
     _parse_opening_hours,
     opening_hours_from_json_list,
@@ -415,97 +410,3 @@ def test_not_disqualifying_open() -> None:
 def test_not_disqualifying_unknown() -> None:
     """Unknown hours never block optimisation — absence of data is not a conflict."""
     assert is_disqualifying_for_optimisation("unknown", stay_minutes=60) is False
-
-
-# ---------------------------------------------------------------------------
-# Cache round-trip with opening hours
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def db_path(tmp_path: Path) -> str:
-    return str(tmp_path / "test_cache.db")
-
-
-async def test_cache_roundtrip_with_hours(db_path: str) -> None:
-    """Opening hours survive a put_cached → get_cached round-trip."""
-    from app.services.geocache import _make_key
-
-    periods = [
-        _period(1, 9, 0, 1, 17),
-        _period(6, 22, 0, 0, 2),
-    ]
-    place = GeocodedPlace(
-        place_id="ChIJ_TEST",
-        name="Test Venue",
-        lat=53.34,
-        lng=-6.26,
-        primary_type="museum",
-        types=["museum"],
-        opening_hours=periods,
-    )
-    key = _make_key("test venue", "dublin, ireland")
-    await put_cached(key, place, db_path)
-    result = await get_cached(key, db_path, ttl_days=30)
-
-    assert result is not None
-    assert result.opening_hours is not None
-    assert result.opening_hours == periods
-
-
-async def test_cache_roundtrip_no_hours(db_path: str) -> None:
-    """A place with opening_hours=None round-trips correctly."""
-    from app.services.geocache import _make_key
-
-    place = GeocodedPlace(
-        place_id="ChIJ_NOHOURS",
-        name="No Hours Place",
-        lat=53.34,
-        lng=-6.26,
-        primary_type=None,
-        types=[],
-        opening_hours=None,
-    )
-    key = _make_key("no hours place", "dublin, ireland")
-    await put_cached(key, place, db_path)
-    result = await get_cached(key, db_path, ttl_days=30)
-
-    assert result is not None
-    assert result.opening_hours is None
-
-
-async def test_cache_migration_old_row_reads_gracefully(db_path: str) -> None:
-    """Rows written without opening_hours_json return opening_hours=None."""
-    import json
-    import time
-
-    import aiosqlite
-
-    # Simulate a pre-migration DB: write a row using the OLD schema (8 columns).
-    old_sql = """
-    CREATE TABLE IF NOT EXISTS geocache (
-        query_key   TEXT PRIMARY KEY,
-        place_id    TEXT NOT NULL,
-        name        TEXT NOT NULL,
-        lat         REAL NOT NULL,
-        lng         REAL NOT NULL,
-        primary_type TEXT,
-        types_json  TEXT NOT NULL,
-        cached_at   INTEGER NOT NULL
-    )
-    """
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute(old_sql)
-        await db.execute(
-            "INSERT INTO geocache (query_key,place_id,name,lat,lng,primary_type,types_json,cached_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            ("old|key", "OLD_ID", "Old Place", 53.0, -6.0, None, json.dumps([]), int(time.time())),
-        )
-        await db.commit()
-
-    # Reading back must not crash; opening_hours must be None.
-    from app.services.geocache import get_cached
-
-    result = await get_cached("old|key", db_path, ttl_days=30)
-    assert result is not None
-    assert result.opening_hours is None

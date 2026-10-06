@@ -16,9 +16,15 @@ from urllib.parse import quote_plus
 
 from fastapi import HTTPException
 
-from app.core.provider_semaphore import consume_provider_budget, get_provider_semaphore
+from app.core.provider_semaphore import (
+    USAGE_CONTROL_UNAVAILABLE_DETAIL,
+    consume_provider_budget,
+    get_provider_semaphore,
+)
 from app.models.request import TransportMode
 from app.services import directions
+from app.services.area import Viewport
+from app.services.autocomplete import Suggestion, SuggestionKind, fetch_suggestions
 from app.services.engine import RoutingResult
 from app.services.errors import (
     NoRouteError,
@@ -26,15 +32,26 @@ from app.services.errors import (
     ProviderCapacityError,
     ProviderTemporaryError,
     QuotaExceededError,
+    UsageControlUnavailableError,
 )
-from app.services.place_details import PlaceDetails, fetch_place_details, validate_place_id
+from app.services.place_details import (
+    DetailsPurpose,
+    PlaceDetails,
+    SelectedLocation,
+    call_kind_for,
+    fetch_place_details,
+    fetch_selected_location,
+    validate_place_id,
+)
 
 
 def _admission_error(exc: HTTPException) -> Exception:
     """Map provider_semaphore's HTTP rejections onto engine error types."""
     if exc.status_code == 429:
         return QuotaExceededError("Daily provider budget exhausted")
-    return ProviderCapacityError("Provider capacity busy or usage control unavailable")
+    if exc.detail == USAGE_CONTROL_UNAVAILABLE_DETAIL:
+        return UsageControlUnavailableError("Usage control unavailable")
+    return ProviderCapacityError("Provider capacity busy")
 
 
 def _dir_url_coords(
@@ -101,12 +118,49 @@ class GooglePlacesAdapter:
     responsible for sharing lookups across duplicate place IDs (D37).
     """
 
-    async def fetch_details(self, place_id: str, *, role: PlaceRole) -> PlaceDetails:
+    async def fetch_details(
+        self, place_id: str, *, role: PlaceRole, session_token: str | None = None
+    ) -> PlaceDetails:
+        purpose: DetailsPurpose = "city" if role == "city" else "stop_verification"
         # Reject malformed IDs before admission so they cost no budget.
         validate_place_id(place_id, role)
         try:
             async with get_provider_semaphore():
-                await consume_provider_budget()
-                return await fetch_place_details(place_id, role=role)
+                await consume_provider_budget(call_kind_for(purpose))
+                return await fetch_place_details(
+                    place_id, purpose=purpose, session_token=session_token
+                )
+        except HTTPException as exc:
+            raise _admission_error(exc) from exc
+
+    async def fetch_selected_location(
+        self, place_id: str, *, session_token: str | None
+    ) -> SelectedLocation:
+        validate_place_id(place_id, "stop")
+        try:
+            async with get_provider_semaphore():
+                await consume_provider_budget(call_kind_for("stop_selection"))
+                return await fetch_selected_location(place_id, session_token=session_token)
+        except HTTPException as exc:
+            raise _admission_error(exc) from exc
+
+
+class GoogleSuggestionAdapter:
+    """Wraps Autocomplete (New) under shared admission + budget. No retries."""
+
+    async def suggest(
+        self,
+        query: str,
+        *,
+        kind: SuggestionKind,
+        session_token: str | None,
+        bias: Viewport | None,
+    ) -> list[Suggestion]:
+        try:
+            async with get_provider_semaphore():
+                await consume_provider_budget("autocomplete")
+                return await fetch_suggestions(
+                    query, kind=kind, session_token=session_token, bias=bias
+                )
         except HTTPException as exc:
             raise _admission_error(exc) from exc

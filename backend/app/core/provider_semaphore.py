@@ -9,6 +9,11 @@ from limits import RateLimitItemPerDay
 
 from app.core.config import settings
 from app.core.limiter import limiter
+from app.core.provider_accounting import ProviderCallKind, accounting
+
+CAPACITY_BUSY_DETAIL = "Provider capacity is busy"
+USAGE_CONTROL_UNAVAILABLE_DETAIL = "Usage control unavailable"
+BUDGET_EXHAUSTED_DETAIL = "Daily provider budget exhausted"
 
 _provider: asyncio.Semaphore | None = None
 _solver: asyncio.Semaphore | None = None
@@ -28,7 +33,7 @@ async def get_provider_semaphore() -> AsyncIterator[None]:
     try:
         await asyncio.wait_for(_provider.acquire(), timeout=settings.provider_wait_seconds)
     except TimeoutError as exc:
-        raise HTTPException(503, "Provider capacity is busy", headers={"Retry-After": "2"}) from exc
+        raise HTTPException(503, CAPACITY_BUSY_DETAIL, headers={"Retry-After": "2"}) from exc
     try:
         yield
     finally:
@@ -52,17 +57,21 @@ async def solver_slot() -> AsyncIterator[None]:
         _solver.release()
 
 
-async def consume_provider_budget() -> None:
-    """Count each outbound call, including failed calls, before sending it."""
+async def consume_provider_budget(kind: ProviderCallKind = "unclassified") -> None:
+    """Count each outbound call, including failed calls, before sending it.
+
+    ``kind`` labels the call for the central accounting seam (separate counts
+    for routing, details and suggestions). Every production call site passes
+    a kind; the default exists only for legacy tests.
+    """
     limit = RateLimitItemPerDay(settings.provider_calls_per_day)
     try:
         admitted = await asyncio.to_thread(limiter.limiter.hit, limit, "provider-global")
     except Exception as exc:
         raise HTTPException(
-            503, "Usage control unavailable", headers={"Retry-After": "60"}
+            503, USAGE_CONTROL_UNAVAILABLE_DETAIL, headers={"Retry-After": "60"}
         ) from exc
     if not admitted:
         # Conservatively wait a day; the provider budget cannot become a fabricated leg.
-        raise HTTPException(
-            429, "Daily provider budget exhausted", headers={"Retry-After": "86400"}
-        )
+        raise HTTPException(429, BUDGET_EXHAUSTED_DETAIL, headers={"Retry-After": "86400"})
+    accounting.record(kind)

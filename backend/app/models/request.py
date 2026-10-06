@@ -345,3 +345,75 @@ class RefreshRequest(BaseModel):
         ...,
         description="ISO 8601 UTC datetime of this leg's planned departure (D21).",
     )
+
+
+# ---------------------------------------------------------------------------
+# City/place suggestion and selection requests (D34-D36)
+# ---------------------------------------------------------------------------
+
+_SESSION_TOKEN_PATTERN = r"^[A-Za-z0-9_-]{8,64}$"
+_PROVIDER_ID_PATTERN = r"^[A-Za-z0-9_-]{1,300}$"
+
+
+class SuggestionQuery(BaseModel):
+    """A search for city or place suggestions.
+
+    ``query`` is whitespace-normalised; any nonblank text is accepted so the
+    explicit Search action can look up 1-character names. The 2-character
+    minimum applies only to automatic (typing-triggered) searches client-side.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(..., max_length=200)
+    session_token: str | None = Field(default=None, pattern=_SESSION_TOKEN_PATTERN)
+
+    @field_validator("query", mode="before")
+    @classmethod
+    def normalise_query(cls, v: object) -> str:
+        if not isinstance(v, str):
+            raise ValueError("must be a string")
+        if any(ord(c) < 32 for c in v):
+            raise ValueError("must not contain control characters")
+        normalised = " ".join(v.split())
+        if not normalised:
+            raise ValueError("must not be blank")
+        if len(normalised) > 120:
+            raise ValueError("must be at most 120 characters")
+        return normalised
+
+
+class ViewportInput(BaseModel):
+    """A viewport echoed back by the client (from a city selection) for search bias.
+
+    Only used to bias suggestions; never trusted for verification or warnings
+    in plan results, which use the server-verified city viewport.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    low_lat: float = Field(..., ge=-90.0, le=90.0)
+    low_lng: float = Field(..., ge=-180.0, le=180.0)
+    high_lat: float = Field(..., ge=-90.0, le=90.0)
+    high_lng: float = Field(..., ge=-180.0, le=180.0)
+
+    @model_validator(mode="after")
+    def ordered_latitudes(self) -> Self:
+        if self.low_lat > self.high_lat:
+            raise ValueError("low_lat must not exceed high_lat")
+        return self
+
+
+class PlaceSuggestionQuery(SuggestionQuery):
+    """Place search guided by the selected city's viewport (bias, not restriction)."""
+
+    city_viewport: ViewportInput | None = None
+
+
+class SelectionRequest(BaseModel):
+    """The user explicitly chose a suggestion; look it up to conclude the session."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    place_id: str = Field(..., pattern=_PROVIDER_ID_PATTERN)
+    session_token: str | None = Field(default=None, pattern=_SESSION_TOKEN_PATTERN)

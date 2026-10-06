@@ -70,6 +70,10 @@ class ProviderCapacityError(Exception):
     """
 
 
+class UsageControlUnavailableError(ProviderCapacityError):
+    """The shared usage counter store could not be reached (fail-closed)."""
+
+
 class TimezoneConflictError(Exception):
     """A stop's coordinates resolve to a different timezone than the trip timezone.
 

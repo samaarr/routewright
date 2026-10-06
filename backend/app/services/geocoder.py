@@ -118,7 +118,7 @@ async def geocode(
         "X-Goog-FieldMask": _FIELD_MASK,
     }
 
-    await consume_provider_budget()
+    await consume_provider_budget("text_search_enterprise")
     try:
         if client is None:
             async with httpx.AsyncClient(timeout=10.0) as one_shot:

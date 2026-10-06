@@ -308,11 +308,14 @@ def test_duplicate_visits_share_lookup_keep_distinct_stays(
     assert stays == {"a": 0, "b": 20, "c": 60, "d": 0}
 
 
-def test_city_also_a_stop_is_fetched_once(fakes: tuple[FakePlaces, FakeRoutes]) -> None:
+def test_city_also_a_stop_uses_city_and_stop_masks(fakes: tuple[FakePlaces, FakeRoutes]) -> None:
+    """The city lookup needs viewport (not in the stop mask), so it is not shared."""
     places, _ = fakes
-    resp = _post(_payload([_stop("a", "trinity"), _stop("b", "pub")], city="trinity"))
+    resp = _post(
+        _payload([_stop("a", "trinity"), _stop("b", "pub"), _stop("c", "trinity")], city="trinity")
+    )
     assert resp.status_code == 200, resp.json()
-    assert places.calls == [("trinity", "stop"), ("pub", "stop")]
+    assert places.calls == [("trinity", "city"), ("trinity", "stop"), ("pub", "stop")]
 
 
 def test_duplicate_instance_ids_rejected(fakes: tuple[FakePlaces, FakeRoutes]) -> None:

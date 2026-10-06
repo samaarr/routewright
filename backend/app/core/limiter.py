@@ -52,4 +52,9 @@ PLAN_LIMITS = (
     f"{settings.max_requests_per_ip_per_day}/day;{settings.max_requests_per_ip_per_minute}/minute"
 )
 REFRESH_LIMITS = PLAN_LIMITS
+# D36: one combined per-IP allowance for city and place suggestion searches,
+# including manual Search. Selection lookups use the same bucket until their
+# own limits are specified (open decision, see IMPLEMENTATION_PROGRESS.md).
+SELECTION_SEARCH_LIMITS = "30/minute;100/day"
+SELECTION_SEARCH_SCOPE = "selection-search"
 OPTIMISE_LIMITS = PLAN_LIMITS

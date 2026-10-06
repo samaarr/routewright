@@ -108,6 +108,92 @@
       "title": "CompletePlan",
       "type": "object"
     },
+    "ErrorDetails": {
+      "description": "Structured context for an error outcome. Never raw provider text.",
+      "properties": {
+        "role": {
+          "anyOf": [
+            {
+              "enum": [
+                "city",
+                "stop"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "place_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Place Id"
+        },
+        "instance_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instance Ids"
+        },
+        "moved_place_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Moved Place Id"
+        },
+        "retry_after_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry After Seconds"
+        }
+      },
+      "title": "ErrorDetails",
+      "type": "object"
+    },
     "ErrorOutcome": {
       "description": "Terminal outcome for an unrecoverable error.\n\nNever exposes raw provider error text \u2014 only a structured code and a\nsafe user-facing message.",
       "properties": {
@@ -263,6 +349,19 @@
           ],
           "default": null,
           "title": "Opens At"
+        },
+        "opens_on": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Opens On"
         },
         "hours_source": {
           "anyOf": [
@@ -1120,6 +1219,123 @@
       "title": "RefreshOutcome",
       "type": "object"
     },
+    "SelectedCity": {
+      "description": "A verified city selection: trip context for timezone, bias and area checks.",
+      "properties": {
+        "place_id": {
+          "title": "Place Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "secondary_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Secondary Text"
+        },
+        "lat": {
+          "title": "Lat",
+          "type": "number"
+        },
+        "lng": {
+          "title": "Lng",
+          "type": "number"
+        },
+        "timezone": {
+          "description": "IANA zone resolved offline from coordinates.",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "viewport": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ViewportOut"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Null when the provider supplied no usable viewport."
+        }
+      },
+      "required": [
+        "place_id",
+        "name",
+        "lat",
+        "lng",
+        "timezone"
+      ],
+      "title": "SelectedCity",
+      "type": "object"
+    },
+    "SelectedPlace": {
+      "description": "A verified stop selection (coordinates for map pin and area/timezone preview).",
+      "properties": {
+        "place_id": {
+          "title": "Place Id",
+          "type": "string"
+        },
+        "lat": {
+          "title": "Lat",
+          "type": "number"
+        },
+        "lng": {
+          "title": "Lng",
+          "type": "number"
+        },
+        "secondary_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Secondary Text"
+        },
+        "timezone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Null when no timezone can be resolved (planning blocks).",
+          "title": "Timezone"
+        },
+        "source": {
+          "enum": [
+            "provider",
+            "cache"
+          ],
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "place_id",
+        "lat",
+        "lng",
+        "source"
+      ],
+      "title": "SelectedPlace",
+      "type": "object"
+    },
     "StopItem": {
       "description": "A scheduled stop on the timeline.",
       "properties": {
@@ -1261,6 +1477,62 @@
       "title": "StopReadyEvent",
       "type": "object"
     },
+    "SuggestionItem": {
+      "description": "One suggestion. Identifying text and the provider ID only.",
+      "properties": {
+        "place_id": {
+          "title": "Place Id",
+          "type": "string"
+        },
+        "primary_text": {
+          "title": "Primary Text",
+          "type": "string"
+        },
+        "secondary_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Secondary Text"
+        }
+      },
+      "required": [
+        "place_id",
+        "primary_text"
+      ],
+      "title": "SuggestionItem",
+      "type": "object"
+    },
+    "SuggestionsResponse": {
+      "description": "``no_matches`` is a successful search with nothing to choose from.",
+      "properties": {
+        "status": {
+          "enum": [
+            "ok",
+            "no_matches"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "suggestions": {
+          "items": {
+            "$ref": "#/$defs/SuggestionItem"
+          },
+          "title": "Suggestions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "SuggestionsResponse",
+      "type": "object"
+    },
     "TerminalEvent": {
       "description": "Final event in a stream \u2014 carries the complete operation outcome.",
       "properties": {
@@ -1341,6 +1613,35 @@
         "name"
       ],
       "title": "UnknownStop",
+      "type": "object"
+    },
+    "ViewportOut": {
+      "description": "Provider-suggested map area for a city. Not an administrative boundary.",
+      "properties": {
+        "low_lat": {
+          "title": "Low Lat",
+          "type": "number"
+        },
+        "low_lng": {
+          "title": "Low Lng",
+          "type": "number"
+        },
+        "high_lat": {
+          "title": "High Lat",
+          "type": "number"
+        },
+        "high_lng": {
+          "title": "High Lng",
+          "type": "number"
+        }
+      },
+      "required": [
+        "low_lat",
+        "low_lng",
+        "high_lat",
+        "high_lng"
+      ],
+      "title": "ViewportOut",
       "type": "object"
     },
     "Warning": {
@@ -1545,6 +1846,50 @@
       "anyOf": [
         {
           "$ref": "#/$defs/UnknownStop"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "suggestions_response": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SuggestionsResponse"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "selected_city": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SelectedCity"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "selected_place": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SelectedPlace"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "error_details": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErrorDetails"
         },
         {
           "type": "null"

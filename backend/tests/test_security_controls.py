@@ -191,27 +191,23 @@ def test_budget_failure_is_not_a_fabricated_route(client, mock_geocode, monkeypa
 @pytest.mark.asyncio
 async def test_cache_cleanup_wired_to_startup(tmp_path, monkeypatch):
     import sqlite3
+    import time
 
     from fastapi.testclient import TestClient
 
     from app.main import app
-    from app.services.geocache import _make_key, put_cached
-    from app.services.geocoder import GeocodedPlace
+    from app.services.geocache import put_coordinates
 
     path = tmp_path / "places.db"
-    place = GeocodedPlace(
-        place_id="test", name="Public place", lat=53, lng=-6, primary_type=None, types=[]
-    )
-    await put_cached(_make_key("PRIVATE_SEARCH", "Dublin"), place, str(path))
-    with sqlite3.connect(path) as db:
-        db.execute("UPDATE geocache SET cached_at = 1")
+    await put_coordinates("ChIJexpired", 53.0, -6.0, str(path), 30, fetched_at=1)
+    await put_coordinates("ChIJfresh", 53.0, -6.0, str(path), 30, fetched_at=time.time())
     monkeypatch.setattr(settings, "cache_db_path", str(path))
     with TestClient(app) as client:
         assert client.get("/healthz").status_code == 200
     with sqlite3.connect(path) as db:
-        assert db.execute("SELECT COUNT(*) FROM geocache").fetchone()[0] == 0
+        ids = [r[0] for r in db.execute("SELECT place_id FROM place_coordinates")]
+    assert ids == ["ChIJfresh"]
     assert path.stat().st_mode & 0o777 == 0o600
-    assert "PRIVATE_SEARCH" not in _make_key("PRIVATE_SEARCH", "Dublin")
 
 
 @pytest.mark.asyncio
