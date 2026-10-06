@@ -141,7 +141,7 @@ Recommended per Google's API security best practices (VERIFIED docs):
 
 | ID | Decision | Options | Recommendation |
 |----|----------|---------|----------------|
-| D-1 | **Client identity on Railway** (blocker for public use) | (a) small code change: when a setting such as `CLIENT_IP_HEADER=x-real-ip` is set, use Railway's `X-Real-IP` (documented header; overwrite guarantee is from Railway staff, not a formal contract); (b) set `TRUSTED_PROXY_IPS` to an observed proxy range (unpublished, can change — fragile); (c) leave empty and accept one shared bucket during a closed test | (c) for the live test only; (a) before any public announcement, as a separate approved change with tests |
+| D-1 | **Client identity on Railway** (blocker for public use) | (a) small code change: when a setting such as `CLIENT_IP_HEADER=x-real-ip` is set, use Railway's `X-Real-IP` (documented header; overwrite guarantee is from Railway staff, not a formal contract); (b) set `TRUSTED_PROXY_IPS` to an observed proxy range (unpublished, can change — fragile); (c) leave empty and accept one shared bucket during a closed test | (c) for the live test only; before any public announcement, the conditional `X-Real-IP` design in §5a (not blind trust) |
 | D-2 | Cache storage | (a) **no volume**: ephemeral cache inside the container (lost on redeploy; keeps non-root, no backups/encryption question); (b) volume + `RAILWAY_RUN_UID=0` (runs as root) | (a); update SECURITY.md "encrypted volume" wording accordingly |
 | D-3 | Redis transport | `redis://` over Railway private networking (Wireguard) vs requiring `rediss://` | accept `redis://` on the private network; never expose Redis publicly |
 | D-4 | Server-key application restriction | Railway Pro static IPs vs Hobby with API restriction + quotas only | owner's cost/risk call; document the choice |
@@ -154,6 +154,111 @@ Recommended per Google's API security best practices (VERIFIED docs):
 Monthly free-tier enforcement stays deferred: **the deployment may be used for
 a closed live test only; a public launch claiming free-tier safety is
 blocked** until enforcement exists.
+
+---
+
+## 5a. D-1 proposal — Railway client identity (NOT IMPLEMENTED)
+
+Researched 2026-10-06. Awaiting approval; no code written.
+
+### What Railway officially documents
+- The edge adds `X-Real-IP` "for identifying client's remote IP", plus
+  `X-Forwarded-Proto` (always `https`), `X-Forwarded-Host`,
+  `X-Railway-Edge`, `X-Railway-Request-Id`, `X-Request-Start`
+  ([Specs & limits](https://docs.railway.com/networking/public-networking/specs-and-limits)).
+- The edge "terminates TLS, adds headers, and looks up routing information",
+  then forwards over Railway's internal network
+  ([Edge networking](https://docs.railway.com/networking/edge-networking)).
+- A TCP proxy can expose a service's port to the internet
+  ([TCP proxy](https://docs.railway.com/networking/tcp-proxy)); when one is
+  configured Railway injects `RAILWAY_TCP_PROXY_DOMAIN`/`_PORT`
+  ([Variables](https://docs.railway.com/reference/variables)).
+- Private networking lets other services in the same project/environment
+  reach the service directly over `*.railway.internal`; "any valid IPv6 or
+  IPv4 traffic is allowed"
+  ([Private networking](https://docs.railway.com/networking/private-networking/how-it-works)).
+
+### What the official docs do NOT say
+- That a client-supplied `X-Real-IP` is overwritten or stripped.
+- Anything about `X-Forwarded-For`.
+- That a service cannot be reached except through the edge.
+- Which source address/range the container sees for edge connections.
+
+Only Railway **staff forum answers** cover these: `X-Real-IP` is "always set
+by our proxy", "we will always overwrite it", and "apps behind our HTTP proxy
+cannot be accessed directly" (2026-05-06); proxy IPs are not published. A
+2024 thread records that clients *could* set `X-Real-IP` until Railway fixed
+it — i.e. this guarantee has broken before.
+
+### Trust boundary
+```
+internet client ──TLS──► Railway edge (sets X-Real-IP) ──internal──► backend
+                                                         ▲
+   other services in the same project (private network) ┘  can send anything
+   TCP proxy on the backend (if ever enabled)            ┘  bypasses the edge
+```
+Trusted: Railway's HTTP edge, and only for the `X-Real-IP` value it writes.
+Not trusted: every request header from the client, `X-Forwarded-For`, any
+connection that did not come through the HTTP edge. Inside the boundary by
+necessity: Railway itself and anyone who can configure the project.
+
+**Is the backend directly reachable?** Only through (1) the HTTP edge for a
+generated/custom domain, (2) a TCP proxy, if one is created, or (3) the
+private network from other services in the same project. (2) and (3) bypass
+the edge, so a forged `X-Real-IP` would arrive unchanged. The proposal closes
+(2) by refusing to start and (3) by keeping the project to backend + Redis.
+
+**How forged headers are prevented:** by Railway overwriting `X-Real-IP` at
+the edge (staff statement, not documented) — the app cannot prove this per
+request. The design therefore (a) only accepts the header under conditions
+that hold for edge traffic, (b) fails toward *less* trust (shared bucket)
+when anything is off, (c) re-verifies the overwrite after every deploy, and
+(d) keeps the global provider budget as the cost backstop whatever identity
+is derived.
+
+### Proposed implementation (small, reviewable)
+1. New setting `CLIENT_IP_SOURCE` = `peer` (default, current behaviour) |
+   `railway`. `railway` is mutually exclusive with `TRUSTED_PROXY_IPS`.
+2. Startup refuses `railway` unless `RAILWAY_ENVIRONMENT_ID` is present
+   (actually running on Railway) and **refuses if `RAILWAY_TCP_PROXY_DOMAIN`
+   is set** (an edge bypass exists). Read through `settings`, not
+   `os.environ`.
+3. Per request in `railway` mode, use `X-Real-IP` only if all hold:
+   - exactly one `X-Real-IP` header, parsing as one IP address (no list,
+     port or whitespace tricks; IPv4-mapped IPv6 normalised);
+   - the address is globally routable (not private, loopback, link-local,
+     CGNAT, reserved, unspecified) — a real internet client;
+   - Railway's edge markers `X-Railway-Edge` and `X-Railway-Request-Id` are
+     present (consistency check against non-edge traffic; forgeable, so not
+     relied on alone);
+   - the TCP peer is **not** a globally routable address (edge traffic
+     arrives from Railway's internal network; a public peer would indicate
+     direct exposure).
+   Otherwise the identity is the TCP peer (all such requests share one
+   bucket — stricter, never looser). `X-Forwarded-For` is ignored entirely.
+4. Aggregate metric (no addresses): `client_ip_source` =
+   `header` | `fallback_missing` | `fallback_invalid` | `fallback_peer_public`,
+   counted per operation line, so a silent change at Railway (e.g. the header
+   disappearing) is visible without logging IPs.
+5. Tests: forged/duplicate/list/private/IPv6/mapped headers, missing edge
+   markers, public peer, TCP-proxy startup refusal, mutual exclusion with
+   `TRUSTED_PROXY_IPS`, unchanged `peer` mode, and limiter buckets per
+   identity through the real limiter.
+
+### Deployment controls and verification (added to the checklist)
+- No TCP proxy on the backend; project contains only backend + Redis; no
+  third-party CDN/proxy in front (it would make `X-Real-IP` the CDN's IP).
+- After every deploy: from one client send forged `X-Real-IP` and
+  `X-Forwarded-For` values → still the same bucket as without them; from two
+  networks → separate buckets; metrics show `client_ip_source=header` for
+  normal traffic.
+- Residual risk: the overwrite guarantee is not contractual. If any check
+  fails, switch `CLIENT_IP_SOURCE=peer` (shared bucket; safe for cost).
+
+### Open sub-decision
+IPv6 clients can rotate addresses within their /64; per-address buckets are
+easy to evade. Option: key IPv6 identities by /64 (changes identity
+granularity, not limit values). Not included unless approved.
 
 ---
 
