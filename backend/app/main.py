@@ -7,7 +7,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from ipaddress import ip_network
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -27,6 +27,25 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("routewright")
 
 
+# Query options redis-py accepts that would weaken certificate verification.
+_WEAK_TLS_OPTIONS = {
+    "ssl_cert_reqs": {"none", "optional", "cert_none", "cert_optional", "0", "1"},
+    "ssl_check_hostname": {"false", "0", "no", "off"},
+}
+
+
+def _require_verified_tls(uri: str) -> None:
+    """Production Redis must use TLS with certificate and hostname checks (approved
+    2026-10-06; no plaintext exception). Messages never include the URI, which
+    carries the Redis password."""
+    parsed = urlsplit(uri)
+    if parsed.scheme != "rediss":
+        raise RuntimeError("Production Redis must use TLS (rediss://)")
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        if value.strip().lower() in _WEAK_TLS_OPTIONS.get(key.lower(), set()):
+            raise RuntimeError("Production Redis TLS must verify the certificate and hostname")
+
+
 def validate_production() -> None:
     for value in settings.trusted_proxy_ips.split(","):
         if value.strip():
@@ -41,6 +60,7 @@ def validate_production() -> None:
         raise RuntimeError("GOOGLE_MAPS_API_KEY is required")
     if not settings.rate_limit_storage_uri.startswith(("redis://", "rediss://")):
         raise RuntimeError("Production requires shared Redis usage controls")
+    _require_verified_tls(settings.rate_limit_storage_uri)
     for origin in settings.cors_origins:
         parsed = urlsplit(origin)
         if (

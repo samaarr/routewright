@@ -247,3 +247,45 @@ async def test_budget_blocks_second_actual_outbound_call(monkeypatch):
             await fetch_leg(**args)
         assert error.value.status_code == 429
     assert len(requests) == 1
+
+
+def _production(monkeypatch, storage_uri):
+    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "google_maps_api_key", "test-placeholder")
+    monkeypatch.setattr(settings, "allowed_origins", "https://app.example")
+    monkeypatch.setattr(settings, "rate_limit_storage_uri", storage_uri)
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "redis://default:PRIVATE_PASSWORD@redis.example:6379/0",
+        "rediss://default:PRIVATE_PASSWORD@redis.example:6379/0?ssl_cert_reqs=none",
+        "rediss://default:PRIVATE_PASSWORD@redis.example:6379/0?ssl_cert_reqs=CERT_NONE",
+        "rediss://default:PRIVATE_PASSWORD@redis.example:6379/0?ssl_check_hostname=false",
+    ],
+)
+def test_production_requires_verified_redis_tls(monkeypatch, uri):
+    _production(monkeypatch, uri)
+    with pytest.raises(RuntimeError, match="TLS") as error:
+        validate_production()
+    assert "PRIVATE_PASSWORD" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "rediss://default:pw@redis.example:6379/0",
+        "rediss://default:pw@redis.example:6379/0?ssl_cert_reqs=required",
+    ],
+)
+def test_production_accepts_verified_redis_tls(monkeypatch, uri):
+    _production(monkeypatch, uri)
+    validate_production()
+
+
+def test_non_production_may_use_local_redis_or_memory(monkeypatch):
+    """Development, CI and the shared-store tests keep plain local Redis."""
+    monkeypatch.setattr(settings, "app_env", "development")
+    monkeypatch.setattr(settings, "rate_limit_storage_uri", "redis://127.0.0.1:6390/15")
+    validate_production()
