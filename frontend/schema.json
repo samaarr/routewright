@@ -1228,37 +1228,36 @@
       "title": "PlannedLeg",
       "type": "object"
     },
-    "RefreshOutcome": {
-      "description": "Terminal outcome for a single-leg refresh (D21).",
+    "RefreshComplete": {
+      "description": "Every leg from k onward was routed.",
       "properties": {
-        "outcome_type": {
-          "const": "refresh",
-          "default": "refresh",
-          "title": "Outcome Type",
+        "operation_id": {
+          "title": "Operation Id",
           "type": "string"
         },
-        "leg": {
-          "discriminator": {
-            "mapping": {
-              "failed_leg": "#/$defs/FailedLeg",
-              "leg": "#/$defs/PlannedLeg"
-            },
-            "propertyName": "item_type"
-          },
-          "oneOf": [
-            {
-              "$ref": "#/$defs/PlannedLeg"
-            },
-            {
-              "$ref": "#/$defs/FailedLeg"
-            }
-          ],
-          "title": "Leg"
+        "input_revision": {
+          "title": "Input Revision",
+          "type": "integer"
         },
-        "subsequent_stops": {
+        "leg_index": {
+          "title": "Leg Index",
+          "type": "integer"
+        },
+        "planned_departure": {
+          "format": "date-time",
+          "title": "Planned Departure",
+          "type": "string"
+        },
+        "timezone": {
+          "title": "Timezone",
+          "type": "string"
+        },
+        "suffix": {
           "items": {
             "discriminator": {
               "mapping": {
+                "failed_leg": "#/$defs/FailedLeg",
+                "leg": "#/$defs/PlannedLeg",
                 "stop": "#/$defs/KnownStop",
                 "unknown_stop": "#/$defs/UnknownStop"
               },
@@ -1269,18 +1268,175 @@
                 "$ref": "#/$defs/KnownStop"
               },
               {
+                "$ref": "#/$defs/PlannedLeg"
+              },
+              {
+                "$ref": "#/$defs/FailedLeg"
+              },
+              {
                 "$ref": "#/$defs/UnknownStop"
               }
             ]
           },
-          "title": "Subsequent Stops",
+          "title": "Suffix",
           "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "title": "Warnings",
+          "type": "array"
+        },
+        "result_type": {
+          "const": "refresh_complete",
+          "default": "refresh_complete",
+          "title": "Result Type",
+          "type": "string"
         }
       },
       "required": [
-        "leg"
+        "operation_id",
+        "input_revision",
+        "leg_index",
+        "planned_departure",
+        "timezone",
+        "suffix"
+      ],
+      "title": "RefreshComplete",
+      "type": "object"
+    },
+    "RefreshOutcome": {
+      "description": "Terminal outcome for a suffix refresh (D21).",
+      "properties": {
+        "outcome_type": {
+          "const": "refresh",
+          "default": "refresh",
+          "title": "Outcome Type",
+          "type": "string"
+        },
+        "result": {
+          "discriminator": {
+            "mapping": {
+              "refresh_complete": "#/$defs/RefreshComplete",
+              "refresh_partial": "#/$defs/RefreshPartial"
+            },
+            "propertyName": "result_type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/RefreshComplete"
+            },
+            {
+              "$ref": "#/$defs/RefreshPartial"
+            }
+          ],
+          "title": "Result"
+        }
+      },
+      "required": [
+        "result"
       ],
       "title": "RefreshOutcome",
+      "type": "object"
+    },
+    "RefreshPartial": {
+      "description": "A leg at or after k failed: routed legs before it are kept; later times\nare unknown (UnknownStop). No earlier/stale downstream times are reused.",
+      "properties": {
+        "operation_id": {
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "input_revision": {
+          "title": "Input Revision",
+          "type": "integer"
+        },
+        "leg_index": {
+          "title": "Leg Index",
+          "type": "integer"
+        },
+        "planned_departure": {
+          "format": "date-time",
+          "title": "Planned Departure",
+          "type": "string"
+        },
+        "timezone": {
+          "title": "Timezone",
+          "type": "string"
+        },
+        "suffix": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "failed_leg": "#/$defs/FailedLeg",
+                "leg": "#/$defs/PlannedLeg",
+                "stop": "#/$defs/KnownStop",
+                "unknown_stop": "#/$defs/UnknownStop"
+              },
+              "propertyName": "item_type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/KnownStop"
+              },
+              {
+                "$ref": "#/$defs/PlannedLeg"
+              },
+              {
+                "$ref": "#/$defs/FailedLeg"
+              },
+              {
+                "$ref": "#/$defs/UnknownStop"
+              }
+            ]
+          },
+          "title": "Suffix",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "title": "Warnings",
+          "type": "array"
+        },
+        "result_type": {
+          "const": "refresh_partial",
+          "default": "refresh_partial",
+          "title": "Result Type",
+          "type": "string"
+        },
+        "failed_at_leg_index": {
+          "description": "Global 0-based index of the failed leg.",
+          "title": "Failed At Leg Index",
+          "type": "integer"
+        },
+        "failure_reason": {
+          "enum": [
+            "no_route",
+            "provider_temporary",
+            "quota_exceeded",
+            "provider_capacity",
+            "place_invalid",
+            "place_temporary",
+            "deadline_exceeded",
+            "cancelled"
+          ],
+          "title": "Failure Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "input_revision",
+        "leg_index",
+        "planned_departure",
+        "timezone",
+        "suffix",
+        "failed_at_leg_index",
+        "failure_reason"
+      ],
+      "title": "RefreshPartial",
       "type": "object"
     },
     "SelectedCity": {
@@ -1654,7 +1810,7 @@
       "type": "object"
     },
     "TimeoutOutcome": {
-      "description": "Terminal outcome when the 60-second operation deadline expired.\n\n``partial`` carries the valid prefix when the deadline expired during\nrouting; it is null when it expired during verification (no routing).",
+      "description": "Terminal outcome when the 60-second operation deadline expired.\n\n``partial`` carries the valid portion when the deadline expired during\nrouting (a PartialPlan for planning, a RefreshPartial for refresh); it is\nnull when it expired during verification (no routing).",
       "properties": {
         "outcome_type": {
           "const": "timeout",
@@ -1677,13 +1833,28 @@
         "partial": {
           "anyOf": [
             {
-              "$ref": "#/$defs/PartialPlan"
+              "discriminator": {
+                "mapping": {
+                  "partial": "#/$defs/PartialPlan",
+                  "refresh_partial": "#/$defs/RefreshPartial"
+                },
+                "propertyName": "result_type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/PartialPlan"
+                },
+                {
+                  "$ref": "#/$defs/RefreshPartial"
+                }
+              ]
             },
             {
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "title": "Partial"
         }
       },
       "required": [
@@ -1840,6 +2011,32 @@
       ],
       "default": null,
       "title": "Plan Result"
+    },
+    "refresh_result": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "refresh_complete": "#/$defs/RefreshComplete",
+              "refresh_partial": "#/$defs/RefreshPartial"
+            },
+            "propertyName": "result_type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/RefreshComplete"
+            },
+            {
+              "$ref": "#/$defs/RefreshPartial"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Refresh Result"
     },
     "stream_event": {
       "anyOf": [

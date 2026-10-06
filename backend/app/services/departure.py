@@ -10,9 +10,10 @@ Clock-change handling:
 - ``occurrence`` supplied for an ordinary, unambiguous time is rejected as a
   stale or invalid client claim rather than silently ignored.
 
-Range: the same window as v1 /api/plan — not more than 7 days in the past or
-100 days in the future; walking/driving must start in the future (the Routes
-API rejects past departure times for those modes).
+Range: the Routes API's documented window — not more than 7 days in the past
+or 100 days in the future; walking/driving must start in the future (past
+departure times are accepted only for transit). The same check applies to a
+refresh's planned departure (``unsupported_departure_reason``).
 
 All failures raise DepartureError subclasses, mapped by the router to 422.
 """
@@ -66,8 +67,14 @@ def resolve_departure(
     *,
     mode: TransportMode = "transit",
     now: datetime | None = None,
+    check_range: bool = True,
 ) -> datetime:
-    """Convert a destination-local DepartureInput to a UTC-aware datetime."""
+    """Convert a destination-local DepartureInput to a UTC-aware datetime.
+
+    ``check_range=False`` (refresh): the trip's original departure is not
+    routed again, so only its clock-change validity is checked; the refresh
+    checks its planned departure instead.
+    """
     try:
         year, month, day = (int(p) for p in dep.local_date.split("-"))
         hour, minute = (int(p) for p in dep.local_time.split(":"))
@@ -103,19 +110,40 @@ def resolve_departure(
     # Python's fold=0 is the chronologically earlier instant, fold=1 the later.
     local = dt1 if dep.occurrence == 2 else dt0
     utc = local.astimezone(timezone.utc)
+    problem = unsupported_departure_reason(utc, mode, now) if check_range else None
+    if problem:
+        raise DepartureOutOfRangeError(f"The departure {problem}.")
+    return utc
 
+
+def unsupported_departure_reason(
+    utc: datetime, mode: TransportMode, now: datetime | None = None
+) -> str | None:
+    """Why the Routes API cannot schedule a departure at ``utc``, or None.
+
+    Routes API (computeRoutes ``departureTime``, verified 2026-10-06): past
+    times are allowed only for TRANSIT; transit is available up to 7 days in
+    the past and 100 days in the future. Callers explain the problem; they
+    never substitute the current time.
+    """
     current = now or datetime.now(timezone.utc)
     if utc < current - timedelta(days=_MAX_PAST_DAYS):
-        raise DepartureOutOfRangeError(
-            f"The departure must not be more than {_MAX_PAST_DAYS} days in the past."
-        )
+        return f"must not be more than {_MAX_PAST_DAYS} days in the past"
     if utc > current + timedelta(days=MAX_FUTURE_DAYS):
-        raise DepartureOutOfRangeError(
-            f"The departure must not be more than {MAX_FUTURE_DAYS} days in the future."
-        )
+        return f"must not be more than {MAX_FUTURE_DAYS} days in the future"
     if mode != "transit" and utc < current:
-        raise DepartureOutOfRangeError("Walking and driving plans must start in the future.")
-    return utc
+        return "must be in the future for walking and driving"
+    return None
+
+
+class PlannedDepartureError(DepartureError):
+    """A refresh's planned departure cannot be used (D21).
+
+    The refresh never falls back to the current time; the user is told why
+    and can plan the day again instead.
+    """
+
+    code = "planned_departure_unsupported"
 
 
 class DepartureTimezoneMismatchError(DepartureError):

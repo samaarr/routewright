@@ -9,7 +9,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 TransportMode = Literal["transit", "walking", "driving"]
 
@@ -320,31 +327,35 @@ class ItineraryRequest(BaseModel):
         return self
 
 
-class RefreshRequest(BaseModel):
-    """Input for a single-leg refresh (Step 6+).
+class RefreshRequest(ItineraryRequest):
+    """Refresh the remaining timetable from leg ``leg_index`` (D21, Step 7).
 
-    The client supplies the full stop list and the planned departure time
-    for the leg being refreshed. The engine recomputes that leg and all
-    subsequent stops from the planned departure — not from datetime.now().
+    Input provenance: the itinerary fields are the same inputs as a plan
+    request and are verified again server-side (city, departure zone and the
+    affected suffix stops only, D37). ``planned_departure`` is the selected
+    leg's planned departure instant taken from the client's current
+    calculated plan (the departure of stop ``leg_index``); the server holds
+    no stored results, so it is validated for consistency and provider
+    support but cannot be proven to match an earlier response. Earlier stops
+    and legs are not sent: the client keeps its confirmed prefix unchanged and
+    the response contains only the recomputed suffix.
     """
 
-    model_config = ConfigDict(extra="forbid")
-
-    operation_id: str = Field(..., min_length=1, max_length=64)
-    input_revision: int = Field(..., ge=0)
-    city: CitySelection
-    stops: list[StopSpec] = Field(..., min_length=2, max_length=12)
-    departure: DepartureInput
-    mode: TransportMode = Field(default="transit")
     leg_index: int = Field(
         ...,
         ge=0,
-        description="0-based index of the leg to refresh in the stop list.",
+        description="0-based index of the first leg to refresh (leg k joins stop k to stop k+1).",
     )
-    planned_departure_utc: str = Field(
+    planned_departure: AwareDatetime = Field(
         ...,
-        description="ISO 8601 UTC datetime of this leg's planned departure (D21).",
+        description="Planned departure instant of leg k from the current plan (timezone-aware).",
     )
+
+    @model_validator(mode="after")
+    def leg_in_range(self) -> Self:
+        if self.leg_index > len(self.stops) - 2:
+            raise ValueError("leg_index must refer to a leg between two stops")
+        return self
 
 
 # ---------------------------------------------------------------------------

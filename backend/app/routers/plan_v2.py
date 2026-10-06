@@ -47,8 +47,8 @@ from fastapi.responses import StreamingResponse
 from starlette.types import Message
 
 from app.core.deadline import DeadlineExceededError, DeadlineScope
-from app.core.limiter import PLAN_LIMITS, limiter, request_cost
-from app.models.request import ItineraryRequest
+from app.core.limiter import PLAN_LIMITS, REFRESH_LIMITS, limiter, request_cost
+from app.models.request import ItineraryRequest, RefreshRequest
 from app.models.response import (
     CompletePlan,
     ErrorDetails,
@@ -64,6 +64,10 @@ from app.models.response import (
     PlannedLeg,
     PlanOutcome,
     PlanResult,
+    RefreshComplete,
+    RefreshOutcome,
+    RefreshPartial,
+    RefreshResult,
     TerminalEvent,
     TimeoutOutcome,
     Warning,
@@ -75,7 +79,12 @@ from app.services.area import (
     OUTSIDE_AREA_MESSAGE,
     area_status,
 )
-from app.services.departure import DepartureError, resolve_departure
+from app.services.departure import (
+    DepartureError,
+    PlannedDepartureError,
+    resolve_departure,
+    unsupported_departure_reason,
+)
 from app.services.engine import (
     DuplicateInstanceIdError,
     OperationCancelledError,
@@ -85,6 +94,7 @@ from app.services.engine import (
     RoutesAdapter,
     place_type_defaults,
     plan_sequential,
+    refresh_suffix,
     resolve_durations,
 )
 from app.services.errors import (
@@ -110,8 +120,10 @@ MAX_QUEUED_EVENTS = 64
 # Extra time the stream waits for the producer's own terminal event after the
 # operation deadline before synthesising a timeout terminal itself.
 TERMINAL_GRACE_SECONDS = 2.0
-# Both v2 planning endpoints share one per-IP counter (existing plan limits).
+# Both v2 planning endpoints share one per-IP counter (existing plan limits);
+# refresh has its own allowance with the existing refresh limits (D21).
 _PLAN_V2_SCOPE = "plan-v2"
+_REFRESH_V2_SCOPE = "refresh-v2"
 
 
 class _NullEmitter:
@@ -263,10 +275,14 @@ def _overview_url(lats_lngs: list[tuple[float, float]]) -> str:
     return url
 
 
-def _hours_warnings(timeline: list[Any]) -> list[Warning]:
-    """Warnings for the user's own order. Nothing is dropped or reordered."""
+def _hours_warnings(timeline: list[Any], first_stop_index: int = 0) -> list[Warning]:
+    """Warnings for the user's own order. Nothing is dropped or reordered.
+
+    ``first_stop_index`` is the global index of the first stop item in
+    ``timeline`` (k+1 for a refresh suffix).
+    """
     warnings: list[Warning] = []
-    stop_index = -1
+    stop_index = first_stop_index - 1
     for item in timeline:
         if item.item_type in ("stop", "unknown_stop"):
             stop_index += 1
@@ -317,8 +333,14 @@ def _hours_warnings(timeline: list[Any]) -> list[Warning]:
     return warnings
 
 
-def _area_warnings(itinerary: VerifiedItinerary) -> list[Warning]:
-    """D44: compare every verified stop (known or unknown timing) with the viewport."""
+def _area_warnings(
+    itinerary: VerifiedItinerary, first_stop_index: int = 0, skip_first: bool = False
+) -> list[Warning]:
+    """D44: compare every verified stop (known or unknown timing) with the viewport.
+
+    For a refresh, ``itinerary.stops`` starts at stop k (global index
+    ``first_stop_index``), which belongs to the unchanged prefix and is skipped.
+    """
     viewport = itinerary.city.viewport
     if viewport is None:
         return [Warning(severity="info", message=AREA_UNAVAILABLE_MESSAGE, code="area_unavailable")]
@@ -326,12 +348,12 @@ def _area_warnings(itinerary: VerifiedItinerary) -> list[Warning]:
         Warning(
             severity="warning",
             message=OUTSIDE_AREA_MESSAGE,
-            affects_stop_index=i,
+            affects_stop_index=first_stop_index + i,
             affects_instance_id=stop.instance_id,
             code="outside_city_area",
         )
         for i, stop in enumerate(itinerary.stops)
-        if area_status(viewport, stop.lat, stop.lng) == "outside"
+        if not (skip_first and i == 0) and area_status(viewport, stop.lat, stop.lng) == "outside"
     ]
 
 
@@ -404,9 +426,106 @@ async def execute_plan(
     )
 
 
+async def execute_refresh(
+    req: RefreshRequest,
+    *,
+    places: PlacesAdapter,
+    routes: RoutesAdapter,
+    emitter: ProgressEmitter,
+    ctx: OperationContext,
+    deadline: DeadlineScope,
+) -> RefreshResult:
+    """Refresh from leg k at its planned departure (D21). Verifies only the
+    city, departure zone and stops k..N-1 (D37); routes at most N-1-k legs."""
+    k = req.leg_index
+    op, rev = ctx.operation_id, ctx.input_revision
+    await emitter.emit(
+        OperationStartEvent(operation_id=op, input_revision=rev, phases=["verification", "routing"])
+    )
+    await emitter.emit(PhaseStartEvent(operation_id=op, input_revision=rev, phase="verification"))
+    itinerary = await verify_itinerary(req, places, ctx, deadline, from_stop=k)
+    await emitter.emit(
+        PhaseCompleteEvent(operation_id=op, input_revision=rev, phase="verification")
+    )
+
+    # Durations resolved from the ORIGINAL full order (D11); only suffix
+    # stops need place-type defaults, prefix stops are not recomputed.
+    durations = resolve_durations(
+        [(s.instance_id, s.stay_minutes) for s in req.stops],
+        place_type_defaults(itinerary.stops),
+    )
+    suffix = await refresh_suffix(
+        itinerary.stops,
+        durations,
+        k,
+        req.planned_departure,
+        req.mode,
+        routes,
+        emitter,
+        ctx,
+        deadline,
+        itinerary.timezone,
+    )
+    warnings = _hours_warnings(suffix, first_stop_index=k + 1) + _area_warnings(
+        itinerary, first_stop_index=k, skip_first=True
+    )
+    failed = next(((i, item) for i, item in enumerate(suffix) if isinstance(item, FailedLeg)), None)
+    if failed is None:
+        return RefreshComplete(
+            operation_id=op,
+            input_revision=rev,
+            leg_index=k,
+            planned_departure=req.planned_departure,
+            timezone=itinerary.timezone,
+            suffix=suffix,
+            warnings=warnings,
+        )
+    failed_idx, failed_leg = failed
+    routed = sum(1 for item in suffix[:failed_idx] if isinstance(item, PlannedLeg))
+    return RefreshPartial(
+        operation_id=op,
+        input_revision=rev,
+        leg_index=k,
+        planned_departure=req.planned_departure,
+        timezone=itinerary.timezone,
+        suffix=suffix,
+        warnings=warnings,
+        failed_at_leg_index=k + routed,
+        failure_reason=failed_leg.failure_reason,
+    )
+
+
 def _validated_departure(req: ItineraryRequest) -> datetime:
     try:
         return resolve_departure(req.departure, mode=req.mode, now=_now())
+    except DepartureError as exc:
+        failure = describe_failure(exc)
+        assert failure is not None
+        _raise_http(failure)
+
+
+def _validated_refresh(req: RefreshRequest) -> None:
+    """Pre-stream checks: no provider calls, HTTP 422 on failure (D21).
+
+    The planned departure is never replaced with the current time. If the
+    provider cannot schedule it, the user is told why.
+    """
+    try:
+        trip_departure = resolve_departure(
+            req.departure, mode=req.mode, now=_now(), check_range=False
+        )
+        planned = req.planned_departure
+        if planned < trip_departure:
+            raise PlannedDepartureError(
+                "The selected journey's planned departure is earlier than the trip's "
+                "departure, so it does not belong to this plan. Plan the day again."
+            )
+        problem = unsupported_departure_reason(planned, req.mode, _now())
+        if problem:
+            raise PlannedDepartureError(
+                f"This journey's planned departure {problem}, so it can't be refreshed "
+                "for that time. Plan the day again with a new departure time."
+            )
     except DepartureError as exc:
         failure = describe_failure(exc)
         assert failure is not None
@@ -479,13 +598,15 @@ class PlanStream:
         self,
         req: ItineraryRequest,
         *,
-        departure_utc: datetime,
+        departure_utc: datetime | None = None,
         places: PlacesAdapter,
         routes: RoutesAdapter,
         ctx: OperationContext,
         deadline: DeadlineScope,
         receive: Receive | None,
     ) -> None:
+        """Plan stream for an ItineraryRequest (needs ``departure_utc``), or a
+        refresh stream for a RefreshRequest."""
         self.req = req
         self.departure_utc = departure_utc
         self.places = places
@@ -504,7 +625,7 @@ class PlanStream:
             outcome=outcome,
         )
 
-    def _timeout(self, partial: PartialPlan | None = None) -> TimeoutOutcome:
+    def _timeout(self, partial: PartialPlan | RefreshPartial | None = None) -> TimeoutOutcome:
         return TimeoutOutcome(
             phase=self.emitter.phase,
             message=(
@@ -518,17 +639,34 @@ class PlanStream:
     async def _produce(self) -> None:
         outcome: OperationOutcome
         try:
-            result = await execute_plan(
-                self.req,
-                departure_utc=self.departure_utc,
-                places=self.places,
-                routes=self.routes,
-                emitter=self.emitter,
-                ctx=self.ctx,
-                deadline=self.deadline,
-            )
-            if isinstance(result, PartialPlan) and result.failure_reason == "deadline_exceeded":
+            result: PlanResult | RefreshResult
+            if isinstance(self.req, RefreshRequest):
+                result = await execute_refresh(
+                    self.req,
+                    places=self.places,
+                    routes=self.routes,
+                    emitter=self.emitter,
+                    ctx=self.ctx,
+                    deadline=self.deadline,
+                )
+            else:
+                assert self.departure_utc is not None
+                result = await execute_plan(
+                    self.req,
+                    departure_utc=self.departure_utc,
+                    places=self.places,
+                    routes=self.routes,
+                    emitter=self.emitter,
+                    ctx=self.ctx,
+                    deadline=self.deadline,
+                )
+            if (
+                isinstance(result, PartialPlan | RefreshPartial)
+                and result.failure_reason == "deadline_exceeded"
+            ):
                 outcome = self._timeout(result)
+            elif isinstance(result, RefreshComplete | RefreshPartial):
+                outcome = RefreshOutcome(result=result)
             else:
                 outcome = PlanOutcome(result=result)
         except asyncio.CancelledError:
@@ -595,6 +733,57 @@ async def plan_v2_stream(request: Request, req: ItineraryRequest) -> StreamingRe
     stream = PlanStream(
         req,
         departure_utc=departure_utc,
+        places=places_adapter(),
+        routes=routes_adapter(),
+        ctx=ctx,
+        deadline=deadline,
+        receive=request.receive,
+    )
+    return StreamingResponse(
+        stream.events(),
+        media_type=NDJSON_MEDIA_TYPE,
+        headers={"X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Refresh endpoints (D21, Step 7)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/refresh", response_model=RefreshResult)
+@limiter.shared_limit(REFRESH_LIMITS, scope=_REFRESH_V2_SCOPE, cost=request_cost)
+async def refresh_v2(request: Request, req: RefreshRequest) -> RefreshResult:
+    """Recompute the timetable from leg k at its planned departure; one JSON response."""
+    deadline = DeadlineScope()
+    ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
+    _validated_refresh(req)
+    try:
+        return await execute_refresh(
+            req,
+            places=places_adapter(),
+            routes=routes_adapter(),
+            emitter=_NullEmitter(),
+            ctx=ctx,
+            deadline=deadline,
+        )
+    except Exception as exc:
+        failure = describe_failure(exc)
+        if failure is None:
+            raise
+        _raise_http(_with_instance_ids(failure, req))
+
+
+@router.post("/refresh/stream")
+@limiter.shared_limit(REFRESH_LIMITS, scope=_REFRESH_V2_SCOPE, cost=request_cost)
+async def refresh_v2_stream(request: Request, req: RefreshRequest) -> StreamingResponse:
+    """Streamed suffix refresh: same events, deadline, cancellation and error
+    semantics as planning; the terminal outcome is a RefreshOutcome."""
+    deadline = DeadlineScope()
+    ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
+    _validated_refresh(req)
+    stream = PlanStream(
+        req,
         places=places_adapter(),
         routes=routes_adapter(),
         ctx=ctx,

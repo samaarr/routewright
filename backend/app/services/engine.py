@@ -4,9 +4,9 @@ All I/O is injected through Protocol interfaces (PlacesAdapter, RoutesAdapter,
 ProgressEmitter) so planning logic can be tested with deterministic fakes that
 never touch the network.
 
-plan_sequential implements ordinary sequential planning, including opening-
-hours assessment of each known stop. compare_orders and refresh_suffix remain
-stubs until the comparison and refresh stages.
+plan_sequential (ordinary planning) and refresh_suffix (D21 suffix refresh)
+share one sequential routing loop, including opening-hours assessment of each
+known stop. compare_orders remains a stub until the comparison stage.
 """
 
 from __future__ import annotations
@@ -279,10 +279,13 @@ def _maps_search_url(lat: float, lng: float) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def plan_sequential(
+async def _route_sequence(
     stops: list[VerifiedStop],
     durations: ResolvedDurations,
-    departure: datetime,
+    *,
+    start: datetime,
+    first_stop_known: bool,
+    index_offset: int,
     mode: TransportMode,
     routes: RoutesAdapter,
     emitter: ProgressEmitter,
@@ -290,33 +293,24 @@ async def plan_sequential(
     deadline: DeadlineScope,
     trip_timezone: str,
 ) -> list[KnownStop | PlannedLeg | FailedLeg | UnknownStop]:
-    """Sequential leg planner (D1, D2) with opening-hours assessment (D42, D43).
+    """Shared sequential routing loop for planning and suffix refresh.
 
-    Computes each leg using the actual preceding arrival time. On routing
-    failure produces a valid prefix + FailedLeg + UnknownStop items.
-    No fallback durations are invented for failed legs.
+    Each leg departs at the actual arrival of the previous leg plus the next
+    stop's fixed stay (D1). On the first failed leg the loop stops: a
+    FailedLeg is recorded and every later stop becomes an UnknownStop with no
+    timing or hours (D2). Each routing await is bounded by the remaining
+    deadline.
 
-    Args:
-        stops: Verified stop list from the verifier.
-        durations: Resolved stay durations (D11 rules applied).
-        departure: UTC-aware departure datetime for the first stop.
-        mode: Transport mode for all legs.
-        routes: Routing adapter (injected -- real or fake).
-        emitter: Progress emitter (injected -- streaming or no-op).
-        ctx: Operation context carrying identity and call counters.
-        deadline: Active 60-second deadline scope. Each routing await is
-            bounded by its remaining time, not just checked between calls.
-        trip_timezone: Verified IANA zone; hours are assessed in it.
-
-    Returns:
-        Flat timeline of KnownStop / PlannedLeg / FailedLeg / UnknownStop.
-        A FailedLeg terminates the valid prefix; all subsequent stops are
-        UnknownStop with no timing fields.
+    ``first_stop_known=True`` (planning): ``start`` is the arrival at
+    stops[0], which is emitted as a KnownStop. ``first_stop_known=False``
+    (refresh): stops[0] belongs to the unchanged prefix; ``start`` is the
+    planned departure of the first leg and stops[0] is not emitted.
+    ``index_offset`` makes stop/leg indices in events global.
     """
     n = len(stops)
     n_legs = n - 1
     timeline: list[KnownStop | PlannedLeg | FailedLeg | UnknownStop] = []
-    cursor = departure  # Threads actual arrival forward after each leg.
+    cursor = start  # Threads actual arrival forward after each leg.
 
     completed_legs = 0
     await emitter.emit(
@@ -331,34 +325,23 @@ async def plan_sequential(
         stay_min = durations.get(stop.instance_id)
         arrive_at = cursor
         depart_at = cursor + timedelta(minutes=stay_min)
-        # Assessed against this stop's actual computed arrival/departure.
-        hours_status, hours_detail = assess_hours(stop.hours, arrive_at, depart_at, trip_timezone)
-
-        known_stop = KnownStop(
-            instance_id=stop.instance_id,
-            place_id=stop.place_id,
-            name=stop.name,
-            address=stop.address,
-            lat=stop.lat,
-            lng=stop.lng,
-            arrive_at=arrive_at,
-            depart_at=depart_at,
-            stay_minutes=stay_min,
-            stay_source=durations.get_source(stop.instance_id),
-            map_url=_maps_search_url(stop.lat, stop.lng),
-            hours_status=hours_status,
-            hours_detail=hours_detail,
-        )
-        timeline.append(known_stop)
-
-        await emitter.emit(
-            StopReadyEvent(
-                operation_id=ctx.operation_id,
-                input_revision=ctx.input_revision,
-                stop_index=i,
-                stop=known_stop,
+        if i == 0 and not first_stop_known:
+            # Refresh: the origin stop is part of the confirmed prefix; the
+            # first leg leaves at its planned departure (never "now", D21).
+            depart_at = start
+        else:
+            await _emit_known_stop(
+                stop,
+                arrive_at,
+                depart_at,
+                stay_min,
+                durations,
+                trip_timezone,
+                timeline,
+                emitter,
+                ctx,
+                index_offset + i,
             )
-        )
 
         if i >= n_legs:
             # Last stop: no leg follows.
@@ -370,7 +353,7 @@ async def plan_sequential(
             LegProgressEvent(
                 operation_id=ctx.operation_id,
                 input_revision=ctx.input_revision,
-                leg_index=i,
+                leg_index=index_offset + i,
                 total_legs=n_legs,
             )
         )
@@ -429,7 +412,7 @@ async def plan_sequential(
                 LegReadyEvent(
                     operation_id=ctx.operation_id,
                     input_revision=ctx.input_revision,
-                    leg_index=i,
+                    leg_index=index_offset + i,
                     leg=failed_leg,
                     completed_legs=completed_legs,
                     total_legs=n_legs,
@@ -469,7 +452,7 @@ async def plan_sequential(
             LegReadyEvent(
                 operation_id=ctx.operation_id,
                 input_revision=ctx.input_revision,
-                leg_index=i,
+                leg_index=index_offset + i,
                 leg=planned_leg,
                 completed_legs=completed_legs,
                 total_legs=n_legs,
@@ -485,6 +468,78 @@ async def plan_sequential(
     )
 
     return timeline
+
+
+async def _emit_known_stop(
+    stop: VerifiedStop,
+    arrive_at: datetime,
+    depart_at: datetime,
+    stay_min: int,
+    durations: ResolvedDurations,
+    trip_timezone: str,
+    timeline: list[KnownStop | PlannedLeg | FailedLeg | UnknownStop],
+    emitter: ProgressEmitter,
+    ctx: OperationContext,
+    stop_index: int,
+) -> None:
+    # Assessed against this stop's actual computed arrival/departure.
+    hours_status, hours_detail = assess_hours(stop.hours, arrive_at, depart_at, trip_timezone)
+    known_stop = KnownStop(
+        instance_id=stop.instance_id,
+        place_id=stop.place_id,
+        name=stop.name,
+        address=stop.address,
+        lat=stop.lat,
+        lng=stop.lng,
+        arrive_at=arrive_at,
+        depart_at=depart_at,
+        stay_minutes=stay_min,
+        stay_source=durations.get_source(stop.instance_id),
+        map_url=_maps_search_url(stop.lat, stop.lng),
+        hours_status=hours_status,
+        hours_detail=hours_detail,
+    )
+    timeline.append(known_stop)
+    await emitter.emit(
+        StopReadyEvent(
+            operation_id=ctx.operation_id,
+            input_revision=ctx.input_revision,
+            stop_index=stop_index,
+            stop=known_stop,
+        )
+    )
+
+
+async def plan_sequential(
+    stops: list[VerifiedStop],
+    durations: ResolvedDurations,
+    departure: datetime,
+    mode: TransportMode,
+    routes: RoutesAdapter,
+    emitter: ProgressEmitter,
+    ctx: OperationContext,
+    deadline: DeadlineScope,
+    trip_timezone: str,
+) -> list[KnownStop | PlannedLeg | FailedLeg | UnknownStop]:
+    """Sequential planner (D1, D2) with opening-hours assessment (D42, D43).
+
+    The first stop is reached at ``departure``; every later timestamp comes
+    from actual routed arrivals plus fixed stays. Returns a flat timeline of
+    KnownStop / PlannedLeg / FailedLeg / UnknownStop; at most N-1 routing calls.
+    """
+    return await _route_sequence(
+        stops,
+        durations,
+        start=departure,
+        first_stop_known=True,
+        index_offset=0,
+        mode=mode,
+        routes=routes,
+        emitter=emitter,
+        ctx=ctx,
+        deadline=deadline,
+        trip_timezone=trip_timezone,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -520,6 +575,30 @@ async def refresh_suffix(
     emitter: ProgressEmitter,
     ctx: OperationContext,
     deadline: DeadlineScope,
+    trip_timezone: str,
 ) -> list[KnownStop | PlannedLeg | FailedLeg | UnknownStop]:
-    """Refresh planner -- implemented in Step 6."""
-    raise NotImplementedError("refresh_suffix: implemented in Step 6")
+    """Recompute the timetable from leg ``leg_index`` onward (D21).
+
+    ``stops`` are the verified stops k..N-1 (stop k is the origin of leg k and
+    stays in the caller's unchanged prefix). Leg k departs at
+    ``planned_departure`` — the selected leg's planned departure, never the
+    current time. Later legs depart at actual arrivals plus the preserved
+    fixed stays, and downstream hours are re-assessed. At most N-1-k routing
+    calls. On failure, refreshed results so far are kept and later times are
+    unknown; no earlier downstream timestamps are reused.
+
+    Returns the suffix: leg k, stop k+1, leg k+1, ... (no item for stop k).
+    """
+    return await _route_sequence(
+        stops,
+        durations,
+        start=planned_departure,
+        first_stop_known=False,
+        index_offset=leg_index,
+        mode=mode,
+        routes=routes,
+        emitter=emitter,
+        ctx=ctx,
+        deadline=deadline,
+        trip_timezone=trip_timezone,
+    )

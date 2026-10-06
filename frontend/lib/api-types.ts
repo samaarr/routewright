@@ -104,6 +104,36 @@ export type FailureReason1 =
   | "cancelled";
 export type OverviewMapUrl1 = string;
 export type Warnings1 = Warning[];
+export type RefreshResult = (RefreshComplete | RefreshPartial) | null;
+export type OperationId2 = string;
+export type InputRevision2 = number;
+export type LegIndex = number;
+export type PlannedDeparture = string;
+export type Timezone2 = string;
+export type Suffix = (KnownStop | PlannedLeg | FailedLeg | UnknownStop)[];
+export type Warnings2 = Warning[];
+export type ResultType2 = "refresh_complete";
+export type OperationId3 = string;
+export type InputRevision3 = number;
+export type LegIndex1 = number;
+export type PlannedDeparture1 = string;
+export type Timezone3 = string;
+export type Suffix1 = (KnownStop | PlannedLeg | FailedLeg | UnknownStop)[];
+export type Warnings3 = Warning[];
+export type ResultType3 = "refresh_partial";
+/**
+ * Global 0-based index of the failed leg.
+ */
+export type FailedAtLegIndex1 = number;
+export type FailureReason2 =
+  | "no_route"
+  | "provider_temporary"
+  | "quota_exceeded"
+  | "provider_capacity"
+  | "place_invalid"
+  | "place_temporary"
+  | "deadline_exceeded"
+  | "cancelled";
 export type StreamEvent =
   | (
       | OperationStartEvent
@@ -115,51 +145,51 @@ export type StreamEvent =
       | TerminalEvent
     )
   | null;
-export type OperationId2 = string;
-export type InputRevision2 = number;
-export type Type = "operation_start";
-export type Phases = ("verification" | "routing")[];
-export type OperationId3 = string;
-export type InputRevision3 = number;
-export type Type1 = "phase_start";
-export type Phase = "verification" | "routing";
 export type OperationId4 = string;
 export type InputRevision4 = number;
-export type Type2 = "leg_progress";
-export type LegIndex = number;
-export type TotalLegs = number;
+export type Type = "operation_start";
+export type Phases = ("verification" | "routing")[];
 export type OperationId5 = string;
 export type InputRevision5 = number;
-export type Type3 = "stop_ready";
-export type StopIndex = number;
+export type Type1 = "phase_start";
+export type Phase = "verification" | "routing";
 export type OperationId6 = string;
 export type InputRevision6 = number;
+export type Type2 = "leg_progress";
+export type LegIndex2 = number;
+export type TotalLegs = number;
+export type OperationId7 = string;
+export type InputRevision7 = number;
+export type Type3 = "stop_ready";
+export type StopIndex = number;
+export type OperationId8 = string;
+export type InputRevision8 = number;
 export type Type4 = "leg_ready";
-export type LegIndex1 = number;
+export type LegIndex3 = number;
 export type Leg = PlannedLeg | FailedLeg;
 /**
  * Legs successfully routed so far.
  */
 export type CompletedLegs = number;
 export type TotalLegs1 = number;
-export type OperationId7 = string;
-export type InputRevision7 = number;
+export type OperationId9 = string;
+export type InputRevision9 = number;
 export type Type5 = "phase_complete";
 export type Phase1 = "verification" | "routing";
-export type OperationId8 = string;
-export type InputRevision8 = number;
+export type OperationId10 = string;
+export type InputRevision10 = number;
 export type Type6 = "terminal";
 export type Outcome = PlanOutcome | RefreshOutcome | CancelledOutcome | TimeoutOutcome | ErrorOutcome;
 export type OutcomeType = "plan";
 export type Result = CompletePlan | PartialPlan;
 export type OutcomeType1 = "refresh";
-export type Leg1 = PlannedLeg | FailedLeg;
-export type SubsequentStops = (KnownStop | UnknownStop)[];
+export type Result1 = RefreshComplete | RefreshPartial;
 export type OutcomeType2 = "cancelled";
 export type Reason = string;
 export type OutcomeType3 = "timeout";
 export type Phase2 = "verification" | "routing";
 export type Message1 = string;
+export type Partial = (PartialPlan | RefreshPartial) | null;
 export type OutcomeType4 = "error";
 export type Code1 = string;
 export type Message2 = string;
@@ -183,7 +213,7 @@ export type Lng1 = number;
 /**
  * IANA zone resolved offline from coordinates.
  */
-export type Timezone2 = string;
+export type Timezone4 = string;
 export type LowLat = number;
 export type LowLng = number;
 export type HighLat = number;
@@ -195,7 +225,7 @@ export type SecondaryText2 = string | null;
 /**
  * Null when no timezone can be resolved (planning blocks).
  */
-export type Timezone3 = string | null;
+export type Timezone5 = string | null;
 export type Source = "provider" | "cache";
 export type GeneratedAt = string;
 export type City2 = string;
@@ -203,7 +233,7 @@ export type Mode3 = "transit" | "walking" | "driving";
 /**
  * IANA timezone for the trip city, e.g. 'Europe/London'. Derived from the first stop's coordinates. Used by the frontend to display arrival times in destination time regardless of the user's browser timezone.
  */
-export type Timezone4 = string;
+export type Timezone6 = string;
 export type ItemType4 = "stop";
 /**
  * What the user typed.
@@ -255,7 +285,7 @@ export type Timeline2 = (StopItem | LegItem)[];
  * Google Maps URL showing all stops as a driving-mode overview.
  */
 export type OverviewMapUrl2 = string;
-export type Warnings2 = Warning[];
+export type Warnings4 = Warning[];
 export type Query1 = string;
 export type Name4 = string;
 export type StayMinutes2 = number | null;
@@ -298,6 +328,7 @@ export type Errors =
  */
 export interface ContractRoot {
   plan_result?: PlanResult;
+  refresh_result?: RefreshResult;
   stream_event?: StreamEvent;
   operation_outcome?: OperationOutcome;
   known_stop?: KnownStop | null;
@@ -472,14 +503,51 @@ export interface PartialPlan {
   [k: string]: unknown;
 }
 /**
+ * Every leg from k onward was routed.
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "RefreshComplete".
+ */
+export interface RefreshComplete {
+  operation_id: OperationId2;
+  input_revision: InputRevision2;
+  leg_index: LegIndex;
+  planned_departure: PlannedDeparture;
+  timezone: Timezone2;
+  suffix: Suffix;
+  warnings?: Warnings2;
+  result_type?: ResultType2;
+  [k: string]: unknown;
+}
+/**
+ * A leg at or after k failed: routed legs before it are kept; later times
+ * are unknown (UnknownStop). No earlier/stale downstream times are reused.
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "RefreshPartial".
+ */
+export interface RefreshPartial {
+  operation_id: OperationId3;
+  input_revision: InputRevision3;
+  leg_index: LegIndex1;
+  planned_departure: PlannedDeparture1;
+  timezone: Timezone3;
+  suffix: Suffix1;
+  warnings?: Warnings3;
+  result_type?: ResultType3;
+  failed_at_leg_index: FailedAtLegIndex1;
+  failure_reason: FailureReason2;
+  [k: string]: unknown;
+}
+/**
  * First event in a stream — announces phases and operation identity.
  *
  * This interface was referenced by `ContractRoot`'s JSON-Schema
  * via the `definition` "OperationStartEvent".
  */
 export interface OperationStartEvent {
-  operation_id: OperationId2;
-  input_revision: InputRevision2;
+  operation_id: OperationId4;
+  input_revision: InputRevision4;
   type?: Type;
   phases?: Phases;
   [k: string]: unknown;
@@ -491,8 +559,8 @@ export interface OperationStartEvent {
  * via the `definition` "PhaseStartEvent".
  */
 export interface PhaseStartEvent {
-  operation_id: OperationId3;
-  input_revision: InputRevision3;
+  operation_id: OperationId5;
+  input_revision: InputRevision5;
   type?: Type1;
   phase: Phase;
   [k: string]: unknown;
@@ -504,10 +572,10 @@ export interface PhaseStartEvent {
  * via the `definition` "LegProgressEvent".
  */
 export interface LegProgressEvent {
-  operation_id: OperationId4;
-  input_revision: InputRevision4;
+  operation_id: OperationId6;
+  input_revision: InputRevision6;
   type?: Type2;
-  leg_index: LegIndex;
+  leg_index: LegIndex2;
   total_legs: TotalLegs;
   [k: string]: unknown;
 }
@@ -518,8 +586,8 @@ export interface LegProgressEvent {
  * via the `definition` "StopReadyEvent".
  */
 export interface StopReadyEvent {
-  operation_id: OperationId5;
-  input_revision: InputRevision5;
+  operation_id: OperationId7;
+  input_revision: InputRevision7;
   type?: Type3;
   stop_index: StopIndex;
   stop: KnownStop;
@@ -532,10 +600,10 @@ export interface StopReadyEvent {
  * via the `definition` "LegReadyEvent".
  */
 export interface LegReadyEvent {
-  operation_id: OperationId6;
-  input_revision: InputRevision6;
+  operation_id: OperationId8;
+  input_revision: InputRevision8;
   type?: Type4;
-  leg_index: LegIndex1;
+  leg_index: LegIndex3;
   leg: Leg;
   completed_legs: CompletedLegs;
   total_legs: TotalLegs1;
@@ -548,8 +616,8 @@ export interface LegReadyEvent {
  * via the `definition` "PhaseCompleteEvent".
  */
 export interface PhaseCompleteEvent {
-  operation_id: OperationId7;
-  input_revision: InputRevision7;
+  operation_id: OperationId9;
+  input_revision: InputRevision9;
   type?: Type5;
   phase: Phase1;
   [k: string]: unknown;
@@ -561,8 +629,8 @@ export interface PhaseCompleteEvent {
  * via the `definition` "TerminalEvent".
  */
 export interface TerminalEvent {
-  operation_id: OperationId8;
-  input_revision: InputRevision8;
+  operation_id: OperationId10;
+  input_revision: InputRevision10;
   type?: Type6;
   outcome: Outcome;
   [k: string]: unknown;
@@ -579,15 +647,14 @@ export interface PlanOutcome {
   [k: string]: unknown;
 }
 /**
- * Terminal outcome for a single-leg refresh (D21).
+ * Terminal outcome for a suffix refresh (D21).
  *
  * This interface was referenced by `ContractRoot`'s JSON-Schema
  * via the `definition` "RefreshOutcome".
  */
 export interface RefreshOutcome {
   outcome_type?: OutcomeType1;
-  leg: Leg1;
-  subsequent_stops?: SubsequentStops;
+  result: Result1;
   [k: string]: unknown;
 }
 /**
@@ -608,8 +675,9 @@ export interface CancelledOutcome {
 /**
  * Terminal outcome when the 60-second operation deadline expired.
  *
- * ``partial`` carries the valid prefix when the deadline expired during
- * routing; it is null when it expired during verification (no routing).
+ * ``partial`` carries the valid portion when the deadline expired during
+ * routing (a PartialPlan for planning, a RefreshPartial for refresh); it is
+ * null when it expired during verification (no routing).
  *
  * This interface was referenced by `ContractRoot`'s JSON-Schema
  * via the `definition` "TimeoutOutcome".
@@ -618,7 +686,7 @@ export interface TimeoutOutcome {
   outcome_type?: OutcomeType3;
   phase: Phase2;
   message: Message1;
-  partial?: PartialPlan | null;
+  partial?: Partial;
   [k: string]: unknown;
 }
 /**
@@ -687,7 +755,7 @@ export interface SelectedCity {
   secondary_text?: SecondaryText1;
   lat: Lat1;
   lng: Lng1;
-  timezone: Timezone2;
+  timezone: Timezone4;
   /**
    * Null when the provider supplied no usable viewport.
    */
@@ -718,7 +786,7 @@ export interface SelectedPlace {
   lat: Lat2;
   lng: Lng2;
   secondary_text?: SecondaryText2;
-  timezone?: Timezone3;
+  timezone?: Timezone5;
   source: Source;
   [k: string]: unknown;
 }
@@ -732,10 +800,10 @@ export interface Plan {
   generated_at: GeneratedAt;
   city: City2;
   mode: Mode3;
-  timezone: Timezone4;
+  timezone: Timezone6;
   timeline: Timeline2;
   overview_map_url: OverviewMapUrl2;
-  warnings?: Warnings2;
+  warnings?: Warnings4;
   [k: string]: unknown;
 }
 /**

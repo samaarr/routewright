@@ -339,14 +339,51 @@ class PlanOutcome(BaseModel):
     result: PlanResult
 
 
+class _RefreshCommon(BaseModel):
+    """Recomputed suffix of a plan, starting at leg ``leg_index`` (D21).
+
+    ``suffix`` starts with leg k (PlannedLeg or FailedLeg) and then alternates
+    stops k+1.. and later legs. The confirmed prefix (stops 0..k and legs
+    before k) is NOT included: it is unchanged and stays with the client.
+    ``planned_departure`` is the instant leg k was requested for — never the
+    time of the refresh request.
+    """
+
+    operation_id: str
+    input_revision: int
+    leg_index: int
+    planned_departure: datetime
+    timezone: str
+    suffix: list[PlanTimelineItem]
+    warnings: list[Warning] = Field(default_factory=list)
+
+
+class RefreshComplete(_RefreshCommon):
+    """Every leg from k onward was routed."""
+
+    result_type: Literal["refresh_complete"] = "refresh_complete"
+
+
+class RefreshPartial(_RefreshCommon):
+    """A leg at or after k failed: routed legs before it are kept; later times
+    are unknown (UnknownStop). No earlier/stale downstream times are reused."""
+
+    result_type: Literal["refresh_partial"] = "refresh_partial"
+    failed_at_leg_index: int = Field(..., description="Global 0-based index of the failed leg.")
+    failure_reason: PlanFailureReason
+
+
+RefreshResult: TypeAlias = Annotated[
+    RefreshComplete | RefreshPartial,
+    Field(discriminator="result_type"),
+]
+
+
 class RefreshOutcome(BaseModel):
-    """Terminal outcome for a single-leg refresh (D21)."""
+    """Terminal outcome for a suffix refresh (D21)."""
 
     outcome_type: Literal["refresh"] = "refresh"
-    leg: Annotated[PlannedLeg | FailedLeg, Field(discriminator="item_type")]
-    subsequent_stops: list[Annotated[KnownStop | UnknownStop, Field(discriminator="item_type")]] = (
-        Field(default_factory=list)
-    )
+    result: RefreshResult
 
 
 PhaseName: TypeAlias = Literal["verification", "routing"]
@@ -367,14 +404,17 @@ class CancelledOutcome(BaseModel):
 class TimeoutOutcome(BaseModel):
     """Terminal outcome when the 60-second operation deadline expired.
 
-    ``partial`` carries the valid prefix when the deadline expired during
-    routing; it is null when it expired during verification (no routing).
+    ``partial`` carries the valid portion when the deadline expired during
+    routing (a PartialPlan for planning, a RefreshPartial for refresh); it is
+    null when it expired during verification (no routing).
     """
 
     outcome_type: Literal["timeout"] = "timeout"
     phase: PhaseName
     message: str
-    partial: PartialPlan | None = None
+    partial: Annotated[PartialPlan | RefreshPartial, Field(discriminator="result_type")] | None = (
+        None
+    )
 
 
 class ErrorDetails(BaseModel):
@@ -556,6 +596,7 @@ class ContractRoot(BaseModel):
 
     # New streaming / engine types
     plan_result: PlanResult | None = None
+    refresh_result: RefreshResult | None = None
     stream_event: StreamEvent | None = None
     operation_outcome: OperationOutcome | None = None
     known_stop: KnownStop | None = None

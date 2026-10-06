@@ -397,13 +397,24 @@ def test_stream_event_phase_complete() -> None:
     assert event.type == "phase_complete"
 
 
-def test_refresh_outcome_with_subsequent_stops() -> None:
+def test_refresh_outcome_carries_suffix_only() -> None:
+    from app.models.response import RefreshPartial
+
     outcome = RefreshOutcome(
-        leg=_planned_leg(),
-        subsequent_stops=[_known_stop("s2"), _unknown_stop("s3")],
+        result=RefreshPartial(
+            operation_id="op1",
+            input_revision=0,
+            leg_index=1,
+            planned_departure=datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc),
+            timezone="Europe/Dublin",
+            suffix=[_planned_leg(), _known_stop("s2"), _failed_leg(), _unknown_stop("s3")],
+            failed_at_leg_index=2,
+            failure_reason="no_route",
+        )
     )
     assert outcome.outcome_type == "refresh"
-    assert len(outcome.subsequent_stops) == 2
+    assert outcome.result.result_type == "refresh_partial"
+    assert outcome.result.suffix[0].item_type == "leg"
 
 
 # ---------------------------------------------------------------------------
@@ -558,10 +569,32 @@ def test_refresh_request_valid() -> None:
             local_date="2026-06-01", local_time="09:00", timezone="Europe/Dublin"
         ),
         leg_index=0,
-        planned_departure_utc="2026-06-01T09:00:00Z",
+        planned_departure="2026-06-01T09:00:00Z",
     )
     assert req.leg_index == 0
-    assert req.planned_departure_utc == "2026-06-01T09:00:00Z"
+    assert req.planned_departure == datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
+
+
+def test_refresh_request_rejects_naive_departure_and_out_of_range_leg() -> None:
+    base = {
+        "operation_id": "op",
+        "input_revision": 0,
+        "city": {"place_id": "C", "name": "Dublin", "lat": 53.3, "lng": -6.2},
+        "stops": [_stop_spec("a").model_dump(), _stop_spec("b").model_dump()],
+        "departure": {
+            "local_date": "2026-06-01",
+            "local_time": "09:00",
+            "timezone": "Europe/Dublin",
+        },
+    }
+    with pytest.raises(ValidationError):
+        RefreshRequest.model_validate(
+            {**base, "leg_index": 0, "planned_departure": "2026-06-01T09:00:00"}
+        )
+    with pytest.raises(ValidationError, match="leg_index"):
+        RefreshRequest.model_validate(
+            {**base, "leg_index": 1, "planned_departure": "2026-06-01T09:00:00Z"}
+        )
 
 
 # ---------------------------------------------------------------------------

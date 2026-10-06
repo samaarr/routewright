@@ -56,6 +56,7 @@ async def verify_itinerary(
     places: PlacesAdapter,
     ctx: OperationContext,
     deadline: DeadlineScope,
+    from_stop: int = 0,
 ) -> VerifiedItinerary:
     """Verify city, departure zone and stops. Makes no routing calls.
 
@@ -66,6 +67,9 @@ async def verify_itinerary(
         DepartureTimezoneMismatchError: zone checks.
         DeadlineExceededError: the overall deadline expired, including while
             a lookup was in flight.
+
+    ``from_stop`` > 0 (refresh, D37): only stops from that index onward are
+    looked up and returned; the city and departure zone are still verified.
     """
     details: dict[tuple[str, PlaceRole], PlaceDetails] = {}
 
@@ -98,7 +102,7 @@ async def verify_itinerary(
     # 3. Stops.
     hours_by_place: dict[str, VenueHours | None] = {}
     verified: list[VerifiedStop] = []
-    for spec in req.stops:
+    for spec in req.stops[from_stop:]:
         pid = spec.selection.place_id
         d = await lookup(pid, "stop")
         stop_tz = resolve_timezone(d.lat, d.lng)
