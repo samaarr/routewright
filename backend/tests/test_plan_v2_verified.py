@@ -13,14 +13,17 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.config import settings
 from app.core.deadline import DeadlineScope
 from app.main import app
 from app.routers import plan_v2
+from app.services import geocache
 from app.services import verifier as verifier_module
 from app.services.engine import RoutingResult
 from app.services.errors import (
@@ -174,6 +177,19 @@ def test_forged_selection_location_ignored(fakes: tuple[FakePlaces, FakeRoutes])
     )
     assert (routes.calls[0]["origin_lat"], routes.calls[0]["origin_lng"]) == (53.3438, -6.2546)
     assert resp.json()["city"] == "Dublin"  # provider name, not "Typed city"
+
+
+async def test_plan_ignores_cached_coordinates(
+    fakes: tuple[FakePlaces, FakeRoutes], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D-2: the location cache is ephemeral; planning never reads it."""
+    _, routes = fakes
+    db = str(tmp_path / "cache" / "places.db")
+    monkeypatch.setattr(settings, "cache_db_path", db)
+    await geocache.put_coordinates("trinity", 40.758, -73.9855, db, 30)  # wrong on purpose
+    resp = _post(_payload([_stop("a", "trinity"), _stop("b", "pub")]))
+    assert resp.status_code == 200, resp.json()
+    assert (routes.calls[0]["origin_lat"], routes.calls[0]["origin_lng"]) == (53.3438, -6.2546)
 
 
 @pytest.mark.parametrize(

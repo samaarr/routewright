@@ -961,8 +961,8 @@ jobs. This does not verify the deployment's settings. See
 
 - [ ] Verify production HTTPS redirects/HSTS, trusted proxy topology, shared
   Redis configuration, restricted separate Google browser/server keys (the
-  server key must allow Places Autocomplete), and encrypted storage/backup
-  settings. Checklist: [PRODUCTION_VERIFICATION.md](PRODUCTION_VERIFICATION.md).
+  server key must allow Places Autocomplete). Storage: decided ephemeral
+  location cache, no volume (DEPLOYMENT_PLAN.md D-2). Checklist: [PRODUCTION_VERIFICATION.md](PRODUCTION_VERIFICATION.md).
 - [ ] Check live Google Maps loading under the production CSP; the browser smoke
   test used no Maps key.
 - [ ] Verify Railway streaming (60 s, no buffering) and disconnect propagation,

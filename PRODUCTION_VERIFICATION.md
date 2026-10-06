@@ -121,8 +121,9 @@ if missing the leg fails as `arrival_unknown` (no invented time).
 - [ ] On Railway: container runs as non-root; `/healthz` returns
       `{"status":"ok",...}` through the public URL. (Verified locally only —
       see below.)
-- [ ] SQLite cache on a private encrypted volume; backups restricted; legacy
-      rich cache migration ran (no `geocache` table remains).
+- [ ] No volume attached and `RAILWAY_RUN_UID` unset (cache is ephemeral by
+      decision D-2; a redeploy clears it). Place selection still works right
+      after a redeploy (cache empty → provider lookup).
 
 ## Locally verified (for reference, not production evidence)
 

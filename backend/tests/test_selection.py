@@ -8,6 +8,7 @@ library's memory storage clock.
 from __future__ import annotations
 
 import json
+import shutil
 import types
 from pathlib import Path
 from typing import Any
@@ -387,3 +388,30 @@ async def test_outbound_calls_counted_by_kind(monkeypatch: pytest.MonkeyPatch) -
     )
     await adapter_module.GooglePlacesAdapter().fetch_selected_location("ChIJx", session_token=None)
     assert acct.snapshot() == {"autocomplete": 1, "place_details_essentials": 1}
+
+
+# --- ephemeral cache (deployment decision D-2): correctness never depends on it ---
+
+
+def test_cleared_cache_after_redeploy_falls_back_to_provider(fakes: Any) -> None:
+    client = _client()
+    client.post("/api/v2/select/place", json={"place_id": "ChIJtrinity", "session_token": TOKEN})
+    shutil.rmtree(Path(settings.cache_db_path).parent)  # a redeploy discards the container FS
+
+    again = client.post("/api/v2/select/place", json={"place_id": "ChIJtrinity"})
+    assert again.status_code == 200
+    body = again.json()
+    assert body["source"] == "provider"
+    assert (body["lat"], body["lng"]) == (53.3438, -6.2546)
+    assert len(fakes[1].calls) == 2
+    assert Path(settings.cache_db_path).exists()  # the empty cache is recreated on write
+
+
+def test_unreadable_cache_falls_back_to_provider(fakes: Any) -> None:
+    path = Path(settings.cache_db_path)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"not a sqlite database")
+
+    r = _client().post("/api/v2/select/place", json={"place_id": "ChIJtrinity"})
+    assert r.status_code == 200
+    assert r.json()["source"] == "provider"

@@ -57,7 +57,7 @@ which prompts) — never on a command line, in a file in the repo, or in chat.
 | `TRUSTED_PROXY_IPS` | public | **empty** until decision D-1 below | `/0` rejected at startup |
 | `HSTS_ENABLED` | public | `false` at first; `true` after HTTPS verified | |
 | `PORT` | injected by Railway | — | do not set |
-| `CACHE_DB_PATH` | public | leave default (`./cache/places_cache.db` → `/app/cache`, owned by `app`) | see D-2 |
+| `CACHE_DB_PATH` | public | leave default (`./cache/places_cache.db` → `/app/cache`, owned by `app`) | ephemeral — cleared on every redeploy (D-2, decided) |
 | Limits (`MAX_REQUESTS_PER_IP_PER_*`, `PROVIDER_CALLS_PER_DAY`, `MAX_CONCURRENT_*`, `PROVIDER_WAIT_SECONDS`, `MAX_REQUEST_BYTES`, `MAX_STOPS_PER_REQUEST`, `CACHE_TTL_DAYS`, `CACHE_CLEANUP_SECONDS`) | public | **do not set** — code defaults apply, keeping existing limits unchanged | |
 | `TRUSTED_PROXY_COUNT` | — | **must be unset** | any non-zero value aborts startup |
 | `RATE_LIMIT_WHITELIST_IPS` | public | empty | |
@@ -88,7 +88,7 @@ which prompts) — never on a command line, in a file in the repo, or in chat.
 | **Streaming timeouts** | operation deadline 60 s; NDJSON events throughout. Railway: requests up to 15 min while data flows, closed after 5 min idle; HTTP/1.1 idle keep-alive 60 s between requests (VERIFIED docs) | 60 s fits the documented limits. Absence of response buffering at Railway's edge is **not documented** → DEPLOY-ONLY. Vercel not in the path |
 | **Disconnect propagation** | tested locally (cancel releases capacity, stops calls) | Through Railway's edge: DEPLOY-ONLY |
 | **Log retention** | metrics as single-line JSON (Railway parses it); Railway retention Free 3 d, Trial/Hobby 7 d, Pro 30 d, Enterprise up to 90 d; 500 lines/s/replica; Railway HTTP logs include `@srcIp` (VERIFIED docs) | Actual plan UNKNOWN → retention 7 d if Hobby. Vercel runtime logs: Hobby 1 h, Pro 1 d (VERIFIED docs) |
-| **Storage** | SQLite cache (place ID + coordinates only), purged after 30 days | **D-2:** Railway volumes mount with root ownership — a non-root image needs `RAILWAY_RUN_UID=0` (i.e. run as root), volumes block replicas and add redeploy downtime; Railway docs don't state volume encryption (VERIFIED docs) |
+| **Storage** | SQLite cache (place ID + coordinates only), purged after 30 days | **D-2 DECIDED (2026-10-06): ephemeral cache, no volume, non-root kept.** Railway volumes mount with root ownership — a non-root image would need `RAILWAY_RUN_UID=0` (run as root); volumes also block replicas and add redeploy downtime (VERIFIED docs) |
 | **Replicas** | in-process gates (`--workers 1`) and the design assume one replica; Redis already shares limits | Keep **1 replica** |
 | **Vercel plan** | Hobby is non-commercial/personal only; rollback limited to the previous deployment (VERIFIED docs) | Product decision if RouteWright ever earns money |
 
@@ -142,7 +142,7 @@ Recommended per Google's API security best practices (VERIFIED docs):
 | ID | Decision | Options | Recommendation |
 |----|----------|---------|----------------|
 | D-1 | **Client identity on Railway** (blocker for public use) | (a) small code change: when a setting such as `CLIENT_IP_HEADER=x-real-ip` is set, use Railway's `X-Real-IP` (documented header; overwrite guarantee is from Railway staff, not a formal contract); (b) set `TRUSTED_PROXY_IPS` to an observed proxy range (unpublished, can change — fragile); (c) leave empty and accept one shared bucket during a closed test | (c) for the live test only; before any public announcement, the conditional `X-Real-IP` design in §5a (not blind trust) |
-| D-2 | Cache storage | (a) **no volume**: ephemeral cache inside the container (lost on redeploy; keeps non-root, no backups/encryption question); (b) volume + `RAILWAY_RUN_UID=0` (runs as root) | (a); update SECURITY.md "encrypted volume" wording accordingly |
+| D-2 | Cache storage | **DECIDED 2026-10-06** — see §5b | ephemeral cache, no volume, non-root container |
 | D-3 | Redis transport | `redis://` over Railway private networking (Wireguard) vs requiring `rediss://` | accept `redis://` on the private network; never expose Redis publicly |
 | D-4 | Server-key application restriction | Railway Pro static IPs vs Hobby with API restriction + quotas only | owner's cost/risk call; document the choice |
 | D-5 | Map ID | `DEMO_MAP_ID` vs a project Map ID (same project as the browser key) | create a project Map ID |
@@ -154,6 +154,34 @@ Recommended per Google's API security best practices (VERIFIED docs):
 Monthly free-tier enforcement stays deferred: **the deployment may be used for
 a closed live test only; a public launch claiming free-tier safety is
 blocked** until enforcement exists.
+
+---
+
+## 5b. D-2 decision — ephemeral location cache (DECIDED 2026-10-06)
+
+Decision: ephemeral location cache, no Railway volume, non-root
+container preserved. The SQLite cache (place ID + coordinates only, D38)
+lives in the container filesystem at `/app/cache` (owned by the non-root
+`app` user); **every redeploy, restart onto a new container or rollback
+clears it**. Correctness does not depend on it: planning, refresh and
+comparison re-verify every place with Place Details and route with those
+provider coordinates, never cached or client-sent ones; place selection
+treats a missing, unreadable or failing cache as a miss and asks Google;
+cache write failures are ignored. Effect of clearing: more selection
+lookups (Place Details Essentials) until the cache refills — a cost effect
+only. No volume means no `RAILWAY_RUN_UID=0`, no volume backups/snapshots
+and no encryption-at-rest question for this data.
+
+Enforced by tests: `test_plan_ignores_cached_coordinates` (a wrong cached
+location is ignored by planning), `test_cleared_cache_after_redeploy_falls_back_to_provider`,
+`test_unreadable_cache_falls_back_to_provider`, `test_failed_query_is_a_cache_miss`
+(a failing cache query used to raise; fixed with this decision).
+
+Deployment consequences: do **not** attach a volume or set
+`RAILWAY_RUN_UID`; do not set `CACHE_DB_PATH` to a mounted path. Non-root
+comes from the image (`USER app`), checked by CI's container job and the
+local check; on Railway confirm `RAILWAY_RUN_UID` is unset (it would
+override the user).
 
 ---
 
@@ -444,6 +472,8 @@ volume ownership/replica limits, static IPs Pro-only, private network
 encryption; Vercel HTTPS/HSTS defaults, rollback limits, Hobby
 non-commercial; Google key restriction guidance, Autocomplete session
 billing, free caps per SKU.
+
+**Decided:** D-2 ephemeral location cache (§5b).
 
 **Missing configuration:** Railway project/services/variables/healthcheck
 path; Vercel project/env vars; both Google keys and their restrictions;

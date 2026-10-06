@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 import pytest
 
+from app.services import geocache
 from app.services.geocache import (
     expiry_seconds,
     geocode_cached,
@@ -183,3 +184,20 @@ async def test_v1_geocode_returns_rich_details_but_persists_only_coordinates(
     assert b"ChIJABC123" in raw
     for rich in (b"Guinness", b"brewery", b"Dublin"):
         assert rich not in raw
+
+
+async def test_failed_query_is_a_cache_miss(db_path: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    await put_coordinates("ChIJabc", 53.3, -6.2, db_path, 30)
+
+    class Broken:
+        def execute(self, *a: Any, **kw: Any) -> Any:
+            raise sqlite3.DatabaseError("disk I/O error")
+
+        async def close(self) -> None:
+            return None
+
+    async def broken_open(*a: Any, **kw: Any) -> Broken:
+        return Broken()
+
+    monkeypatch.setattr(geocache, "_open", broken_open)
+    assert await get_coordinates("ChIJabc", db_path, 30) is None

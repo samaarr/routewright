@@ -930,8 +930,11 @@ Nothing deployed, pushed or changed. Key findings:
   client IP in production). A `slowapi` logger filter drops it and redacts IP
   tokens in other slowapi records; regression test drives the real limiter
   (IPv4 + IPv6) and failed before the fix. Backend 426 passed, 4 skipped.
-- D-2: Railway volumes need root (`RAILWAY_RUN_UID=0`) for a non-root image
-  → proposal: ephemeral cache, no volume.
+- **D-2 DECIDED:** ephemeral location cache, no volume, non-root container
+  kept; redeploys clear the cache. Correctness independent of it — new tests
+  (plan ignores cached coordinates; selection falls back after a cleared or
+  unreadable cache; failing query is a miss — previously raised, fixed).
+  Backend 430 passed, 4 skipped.
 - D-4: server-key IP restriction needs Railway Pro static IPs.
 - 27 local commits unpushed; CI has not run on them.
 - Live test estimate ≈ 65 billable events (≤17 Place Details Enterprise,

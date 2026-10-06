@@ -161,6 +161,19 @@ Production HTTPS/proxy/Redis/key/storage/CSP configuration remains unverified.
 The development-only braces advisory exception expires 2026-11-04.
 Security hardening did not establish provider licensing compliance.
 
+## Deployment decisions (2026-10-06)
+
+- **Location cache storage (DEPLOYMENT_PLAN.md D-2): ephemeral.** The D38
+  SQLite cache (place ID + coordinates only) stays in the container
+  filesystem; no Railway volume; the container keeps running as the non-root
+  `app` user. Every redeploy/restart onto a new container clears the cache.
+  Correctness must not depend on cached data: planning, refresh and
+  comparison verify places with Google and route with those coordinates;
+  selection treats a missing/unreadable/failing cache as a miss. Clearing it
+  only increases selection lookups. Tests enforce this (see the plan §5b).
+- All other deployment decisions (D-1, D-3…D-9) remain open; nothing is
+  deployed.
+
 ## Next work
 
 Read TODO.md's remaining-decisions section, consolidate overlapping technical

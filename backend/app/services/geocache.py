@@ -181,6 +181,9 @@ async def get_coordinates(
             (place_id,),
         ) as cursor:
             row = await cursor.fetchone()
+    except Exception as exc:  # the cache is optional: a failed read is a miss
+        log.warning("geocache_read_failed exception_type=%s", type(exc).__name__)
+        return None
     finally:
         await db.close()
     if row is None:
