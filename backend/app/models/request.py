@@ -21,6 +21,7 @@ TransportMode = Literal["transit", "walking", "driving"]
 # Maximum how far into the future a departure may be (v2 departure range check).
 MAX_FUTURE_DAYS = 100
 
+
 class PlaceSelection(BaseModel):
     """A selected place identified by its Google place_id.
 
@@ -145,9 +146,7 @@ class DepartureInput(BaseModel):
 
 
 class ItineraryRequest(BaseModel):
-    """Input for the new itinerary-planning endpoints (Step 3+).
-
-    """
+    """Input for the new itinerary-planning endpoints (Step 3+)."""
 
     model_config = ConfigDict(extra="forbid")
 
