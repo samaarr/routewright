@@ -967,8 +967,9 @@ jobs. This does not verify the deployment's settings. See
   test used no Maps key.
 - [ ] Verify Railway streaming (60 s, no buffering) and disconnect propagation,
   live transit walking-step `staticDuration`, and the actual log retention.
-- [ ] Run the local container check (non-root, `/healthz`, no client IPs in
-  application logs); not run on 2026-10-06 because Docker was unresponsive.
+- [x] Local container check (2026-10-06): non-root `uid=1000(app)`,
+  `/healthz` 200, request reached the intended container, no client IPs in
+  application logs. Repeat on Railway (PRODUCTION_VERIFICATION.md §9).
 - [x] Shared-Redis regression tests (`tests/test_security_redis.py`) pass
   against a local disposable Redis (2026-10-06); still run them in the
   deployment network.

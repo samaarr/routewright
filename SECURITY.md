@@ -24,7 +24,7 @@ Updated 2026-10-06 (Step 9). These controls protect the current anonymous itiner
 5. Create separate Google keys. Restrict the browser key by website referrer and Maps JavaScript API; restrict the server key to Places API (New) and Routes API, and server egress IP where supported. Set Google quotas, billing alerts, and a provider budget appropriate to your traffic. Never share keys in chat. Rotate any previously exposed key before rewriting Git history; history cleanup requires coordination with collaborators.
 6. Store SQLite on a private encrypted volume; restrict backups and retention. Start the backend with a restrictive umask (Docker does this). Monitor generic failure/capacity metrics without recording locations or submitted queries.
 
-Local checks cannot verify these platform settings or live key restrictions. The browser smoke test uses no Maps key, so live Google Maps loading under CSP remains a deployment check. Docker build and live Redis integration must pass in the deployment environment before release.
+Local checks cannot verify these platform settings or live key restrictions. The browser smoke test uses no Maps key, so live Google Maps loading under CSP remains a deployment check. Locally (2026-10-06) the image ran as non-root, served `/healthz`, and its application logs contained no client IPs; shared-Redis tests passed against a disposable local Redis. Both must still pass in the deployment environment before release.
 
 ## Dependency status (2026-10-06)
 

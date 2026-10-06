@@ -117,15 +117,25 @@ if missing the leg fails as `arrival_unknown` (no invented time).
 
 ## 9. Container and storage
 
-- [ ] Container runs as non-root; `/healthz` returns `{"status":"ok",...}`.
-      (Local Docker check pending — Docker Desktop was unresponsive on
-      2026-10-06.)
+- [ ] On Railway: container runs as non-root; `/healthz` returns
+      `{"status":"ok",...}` through the public URL. (Verified locally only —
+      see below.)
 - [ ] SQLite cache on a private encrypted volume; backups restricted; legacy
       rich cache migration ran (no `geocache` table remains).
 
 ## Locally verified (for reference, not production evidence)
 
-Backend tests with mocked providers (423 passed; shared-Redis tests 4 passed
-against a local disposable container), frontend unit (88) and browser (31)
+Backend tests with mocked providers (427 passed with a disposable local
+Redis, including the 4 shared-store tests), frontend unit (88) and browser (31)
 tests, security smoke (CSP/headers/hydration without a Maps key), bundle
 key-exposure check, dependency audits. See IMPLEMENTATION_PROGRESS.md.
+
+Local container check (2026-10-06, image built from HEAD — app code
+hashes matched the repo; run on an unused port 127.0.0.1:18765 because
+8000–8002/8080 are used by local processes): runs as `uid=1000(app)`,
+uvicorn is PID 1 with `--no-access-log`; `/healthz` → 200
+`{"status":"ok","version":"0.1.0"}`; a rejected v2 plan (past departure,
+zero provider calls) produced its metrics line in that container's log and
+the port refused connections once the container was removed; application
+logs contained no client IP (the spoofed `X-Forwarded-For` and the Docker
+peer `172.17.0.1` were absent; only uvicorn's `0.0.0.0` bind address).

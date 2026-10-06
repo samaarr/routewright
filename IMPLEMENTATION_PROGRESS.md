@@ -191,7 +191,7 @@ claimed beyond what the code and tests show.
 | 6 | Frontend state + streaming | COMPLETE (SSV): items 1-7; frontend now plans only via `/api/v2/plan/stream`. Item 6 pins: default on, visible, preserved through edits; their effect on optimisation arrives with Step 8 |
 | 7 | Suffix refresh via shared engine | COMPLETE — backend e4f5f27 (`/api/v2/refresh[/stream]`, planned departure never now, unchanged prefix, ≤ N−1−k calls, failure → unknown downstream); refresh UI committed with this record ("Refresh from here" / "Try again", previous timings labelled while refreshing, atomic suffix replacement, cancel/incomplete keep the previous plan). Step 8 hook (refresh cancels optimisation) applies once optimisation exists |
 | 8 | Compare one local candidate with fresh original | COMPLETE — backend 6329b9d; final-walk arrival fix 25de41b (applies to planning, refresh and comparison); comparison UI with the approved decisions (Compare on a current complete plan ≥ 3 stops, real phases + Cancel, "Your order — recalculated.", "Estimated journey-time saving: X min.", atomic "Use this order" with explicit stays and no network calls, edits invalidate). Live Google verification of the response shape and deployment checks remain (Step 9/10) |
-| 9 | Metrics, security regression, deployment verification | LOCALLY COMPLETE except the container check — audit fix e3192f5, shared-Redis tests d39edd9 (passed against a local container), journey-time presentation 9c946ac, aggregate metrics 7cc0670, security regressions + bundle check ef3af78, docs + PRODUCTION_VERIFICATION.md. Container non-root//healthz/no-IP-log check NOT run (Docker daemon unresponsive). All deployment items unverified (B4) |
+| 9 | Metrics, security regression, deployment verification | LOCALLY COMPLETE — audit fix e3192f5, shared-Redis tests d39edd9 (passed against a local container), journey-time presentation 9c946ac, aggregate metrics 7cc0670, security regressions + bundle check ef3af78, docs + PRODUCTION_VERIFICATION.md; local container check passed (non-root, /healthz, request reached the intended container, no client IPs in app logs). All deployment items unverified (B4) |
 | 10 | Review, release readiness, completion report | PENDING |
 
 ---
@@ -893,16 +893,31 @@ ruff, format, mypy clean. Frontend: unit 88, browser 31, types drift clean,
 type-check and lint clean, security smoke passed, `security:audit` passes,
 bundle check passed on 69 files (negative control detected).
 
+### Container check (local, 2026-10-06)
+Docker Desktop was restarted (with approval) after hanging on an ENOSPC. The
+existing `routewright-security-check` image and its BuildKit cache layers were
+corrupt (no `/etc/passwd`: "unable to find user app/root"); the base image
+pulled fresh was fine. Rebuilt with `--pull --no-cache-filter final` (cached
+dependency layer reused). Image built from HEAD — app code
+  hashes matched the repo; run on an unused port 127.0.0.1:18765 because
+  8000–8002/8080 are used by local processes): runs as `uid=1000(app)`,
+  uvicorn is PID 1 with `--no-access-log`; `/healthz` → 200
+  `{"status":"ok","version":"0.1.0"}`; a rejected v2 plan (past departure,
+  zero provider calls) produced its metrics line in that container's log and
+  the port refused connections once the container was removed; application
+  logs contained no client IP (the spoofed `X-Forwarded-For` and the Docker
+  peer `172.17.0.1` were absent; only uvicorn's `0.0.0.0` bind address).
+Shared-Redis tests rerun against a disposable `redis:7.4-alpine` (no
+persistence, 127.0.0.1:6390, db 15): 4 passed; full suite 427 passed. Test
+containers, the test image and the pulled base tag were removed afterwards
+(no prune).
+
 ### Not verified
-- Container check (non-root, /healthz, no client IPs in app logs, request
-  reaching the intended container): Docker Desktop stopped responding after
-  an ENOSPC during the image build and was not restarted without approval.
 - Everything in PRODUCTION_VERIFICATION.md: Railway streaming/disconnect,
   live walking-step `staticDuration`, key restrictions, live map CSP,
   HTTPS/HSTS/proxy, actual log retention, Railway Redis, storage encryption.
 
 ## Next action
 
-1. Container check once Docker responds (reuse the existing image).
-2. **Step 10:** final review and release blockers (see TODO.md).
-3. Monthly free-tier enforcement remains deferred; existing limits retained.
+1. **Step 10:** final review and release blockers (see TODO.md).
+2. Monthly free-tier enforcement remains deferred; existing limits retained.
