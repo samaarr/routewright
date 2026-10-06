@@ -429,8 +429,8 @@ Previously uncommitted work committed in four chunks on main:
 
 ## V2 verified planning + opening-hours integration (V2-VH) — 2026-10-06
 
-Executed NEXT_STEP_V2_INTEGRATION_PROMPT.md. **Uncommitted** (not authorised
-to commit). Baseline before edits: 241 passed, 1 skipped.
+Executed NEXT_STEP_V2_INTEGRATION_PROMPT.md. Committed in d63ef89 (code)
+and 791af55 (docs). Baseline before edits: 241 passed, 1 skipped.
 
 ### Gaps confirmed against code before editing
 
@@ -564,7 +564,7 @@ but not yet exported as metrics (D46, B2).
 
 ## Next action
 
-1. Review and commit V2-VH (not yet committed).
+1. V2-VH committed (d63ef89, 791af55).
 2. Resolve the billing-tier discrepancy and the place-call accounting decision.
 3. **Step 6:** streamed transport + frontend migration to `/api/v2/plan`.
 4. Step 3 remainder: D38 cache migration, D44 area warning, D34-36 suggestions.
