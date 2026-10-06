@@ -163,16 +163,31 @@ Security hardening did not establish provider licensing compliance.
 
 ## Deployment decisions (2026-10-06)
 
-- **Location cache storage (DEPLOYMENT_PLAN.md D-2): ephemeral.** The D38
-  SQLite cache (place ID + coordinates only) stays in the container
-  filesystem; no Railway volume; the container keeps running as the non-root
-  `app` user. Every redeploy/restart onto a new container clears the cache.
-  Correctness must not depend on cached data: planning, refresh and
-  comparison verify places with Google and route with those coordinates;
-  selection treats a missing/unreadable/failing cache as a miss. Clearing it
-  only increases selection lookups. Tests enforce this (see the plan §5b).
-- All other deployment decisions (D-1, D-3…D-9) remain open; nothing is
-  deployed.
+Approved by the owner (details and status: DEPLOYMENT_PLAN.md §1):
+- **Cache:** ephemeral container storage, no volume, non-root container,
+  `RAILWAY_RUN_UID` unset. Planning correctness never depends on it (tested);
+  cache failures are misses. Storage-security considerations remain (host
+  disk, shell access, old deployment's data).
+- **Redis:** TLS required (`rediss://`, verified); no plaintext exception.
+  Enforced at production startup. Provider not yet chosen (proposal: Upstash).
+- **Legacy endpoints retired:** `/api/plan`, `/api/optimise`,
+  `/api/refresh-leg` and the Text Search client removed; v2 services and the
+  local optimiser kept.
+- **Server key:** must have a verified outbound-IP restriction plus Places API
+  (New) + Routes API restriction before deployment. Current hosting cannot
+  provide a static egress IP without a paid change → **deployment blocked**
+  pending a hosting decision.
+- **Metrics:** aggregate app logs on the hosting platform only, no archive,
+  no sensitive content or comparison savings; platform HTTP logs (with client
+  IPs) documented separately; actual retention to be verified.
+- **Free tier:** monthly enforcement deferred; limits unchanged; no zero-charge
+  claim.
+
+Completed fixes: client IPs removed from 429 and uvicorn WebSocket log lines.
+Open proposals: Railway client-IP integration (D-1), Redis provider, egress-IP
+hosting option, production Map ID, push/CI, domain ownership. Existing live
+deployment found: `routewright.vercel.app` (old build) calling
+`routewright-production.up.railway.app` (returns 502). Nothing deployed.
 
 ## Next work
 

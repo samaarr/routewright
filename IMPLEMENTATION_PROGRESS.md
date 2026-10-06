@@ -192,7 +192,7 @@ claimed beyond what the code and tests show.
 | 7 | Suffix refresh via shared engine | COMPLETE — backend e4f5f27 (`/api/v2/refresh[/stream]`, planned departure never now, unchanged prefix, ≤ N−1−k calls, failure → unknown downstream); refresh UI committed with this record ("Refresh from here" / "Try again", previous timings labelled while refreshing, atomic suffix replacement, cancel/incomplete keep the previous plan). Step 8 hook (refresh cancels optimisation) applies once optimisation exists |
 | 8 | Compare one local candidate with fresh original | COMPLETE — backend 6329b9d; final-walk arrival fix 25de41b (applies to planning, refresh and comparison); comparison UI with the approved decisions (Compare on a current complete plan ≥ 3 stops, real phases + Cancel, "Your order — recalculated.", "Estimated journey-time saving: X min.", atomic "Use this order" with explicit stays and no network calls, edits invalidate). Live Google verification of the response shape and deployment checks remain (Step 9/10) |
 | 9 | Metrics, security regression, deployment verification | LOCALLY COMPLETE — audit fix e3192f5, shared-Redis tests d39edd9 (passed against a local container), journey-time presentation 9c946ac, aggregate metrics 7cc0670, security regressions + bundle check ef3af78, docs + PRODUCTION_VERIFICATION.md; local container check passed (non-root, /healthz, request reached the intended container, no client IPs in app logs). All deployment items unverified (B4) |
-| 10 | Review, release readiness, completion report | PENDING |
+| 10 | Review, release readiness, completion report | IN PROGRESS — deployment preparation done locally (approvals A1–A6 recorded; v1 retired 3c9f7ec; Redis TLS 5ef006d; log leaks fixed 8123f47, f3901c9; cache fallback 7365dee). **Blocked**: server-key egress IP needs a hosting decision; push/deploy/live test unapproved. See DEPLOYMENT_PLAN.md §14 |
 
 ---
 
@@ -917,31 +917,57 @@ containers, the test image and the pulled base tag were removed afterwards
   live walking-step `staticDuration`, key restrictions, live map CSP,
   HTTPS/HSTS/proxy, actual log retention, Railway Redis, storage encryption.
 
-## Deployment plan (2026-10-06) — awaiting approval
+## Step 10 — deployment preparation (2026-10-06)
 
-DEPLOYMENT_PLAN.md prepared from the repo config and official Railway,
-Vercel and Google docs; hosting dashboards and the Google project could not
-be inspected (no CLIs or credentials here) and are recorded as unknown.
-Nothing deployed, pushed or changed. Key findings:
-- **D-1 (blocker for public use):** Railway documents `X-Real-IP` for the
-  client IP and publishes no proxy range; with `TRUSTED_PROXY_IPS` empty
-  every visitor shares one rate-limit identity.
-- **D-9 (defect, FIXED):** slowapi's 429 warning logged the client key (the
-  client IP in production). A `slowapi` logger filter drops it and redacts IP
-  tokens in other slowapi records; regression test drives the real limiter
-  (IPv4 + IPv6) and failed before the fix. Backend 426 passed, 4 skipped.
-- **D-2 DECIDED:** ephemeral location cache, no volume, non-root container
-  kept; redeploys clear the cache. Correctness independent of it — new tests
-  (plan ignores cached coordinates; selection falls back after a cleared or
-  unreadable cache; failing query is a miss — previously raised, fixed).
-  Backend 430 passed, 4 skipped.
-- D-4: server-key IP restriction needs Railway Pro static IPs.
-- 27 local commits unpushed; CI has not run on them.
-- Live test estimate ≈ 65 billable events (≤17 Place Details Enterprise,
-  ≤18 Compute Routes); current monthly usage unknown — no zero-charge claim.
+### Approved decisions (owner, 2026-10-06)
+A1 ephemeral cache (no volume, non-root); A2 Redis TLS only; A3 retire v1
+endpoints; A4 server key needs a verified egress-IP restriction before
+deployment; A5 platform-retained aggregate logs, no archive; A6 monthly
+free-tier enforcement deferred, limits unchanged. Detail: DEPLOYMENT_PLAN.md §1.
+
+### Completed work (local commits, not pushed)
+- `d390592` deployment plan (proposal); `6d02f06` D-1 client-IP proposal.
+- `8123f47` 429 log line no longer contains the client IP (real-limiter test).
+- `7365dee` ephemeral cache decision; failing cache reads are misses; tests
+  prove planning ignores the cache.
+- `3c9f7ec` v1 endpoints retired with their models and the Text Search
+  client; generic security tests ported to `/api/v2/plan`; retired routes 404
+  and absent from OpenAPI; frontend types regenerated (deletions only).
+- `5ef006d` production refuses `redis://` and TLS-weakening `rediss://` URLs.
+- `f3901c9` uvicorn WebSocket log lines carried client IPs (reproduced on a
+  local server); fixed with `--ws none` + address-redacting filter; tested
+  with a real uvicorn server.
+- Docs reconciled (this commit): DEPLOYMENT_PLAN.md rewritten,
+  PRODUCTION_VERIFICATION.md, SECURITY.md, TODO.md, SYSTEM_DESIGN_HANDOFF.md.
+  CLAUDE.md (git-ignored) and AGENTS.md updated where they named v1 routes.
+
+### Checks (actual results)
+Backend 403 passed, 4 skipped (Redis env unset); shared-Redis tests 4 passed
+against a disposable local Redis; ruff, format, mypy clean. Frontend
+type-check, lint, unit 88, types drift clean. Browser e2e not re-run (no
+frontend runtime change). Container image not rebuilt with `--ws none`.
+
+### Findings from read-only public probes
+- `routewright.vercel.app` is live with an older build (README: live site);
+  its CSP names `routewright-production.up.railway.app`, which returns
+  `502 Application failed to respond`. A browser Maps key is embedded (as
+  expected); its restrictions are unknown. `routewright.com` is registered by
+  an unknown owner. Nothing was changed.
+
+### Unresolved proposals
+D-1 client IP (Railway), Redis provider (Upstash proposed), egress-IP hosting
+option (Railway Pro vs Fly.io), production Map ID, push/CI, domain ownership.
+
+### Deployment blockers
+1. Server-key egress IP (A4) — hosting decision/paid change required.
+2. Approvals for push, hosting changes, key creation, deploy, live test.
+3. Client identity (D-1) before any public traffic.
+4. Monthly free-tier enforcement deferred → no free-tier-safe public claim.
 
 ## Next action
 
-1. **Approve DEPLOYMENT_PLAN.md decisions (D-1…D-9)**, then push and deploy.
-2. **Step 10:** final review and release blockers (see TODO.md).
+1. Owner decisions in DEPLOYMENT_PLAN.md §14 (hosting for the egress IP,
+   Redis provider, D-1, Map ID, push, deploy, live-test allowance).
+2. After approval: implement D-1 (if Railway), push, deploy per §11, run
+   PRODUCTION_VERIFICATION.md.
 3. Monthly free-tier enforcement remains deferred; existing limits retained.

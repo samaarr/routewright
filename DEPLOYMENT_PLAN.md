@@ -1,516 +1,479 @@
 # Deployment plan — RouteWright v2
 
-> **PROPOSAL — NOT APPROVED.** Decisions D-1 to D-9 (§5) are unresolved.
-> Do not execute any step until the owner approves this plan and those
-> decisions. Nothing in this document has been deployed or verified live.
+> **PROPOSAL — NOT APPROVED FOR EXECUTION.** Approved design decisions are
+> recorded in §1, but deployment itself, every hosting change, the push, key
+> creation, purchases and live Google calls still require explicit approval
+> (§14). Nothing in this document has been deployed or verified live.
 
-Prepared 2026-10-06 for approval. **Nothing here has been executed.** No
-hosting setting was changed, nothing was pushed or deployed, no key was
-created or rotated and no live Google call was made. Monthly free-tier
-enforcement remains deferred and existing application limits are unchanged.
+Prepared 2026-10-06; revised the same day after the owner's approvals.
 Companion checklist: [PRODUCTION_VERIFICATION.md](PRODUCTION_VERIFICATION.md).
 
-Status labels used below:
+Labels used below:
 
-- **VERIFIED (repo)** — read in the current code/config at HEAD `46faeac`.
-- **VERIFIED (docs)** — checked against official provider documentation on
-  2026-10-06 (sources at the end). Staff forum answers are marked as such.
-- **MISSING** — configuration that does not exist yet and must be created.
-- **DEPLOY-ONLY** — can only be checked against the real deployment.
-- **UNKNOWN** — could not be inspected from here.
-
----
-
-## 1. What was inspected
-
-| Item | Finding | Status |
-|------|---------|--------|
-| `backend/Dockerfile` | python:3.11-slim, hash-locked deps, `USER app` (uid 1000), uvicorn `--no-proxy-headers --no-access-log --workers 1 --limit-concurrency 40`, listens on `${PORT:-8000}` | VERIFIED (repo); local run verified 2026-10-06 |
-| `backend/.dockerignore` | excludes `.env*`, tests, caches, local SQLite | VERIFIED (repo) |
-| Railway config-as-code (`railway.toml`/`railway.json`) | none — service settings (root dir, healthcheck, region) live only in the dashboard | MISSING (dashboard settings UNKNOWN) |
-| `frontend/vercel.json` | `framework: nextjs`, `regions: ["dub1"]` | VERIFIED (repo) |
-| `frontend/next.config.js` | `/api/*` rewrite to localhost **only when `NEXT_PUBLIC_API_URL` is empty**; static security headers | VERIFIED (repo) |
-| `frontend/middleware.ts` + `lib/security.ts` | per-request nonce CSP; production build throws unless `NEXT_PUBLIC_API_URL` is an HTTPS origin; `connect-src` allows only Google and that origin; HSTS only when `SECURITY_HSTS_ENABLED=true` | VERIFIED (repo) |
-| Browser → backend path | the browser calls the Railway origin **directly** (CORS); Vercel functions are not in the streaming path, so Vercel function timeouts do not apply to streams | VERIFIED (repo) |
-| `.github/workflows/ci.yml` | backend (ruff, mypy, pytest **with a Redis service**, pip-audit), frontend (type-check, lint, unit, drift, npm audit, build with a probe server key, bundle check, smoke, e2e), gitleaks, container (non-root + `/healthz`) | VERIFIED (repo) |
-| CI on GitHub for current code | last pushed commit `49a77e8`; **27 local commits are unpushed**, so CI has not run on the code to be deployed | UNKNOWN until push |
-| Railway / Vercel / gh CLIs, project links | not installed; no `.railway`/`.vercel` link on this machine | Hosting settings UNKNOWN (not inspectable read-only from here) |
-| Google Cloud project (keys, restrictions, quotas, budgets, current monthly usage) | no access from here | UNKNOWN |
-| Railway plan (Hobby vs Pro) | CLAUDE.md says Hobby; not confirmed | UNKNOWN |
+- **VERIFIED (repo)** — read in the current code/config at HEAD.
+- **VERIFIED (public probe)** — observed from outside with read-only
+  requests (GET/OPTIONS/DNS; nothing that reaches Google), 2026-10-06.
+- **VERIFIED (docs)** — official provider documentation, 2026-10-06.
+  Staff forum answers are labelled separately.
+- **UNKNOWN** — needs dashboard/account access that is not available here.
+- **PROPOSED** — a change awaiting approval.
 
 ---
 
-## 2. Environment variables
+## 1. Decision record
 
-Secret values must be entered in the provider dashboards (or `vercel env add`,
-which prompts) — never on a command line, in a file in the repo, or in chat.
+### Approved (2026-10-06)
 
-### Backend (Railway service)
+| ID | Decision | Implementation status |
+|----|----------|-----------------------|
+| A1 / D-2 | **Ephemeral cache.** Container filesystem, no volume, non-root user kept, `RAILWAY_RUN_UID` unset; planning independent of the cache; cache failures fall back safely | Done in code (`7365dee`): read failures are misses; tests prove planning ignores the cache. Storage-security caveats remain (§9) |
+| A2 / D-3 | **Redis requires TLS (`rediss://`)**, no plaintext exception | Done in code (`5ef006d`): production refuses `redis://` and URLs that disable certificate/hostname checks. Provider choice and cost: §5 (needs approval) |
+| A3 / D-7 | **Retire `/api/plan`, `/api/optimise`, `/api/refresh-leg`**, keep v2 services incl. the local optimiser | Done (`3c9f7ec`): routers, models and the Text Search client removed; retired routes return 404 and are absent from OpenAPI |
+| A4 / D-4 | **Server key needs a verified outbound-IP restriction** plus Places API (New) + Routes API restriction, before deployment; no paid upgrade authorised | **BLOCKER**: current hosting (Railway; plan UNKNOWN, Hobby per CLAUDE.md) cannot provide it without a paid change. Options and costs: §6 |
+| A5 | **Metrics**: aggregate app logs kept by the hosting platform only, no archive; no sensitive content or comparison savings; platform HTTP logs documented separately; actual retention to be verified | Code done (Step 9). Retention UNKNOWN until the plan is confirmed (§10) |
+| A6 | **Monthly free-tier enforcement stays deferred**; existing limits unchanged; no claim that quotas or alerts guarantee zero charges | Unchanged. Blocks any "free-tier-safe" public claim |
 
-| Variable | Kind | Production value | Notes |
-|----------|------|------------------|-------|
-| `GOOGLE_MAPS_API_KEY` | **SECRET** | server key (Places API (New) + Routes API) | startup fails if empty in production |
-| `RATE_LIMIT_STORAGE_URI` | **SECRET** (contains Redis password) | Railway reference to the Redis service's private URL, e.g. `${{Redis.REDIS_URL}}` (confirm the variable name in the Redis service) | must start `redis://` or `rediss://`; startup checks connectivity |
-| `APP_ENV` | public | `production` | enables startup validation; disables `.env` reading |
-| `ALLOWED_ORIGINS` | public | `https://<frontend production domain>` (exact, comma-separated if several) | HTTPS only, no wildcard/path; preview URLs deliberately excluded |
-| `LOG_LEVEL` | public | `INFO` | |
-| `TRUSTED_PROXY_IPS` | public | **empty** until decision D-1 below | `/0` rejected at startup |
-| `HSTS_ENABLED` | public | `false` at first; `true` after HTTPS verified | |
-| `PORT` | injected by Railway | — | do not set |
-| `CACHE_DB_PATH` | public | leave default (`./cache/places_cache.db` → `/app/cache`, owned by `app`) | ephemeral — cleared on every redeploy (D-2, decided) |
-| Limits (`MAX_REQUESTS_PER_IP_PER_*`, `PROVIDER_CALLS_PER_DAY`, `MAX_CONCURRENT_*`, `PROVIDER_WAIT_SECONDS`, `MAX_REQUEST_BYTES`, `MAX_STOPS_PER_REQUEST`, `CACHE_TTL_DAYS`, `CACHE_CLEANUP_SECONDS`) | public | **do not set** — code defaults apply, keeping existing limits unchanged | |
-| `TRUSTED_PROXY_COUNT` | — | **must be unset** | any non-zero value aborts startup |
-| `RATE_LIMIT_WHITELIST_IPS` | public | empty | |
-| `ANTHROPIC_API_KEY` | secret | **do not set** (unused in v1/v2) | |
+### Fixes and investigations completed
 
-### Frontend (Vercel project, root directory `frontend`)
+| ID | Item | Result |
+|----|------|--------|
+| D-9 | Client IP in rate-limit (429) log line | Fixed `8123f47`; regression test drives the real limiter |
+| D-9b | Other log paths (audit) | uvicorn logged `<ip>:<port> - "WebSocket …" 403` on `uvicorn.error` despite `--no-access-log`. Fixed `f3901c9`: `--ws none` + address-redacting filter; real-server test. Own log calls carry only request IDs, exception type names and fixed labels |
+| — | Selection lookups | Still share the D36 combined allowance (30/min, 100/day per client) — **interim**, unchanged |
+| — | `braces@3.0.3` dev audit exception | Expires **2026-11-04**; not extended |
 
-| Variable | Kind | Production value | Notes |
-|----------|------|------------------|-------|
-| `NEXT_PUBLIC_API_URL` | public (inlined at build) | `https://<railway backend domain>` | build-time: changing it requires a redeploy |
-| `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | public by design, **restricted** | browser key (Maps JavaScript API, website-restricted) | visible to every visitor; safety comes from restrictions |
-| `NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID` | public | `DEMO_MAP_ID` or a real Map ID (D-5) | |
-| `SECURITY_HSTS_ENABLED` | public | leave `false` (Vercel already sends HSTS — see §3) | |
-| `GOOGLE_MAPS_API_KEY` | — | **must not exist in Vercel** | CI bundle check guards the build |
+### Open proposals (need approval)
 
----
-
-## 3. Platform checks
-
-| Area | Current state | Status / action |
-|------|---------------|-----------------|
-| **Shared Redis** | code requires `redis://`/`rediss://` in production, fails closed (503 `usage_control_unavailable`) if unreachable; CI runs the shared-store tests | VERIFIED (repo/CI). Railway Redis over private networking (`*.railway.internal`) is Wireguard-encrypted (VERIFIED docs), so `redis://` is acceptable there — SECURITY.md's `rediss://` wording needs updating if approved (D-3). Eviction policy, persistence and that no other service shares the DB: DEPLOY-ONLY |
-| **Trusted proxy / client IP** | backend uses the TCP peer unless it is in `TRUSTED_PROXY_IPS`, then walks `X-Forwarded-For`. Railway documents `X-Real-IP` as the client-IP header; Railway does **not** publish its proxy address range (VERIFIED docs; staff forum: X-Real-IP is always overwritten and apps cannot be reached except through the edge) | **BLOCKER D-1.** With `TRUSTED_PROXY_IPS` empty every visitor shares one identity — per-IP limits (plan 10/min, 50/day) become site-wide. Safe for cost, unusable beyond a test window |
-| **Allowed origins / CORS** | exact HTTPS origins, `GET/POST`, `Content-Type` only, no credentials; startup rejects bad values | VERIFIED (repo). Needs the final frontend domain before the backend's first production start |
-| **HTTPS** | Railway: HTTP GET → HTTPS redirect, plain HTTP POST converted to GET, TLS 1.2/1.3 (VERIFIED docs). Vercel: 308 redirect, HSTS `max-age=63072000` sent by default on `.vercel.app` and custom domains (VERIFIED docs) | Backend HSTS not documented by Railway → set `HSTS_ENABLED=true` after verifying HTTPS. Frontend: keep `SECURITY_HSTS_ENABLED=false` (would replace Vercel's 2-year value with 1 year); confirm Vercel's header is present (DEPLOY-ONLY) |
-| **CSP** | nonce-based, no `unsafe-inline` scripts in production, Google domains + API origin in `connect-src`; smoke-tested without a Maps key | Live map under CSP: DEPLOY-ONLY |
-| **Health checks** | `GET /healthz` returns 200 without touching providers. Railway only probes at deploy time from `healthcheck.railway.app`, default timeout 300 s (VERIFIED docs); the app has no host allow-list, so the probe host is accepted | MISSING: set Healthcheck Path `/healthz` in the Railway service settings. Not continuous monitoring — see §8 |
-| **Streaming timeouts** | operation deadline 60 s; NDJSON events throughout. Railway: requests up to 15 min while data flows, closed after 5 min idle; HTTP/1.1 idle keep-alive 60 s between requests (VERIFIED docs) | 60 s fits the documented limits. Absence of response buffering at Railway's edge is **not documented** → DEPLOY-ONLY. Vercel not in the path |
-| **Disconnect propagation** | tested locally (cancel releases capacity, stops calls) | Through Railway's edge: DEPLOY-ONLY |
-| **Log retention** | metrics as single-line JSON (Railway parses it); Railway retention Free 3 d, Trial/Hobby 7 d, Pro 30 d, Enterprise up to 90 d; 500 lines/s/replica; Railway HTTP logs include `@srcIp` (VERIFIED docs) | Actual plan UNKNOWN → retention 7 d if Hobby. Vercel runtime logs: Hobby 1 h, Pro 1 d (VERIFIED docs) |
-| **Storage** | SQLite cache (place ID + coordinates only), purged after 30 days | **D-2 DECIDED (2026-10-06): ephemeral cache, no volume, non-root kept.** Railway volumes mount with root ownership — a non-root image would need `RAILWAY_RUN_UID=0` (run as root); volumes also block replicas and add redeploy downtime (VERIFIED docs) |
-| **Replicas** | in-process gates (`--workers 1`) and the design assume one replica; Redis already shares limits | Keep **1 replica** |
-| **Vercel plan** | Hobby is non-commercial/personal only; rollback limited to the previous deployment (VERIFIED docs) | Product decision if RouteWright ever earns money |
+| ID | Proposal | Section |
+|----|----------|---------|
+| D-1 | Railway client-IP integration (conditional `X-Real-IP`) — depends on the D-4 hosting outcome | §7 |
+| D-3 provider | Redis provider offering TLS | §5 |
+| D-4 option | How to obtain a verified egress IP | §6 |
+| D-5 | Production Map ID | §8 |
+| D-6 | Push all local commits (34 at the time of writing, plus this record); require green CI | §11 |
+| D-8 | Domains: confirm ownership of the existing Vercel/Railway names | §4 |
 
 ---
 
-## 4. Google Maps Platform keys and prerequisites
+## 2. Existing deployment found (VERIFIED public probe, 2026-10-06)
 
-Recommended per Google's API security best practices (VERIFIED docs):
+| Item | Observation |
+|------|-------------|
+| Frontend `https://routewright.vercel.app` | Live (HTTP 200, `server: Vercel`). README calls it the live site. Serves an older build: nonce CSP present; `connect-src` names `https://routewright-production.up.railway.app`. HSTS `max-age=63072000; includeSubDomains; preload` (Vercel default) |
+| Browser Maps key | One key-shaped string is embedded in the live JS bundle (expected for `NEXT_PUBLIC_*`; value not recorded). Its referrer/API restrictions are **UNKNOWN** — checking needs Google Cloud access or a live call |
+| Backend `https://routewright-production.up.railway.app` | Railway edge reachable (`x-railway-edge: lhr1`); `http://` → `301` to `https://`. The application returns **`502 Application failed to respond`** (`x-railway-fallback: true`) — the service is down or not listening. Cause UNKNOWN. While down, its legacy v1 routes are unreachable; if restarted from old code they would be served again |
+| `routewright.com` | Registered, behind Cloudflare, redirects to `www.` — **owner UNKNOWN**; not assumed to be ours |
 
-**Server key** (Railway `GOOGLE_MAPS_API_KEY`)
-- API restrictions: **Places API (New)** (covers Autocomplete (New) and Place
-  Details (New)) and **Routes API** only.
-- Application restriction: **IP addresses** requires Railway's static outbound
-  IPs, which are **Pro-plan only**, IPv4 only and possibly shared with other
-  customers (VERIFIED docs). On Hobby no IP restriction is possible; the key
-  then relies on API restrictions, staying server-side, quotas and the
-  app's provider budget (D-4).
-- Separate key per app; never reuse the browser key.
-
-**Browser key** (Vercel `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`)
-- Application restriction: **Websites** — `https://<production domain>/*`
-  (add the custom domain and/or `https://<project>.vercel.app/*`; previews
-  intentionally excluded, so maps do not load on preview URLs).
-- API restriction: **Maps JavaScript API** only. The frontend loads only the
-  JS map, Advanced Markers and the TransitLayer — no browser-side Places or
-  Routes calls (VERIFIED repo).
-- Map ID: Advanced Markers need a map ID; Google offers `DEMO_MAP_ID` but the
-  docs do not say it is intended for production (D-5).
-
-**Project prerequisites (all MISSING/UNKNOWN until the operator confirms)**
-1. Billing account attached; budget with alerts at 50/90/100 % (alerts do
-   not cap spend).
-2. Daily quotas: Places API (New) and Routes API. During the live test,
-   temporarily set them low (e.g. 100/day each) so a mistake cannot run
-   long. These are console settings for the operator, not app limits.
-3. **Current month's usage per SKU** (Cloud Console → Billing → Reports,
-   group by SKU): unknown. Free caps are per SKU per month: Dynamic Maps
-   10,000; Autocomplete Requests 10,000; Place Details Essentials 10,000,
-   Pro 5,000, **Enterprise 1,000**; Compute Routes Essentials 10,000 / Pro
-   5,000 / Enterprise 1,000 (VERIFIED docs). Which Compute Routes tier
-   TRANSIT/WALK without traffic awareness bills under is not stated on the
-   usage page checked — confirm from the SKU names in the billing report
-   after the test.
-4. Old/exposed keys: restrict first; rotate only if exposure is suspected
-   (Google advises care when rotating).
+Consequences: the production frontend is live but broken (its backend is
+down). Nothing was changed. Retiring the old Railway service and any volume
+it may have (it could still hold the legacy rich cache with place names and
+hours) is part of the deployment (§11, step 9).
 
 ---
 
-## 5. Decisions required before deployment
+## 3. Repository configuration (VERIFIED repo)
 
-| ID | Decision | Options | Recommendation |
-|----|----------|---------|----------------|
-| D-1 | **Client identity on Railway** (blocker for public use) | (a) small code change: when a setting such as `CLIENT_IP_HEADER=x-real-ip` is set, use Railway's `X-Real-IP` (documented header; overwrite guarantee is from Railway staff, not a formal contract); (b) set `TRUSTED_PROXY_IPS` to an observed proxy range (unpublished, can change — fragile); (c) leave empty and accept one shared bucket during a closed test | (c) for the live test only; before any public announcement, the conditional `X-Real-IP` design in §5a (not blind trust) |
-| D-2 | Cache storage | **DECIDED 2026-10-06** — see §5b | ephemeral cache, no volume, non-root container |
-| D-3 | Redis transport | `redis://` over Railway private networking (Wireguard) vs requiring `rediss://` | accept `redis://` on the private network; never expose Redis publicly |
-| D-4 | Server-key application restriction | Railway Pro static IPs vs Hobby with API restriction + quotas only | owner's cost/risk call; document the choice |
-| D-5 | Map ID | `DEMO_MAP_ID` vs a project Map ID (same project as the browser key) | create a project Map ID |
-| D-6 | Push and CI | push the 27 local commits and require green CI before deploy | required; needs explicit push approval |
-| D-7 | Legacy endpoints (`/api/plan`, `/api/optimise`, `/api/refresh-leg`) | still served; the frontend no longer calls them; they share the limits and budget | retirement still awaits approval; either approve retirement or accept exposure for the test |
-| D-9 | **Client IP in 429 log line** (found 2026-10-06) | slowapi logs `WARNING:slowapi:ratelimit 10 per 1 minute (<client key>) exceeded at endpoint: plan-v2` — the key is the client IP in production. Fix: raise the `slowapi` logger level / filter in the app (small change + test) vs accept (Railway HTTP logs already hold `@srcIp`) | **FIXED** (separate commit): a filter on the `slowapi` logger drops the key from that message and redacts IP tokens in any other slowapi record; `tests/test_ratelimit_logging.py` drives the real limiter with IPv4/IPv6 clients |
-| D-8 | Frontend domain | `<project>.vercel.app` vs custom domain | decide first — needed for `ALLOWED_ORIGINS` and the browser-key referrer |
-
-Monthly free-tier enforcement stays deferred: **the deployment may be used for
-a closed live test only; a public launch claiming free-tier safety is
-blocked** until enforcement exists.
+| Item | Finding |
+|------|---------|
+| `backend/Dockerfile` | python:3.11-slim, hash-locked deps, `USER app` (uid 1000), uvicorn `--no-proxy-headers --no-access-log --ws none --workers 1 --limit-concurrency 40`, `${PORT:-8000}`, `umask 077` |
+| Startup validation (`app/main.py`) | production requires `GOOGLE_MAPS_API_KEY`, **verified-TLS `rediss://`**, HTTPS-only `ALLOWED_ORIGINS`; rejects `TRUSTED_PROXY_COUNT` and `/0` trust; checks Redis connectivity |
+| Routes | only `/healthz` and `/api/v2/*` (`tests/test_retired_endpoints.py`) |
+| Logging | one JSON metrics line per v2 operation; no access log; slowapi and uvicorn loggers redact addresses |
+| Railway config-as-code | none; dashboard settings UNKNOWN |
+| `frontend/vercel.json` | `framework: nextjs`, `regions: ["dub1"]` |
+| `frontend/middleware.ts`, `lib/security.ts` | per-request nonce CSP; production build requires an HTTPS `NEXT_PUBLIC_API_URL` origin |
+| Browser → backend | direct cross-origin calls; Vercel functions are not in the streaming path |
+| CI (`.github/workflows/ci.yml`) | backend (ruff, mypy, pytest with a Redis service, pip-audit), frontend (type-check, lint, unit, drift, npm audit, probe-key build + bundle check, smoke, e2e), gitleaks, container (non-root + `/healthz`) |
+| Git | local commits not pushed (last pushed `49a77e8`); CI has not run on them |
 
 ---
 
-## 5b. D-2 decision — ephemeral location cache (DECIDED 2026-10-06)
+## 4. Domains, allowed origins, browser key, CSP (D-8)
 
-Decision: ephemeral location cache, no Railway volume, non-root
-container preserved. The SQLite cache (place ID + coordinates only, D38)
-lives in the container filesystem at `/app/cache` (owned by the non-root
-`app` user); **every redeploy, restart onto a new container or rollback
-clears it**. Correctness does not depend on it: planning, refresh and
-comparison re-verify every place with Place Details and route with those
-provider coordinates, never cached or client-sent ones; place selection
-treats a missing, unreadable or failing cache as a miss and asks Google;
-cache write failures are ignored. Effect of clearing: more selection
-lookups (Place Details Essentials) until the cache refills — a cost effect
-only. No volume means no `RAILWAY_RUN_UID=0`, no volume backups/snapshots
-and no encryption-at-rest question for this data.
+Ownership of all names below is **UNKNOWN** from here; the README and the
+live CSP strongly suggest the first two belong to this project. Confirm in
+the Vercel and Railway dashboards before use. `routewright.com` is not used.
 
-Enforced by tests: `test_plan_ignores_cached_coordinates` (a wrong cached
-location is ignored by planning), `test_cleared_cache_after_redeploy_falls_back_to_provider`,
-`test_unreadable_cache_falls_back_to_provider`, `test_failed_query_is_a_cache_miss`
-(a failing cache query used to raise; fixed with this decision).
+| Role | Proposed value | Status |
+|------|----------------|--------|
+| Frontend origin | `https://routewright.vercel.app` | exists, live (old build); ownership to confirm |
+| Backend origin | `https://routewright-production.up.railway.app` if staying on Railway; a new origin if D-4 moves the backend (e.g. `https://<app>.fly.dev`) | exists, 502; depends on D-4 |
 
-Deployment consequences: do **not** attach a volume or set
-`RAILWAY_RUN_UID`; do not set `CACHE_DB_PATH` to a mounted path. Non-root
-comes from the image (`USER app`), checked by CI's container job and the
-local check; on Railway confirm `RAILWAY_RUN_UID` is unset (it would
-override the user).
+Exact settings (frontend on `routewright.vercel.app`, backend `<BACKEND>`):
+
+- Backend `ALLOWED_ORIGINS=https://routewright.vercel.app` (exact; no
+  preview URLs, no wildcard).
+- Frontend `NEXT_PUBLIC_API_URL=<BACKEND>` (HTTPS origin, no path).
+- Browser key → Application restriction **Websites**:
+  `https://routewright.vercel.app/*` only; API restriction **Maps JavaScript
+  API** only. Preview deployments intentionally get no map.
+- Server key → API restriction **Places API (New)** and **Routes API**;
+  Application restriction **IP addresses**: the verified egress IP(s) (§6).
+- Frontend CSP (generated by `lib/security.ts`; only the API origin is
+  configurable):
+  ```
+  default-src 'none'; script-src 'self' 'nonce-<per request>' https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.googleusercontent.com https://*.ggpht.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://maps.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.googleusercontent.com https://*.ggpht.com; connect-src 'self' https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.googleusercontent.com https://*.ggpht.com <BACKEND>; worker-src 'self' blob:; frame-src https://www.google.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'
+  ```
+- Backend API responses: `default-src 'none'; frame-ancestors 'none'`.
 
 ---
 
-## 5a. D-1 proposal — Railway client identity (NOT IMPLEMENTED)
+## 5. Redis with TLS (A2 approved; provider needs approval)
 
-Researched 2026-10-06. Awaiting approval; no code written.
+Requirement: `rediss://`, certificate and hostname verified (enforced at
+startup). Each v2 request makes a few Redis commands (rate-limit windows
+plus one budget increment per provider call; a 3-stop plan ≈ 10–15 — an
+estimate from the code paths, not measured).
 
-### What Railway officially documents
+| Option | TLS | Cost | Notes |
+|--------|-----|------|-------|
+| Railway Redis template | **No** — URL is `redis://`, no TLS option (Railway staff answer) | included in usage | Does not meet A2 |
+| Railway self-managed Redis with TLS (custom image + certificates) | possible | Railway usage | Self-managed CA, rotation, `ssl_ca_certs`; operational burden; not recommended |
+| **Upstash Redis** | always on (VERIFIED docs) | **Free**: 500K commands/month, 256 MB, 10 GB bandwidth, 1 DB; pay-as-you-go $0.20 per 100K commands; fixed from $10/month (VERIFIED docs) | AWS `eu-west-1` (Ireland) available (Upstash API docs). Public endpoint protected by password + TLS; exceeding the free allowance stops service or needs a paid plan |
+| Redis Cloud | free 30 MB tier: TLS not listed; Essentials from $5/month includes TLS (VERIFIED pricing page) | $5/month | Paid |
+| Aiven for Valkey | free availability unclear in docs | UNKNOWN | Not evaluated further |
+
+**Proposal:** Upstash, free plan, region `eu-west-1`, one database used only
+by RouteWright, password only in the backend secret. At ~15 commands per
+plan the free allowance covers on the order of 30,000 operations/month, far
+above expected use, but this is not a guarantee. Verify after setup:
+`rediss://` URL, TLS handshake succeeds from the backend (startup check),
+eviction policy does not drop limit keys.
+
+---
+
+## 6. Server-key outbound-IP restriction (A4) — BLOCKER
+
+Google accepts IPv4/IPv6 addresses or CIDR ranges for server keys (VERIFIED
+docs). The restriction is only as strong as the exclusivity of the IP:
+anyone sending traffic from the same IP can use a leaked key.
+
+| Option | Egress IP | Cost | Limitations |
+|--------|-----------|------|-------------|
+| Railway Hobby (current, per CLAUDE.md) | none static | $5/month | **Cannot satisfy A4** |
+| Railway Pro + Static Outbound IPs | static IPv4 per service | Pro $20/month per workspace (incl. $20 usage credit; also 30-day logs) | IPs "may be shared with other customers" (VERIFIED docs) — restriction does not exclude co-tenants; region change changes IPs |
+| Fly.io app-scoped static egress IP | static IPv4 + IPv6, **app-scoped** (shared only by the app's own machines) | $3.60/month per IPv4 + Fly compute (compute price UNKNOWN, not verified) | Migration of the backend (Dockerfile reusable); one IP per region; D-1 needs a Fly-specific design; streaming limits not verified |
+| Render default outbound ranges | regional ranges | plan price | **Shared across all services in the region** (VERIFIED docs) — weak |
+| Render dedicated outbound IPs | dedicated | price not stated in docs | Migration; UNKNOWN cost |
+| Static-IP egress proxy (QuotaGuard, Fixie, …) | provider's IPs | UNKNOWN | Code change to route Google calls through a proxy; third party in the path; not evaluated |
+
+Current hosting cannot meet A4 and no paid upgrade is authorised, so **the
+deployment is blocked**. Decision needed: (a) authorise Railway Pro
+($20/month) and accept shared static IPs, or (b) authorise a Fly.io
+migration (~$3.60/month for the IP plus compute) with a dedicated egress IP,
+or (c) wait. Recommendation: (b) gives the strongest restriction at the
+lowest IP cost but is a migration; (a) is the smallest change. Either way
+the IP must be verified (shown in the provider dashboard/CLI) before the
+key restriction is set, and the key is created only after approval.
+
+---
+
+## 7. D-1 proposal — client identity on Railway (NOT IMPLEMENTED)
+
+Applies if the backend stays on Railway. A Fly.io move needs a different
+design (Fly's own client-IP header and ingress), to be proposed separately.
+
+### What Railway documents
 - The edge adds `X-Real-IP` "for identifying client's remote IP", plus
   `X-Forwarded-Proto` (always `https`), `X-Forwarded-Host`,
-  `X-Railway-Edge`, `X-Railway-Request-Id`, `X-Request-Start`
-  ([Specs & limits](https://docs.railway.com/networking/public-networking/specs-and-limits)).
-- The edge "terminates TLS, adds headers, and looks up routing information",
-  then forwards over Railway's internal network
-  ([Edge networking](https://docs.railway.com/networking/edge-networking)).
-- A TCP proxy can expose a service's port to the internet
-  ([TCP proxy](https://docs.railway.com/networking/tcp-proxy)); when one is
-  configured Railway injects `RAILWAY_TCP_PROXY_DOMAIN`/`_PORT`
-  ([Variables](https://docs.railway.com/reference/variables)).
+  `X-Railway-Edge`, `X-Railway-Request-Id`, `X-Request-Start`.
+- The edge terminates TLS, adds headers and forwards over Railway's internal
+  network.
+- A TCP proxy can expose a service's port directly; when configured Railway
+  injects `RAILWAY_TCP_PROXY_DOMAIN`/`_PORT`.
 - Private networking lets other services in the same project/environment
-  reach the service directly over `*.railway.internal`; "any valid IPv6 or
-  IPv4 traffic is allowed"
-  ([Private networking](https://docs.railway.com/networking/private-networking/how-it-works)).
+  reach the service over `*.railway.internal`.
 
-### What the official docs do NOT say
-- That a client-supplied `X-Real-IP` is overwritten or stripped.
-- Anything about `X-Forwarded-For`.
-- That a service cannot be reached except through the edge.
-- Which source address/range the container sees for edge connections.
-
-Only Railway **staff forum answers** cover these: `X-Real-IP` is "always set
-by our proxy", "we will always overwrite it", and "apps behind our HTTP proxy
-cannot be accessed directly" (2026-05-06); proxy IPs are not published. A
-2024 thread records that clients *could* set `X-Real-IP` until Railway fixed
-it — i.e. this guarantee has broken before.
+### Not documented
+That client-supplied `X-Real-IP` is overwritten; anything about
+`X-Forwarded-For`; that a service is reachable only via the edge; which
+source addresses the container sees. Staff forum answers (2026-05) say
+`X-Real-IP` is always overwritten and apps cannot be reached directly; a
+2024 thread shows clients could set it until Railway fixed a bug.
 
 ### Trust boundary
 ```
-internet client ──TLS──► Railway edge (sets X-Real-IP) ──internal──► backend
-                                                         ▲
-   other services in the same project (private network) ┘  can send anything
-   TCP proxy on the backend (if ever enabled)            ┘  bypasses the edge
+internet client ──TLS──► Railway HTTP edge (writes X-Real-IP) ──internal──► backend
+   TCP proxy on the backend (if ever created)  ─────────────────────────────┘ bypasses edge
+   other services in the same project (private network) ───────────────────┘ bypasses edge
 ```
-Trusted: Railway's HTTP edge, and only for the `X-Real-IP` value it writes.
-Not trusted: every request header from the client, `X-Forwarded-For`, any
-connection that did not come through the HTTP edge. Inside the boundary by
-necessity: Railway itself and anyone who can configure the project.
+Trusted: only the `X-Real-IP` value written by the HTTP edge. Not trusted:
+any client header, `X-Forwarded-For`, any connection that did not come
+through the edge.
 
-**Is the backend directly reachable?** Only through (1) the HTTP edge for a
-generated/custom domain, (2) a TCP proxy, if one is created, or (3) the
-private network from other services in the same project. (2) and (3) bypass
-the edge, so a forged `X-Real-IP` would arrive unchanged. The proposal closes
-(2) by refusing to start and (3) by keeping the project to backend + Redis.
+**How trusted ingress is identified.** The app cannot authenticate the edge
+per request. It relies on (1) deployment facts checked at startup — running
+on Railway (`RAILWAY_ENVIRONMENT_ID` present) and **no TCP proxy**
+(`RAILWAY_TCP_PROXY_DOMAIN` absent, else refuse to start) — and (2)
+per-request consistency: the TCP peer is a non-public address (edge traffic
+arrives from Railway's internal network) and Railway's edge headers are
+present.
 
-**How forged headers are prevented:** by Railway overwriting `X-Real-IP` at
-the edge (staff statement, not documented) — the app cannot prove this per
-request. The design therefore (a) only accepts the header under conditions
-that hold for edge traffic, (b) fails toward *less* trust (shared bucket)
-when anything is off, (c) re-verifies the overwrite after every deploy, and
-(d) keeps the global provider budget as the cost backstop whatever identity
-is derived.
+**Can clients bypass it?** Only via a TCP proxy (refused at startup) or
+from another service in the project (the project holds only the backend —
+Redis is external under §5). No client-reachable path remains if those hold.
 
-### Proposed implementation (small, reviewable)
-1. New setting `CLIENT_IP_SOURCE` = `peer` (default, current behaviour) |
-   `railway`. `railway` is mutually exclusive with `TRUSTED_PROXY_IPS`.
-2. Startup refuses `railway` unless `RAILWAY_ENVIRONMENT_ID` is present
-   (actually running on Railway) and **refuses if `RAILWAY_TCP_PROXY_DOMAIN`
-   is set** (an edge bypass exists). Read through `settings`, not
-   `os.environ`.
-3. Per request in `railway` mode, use `X-Real-IP` only if all hold:
-   - exactly one `X-Real-IP` header, parsing as one IP address (no list,
-     port or whitespace tricks; IPv4-mapped IPv6 normalised);
-   - the address is globally routable (not private, loopback, link-local,
-     CGNAT, reserved, unspecified) — a real internet client;
-   - Railway's edge markers `X-Railway-Edge` and `X-Railway-Request-Id` are
-     present (consistency check against non-edge traffic; forgeable, so not
-     relied on alone);
-   - the TCP peer is **not** a globally routable address (edge traffic
-     arrives from Railway's internal network; a public peer would indicate
-     direct exposure).
-   Otherwise the identity is the TCP peer (all such requests share one
-   bucket — stricter, never looser). `X-Forwarded-For` is ignored entirely.
-4. Aggregate metric (no addresses): `client_ip_source` =
-   `header` | `fallback_missing` | `fallback_invalid` | `fallback_peer_public`,
-   counted per operation line, so a silent change at Railway (e.g. the header
-   disappearing) is visible without logging IPs.
-5. Tests: forged/duplicate/list/private/IPv6/mapped headers, missing edge
-   markers, public peer, TCP-proxy startup refusal, mutual exclusion with
-   `TRUSTED_PROXY_IPS`, unchanged `peer` mode, and limiter buckets per
-   identity through the real limiter.
+**Forged headers.** Prevention depends on Railway overwriting `X-Real-IP`
+(staff statement). Mitigations: accept the header only under the conditions
+above; ignore `X-Forwarded-For`; fall back to the peer (one shared, stricter
+bucket) on any anomaly; count the source per request in metrics; re-test
+forged headers after every deploy; global provider budget as the cost
+backstop. `TRUSTED_PROXY_IPS` is **not** broadened.
 
-### Deployment controls and verification (added to the checklist)
-- No TCP proxy on the backend; project contains only backend + Redis; no
-  third-party CDN/proxy in front (it would make `X-Real-IP` the CDN's IP).
-- After every deploy: from one client send forged `X-Real-IP` and
-  `X-Forwarded-For` values → still the same bucket as without them; from two
-  networks → separate buckets; metrics show `client_ip_source=header` for
-  normal traffic.
-- Residual risk: the overwrite guarantee is not contractual. If any check
-  fails, switch `CLIENT_IP_SOURCE=peer` (shared bucket; safe for cost).
+### Implementation (after approval)
+1. `CLIENT_IP_SOURCE` = `peer` (default) | `railway`; exclusive with
+   `TRUSTED_PROXY_IPS`.
+2. Startup: `railway` requires `RAILWAY_ENVIRONMENT_ID`, refuses when
+   `RAILWAY_TCP_PROXY_DOMAIN` is set; read via `settings`.
+3. Per request: exactly one `X-Real-IP` holding one parseable global address
+   (IPv4-mapped normalised), edge markers present and peer not global →
+   use it; otherwise the peer.
+4. Metric `client_ip_source` = `header` | `fallback_missing` |
+   `fallback_invalid` | `fallback_peer_public` (no addresses).
+5. Tests for forged/duplicate/list/private/IPv6 headers, missing markers,
+   public peer, startup refusals, real-limiter buckets.
+6. Sub-decision: IPv6 identities by /64 (changes grouping, not limits) —
+   excluded unless approved.
 
-### Open sub-decision
-IPv6 clients can rotate addresses within their /64; per-address buckets are
-easy to evade. Option: key IPv6 identities by /64 (changes identity
-granularity, not limit values). Not included unless approved.
+Until D-1 is implemented, every visitor shares one rate-limit identity
+(safe for cost, unusable for public traffic).
 
 ---
 
-## 6. Deployment order
+## 8. Production Map ID (D-5, investigation only)
 
-Do not skip or reorder. Each step lists its stop condition.
+- Advanced Markers require a map ID; Google allows `DEMO_MAP_ID` (VERIFIED
+  docs) but does not describe it as a production setting.
+- Creating a map ID is free (VERIFIED docs). Map loads are billed as
+  **Dynamic Maps** (Essentials, 10,000 free/month) whether or not a map ID
+  is used; the billing pages checked do not state any extra charge for map
+  IDs, Advanced Markers or the TransitLayer either way — confirm in the
+  billing report.
+- Setup (after approval; not done): Cloud Console → Google Maps Platform →
+  Map Management → Create map ID → type **JavaScript**, **Raster** (matches
+  the current default map) → Save. Create it in the project that owns the
+  browser key (a same-project requirement is not stated in the docs;
+  keeping them together avoids doubt). No cloud styling needed.
+- Set `NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID=<id>` in Vercel; rebuild.
 
-### Step 0 — approvals and prerequisites
-- Owner approves this plan, D-1…D-8, and the live-test budget in §7.
-- Google: keys created and restricted (§4), temporary low quotas, budget
-  alerts, current SKU usage recorded in PRODUCTION_VERIFICATION.md.
-- Stop if current-month usage of any SKU in §7 is near its free cap.
+---
 
-### Step 1 — local pre-flight (no network beyond package registries)
+## 9. Ephemeral cache — remaining storage considerations (A1)
+
+No volume means no volume backups or snapshots, but storage security is
+**not** eliminated:
+- The SQLite file (place ID + coordinates, ≤ 30 days) sits on the hosting
+  provider's container disk while the container runs; encryption at rest of
+  that disk is not documented (UNKNOWN). File mode 0600, directory 0700,
+  non-root user.
+- Anyone with shell/exec access to the service can read it.
+- It is cleared on every redeploy/restart — that is the disposal mechanism,
+  together with the 30-day purge while running.
+- The **old Railway service** may have a volume or image holding the legacy
+  rich cache (names, types, hours) — UNKNOWN; inspect and delete during
+  decommissioning (§11 step 9).
+
+---
+
+## 10. Logs and retention (A5)
+
+| Log | Content | Retention | Status |
+|-----|---------|-----------|--------|
+| App metrics (stdout JSON) | operation, transport, outcome, failure category, elapsed, stop count, provider call counts | Railway: Hobby 7 d, Pro 30 d (VERIFIED docs); Fly/other: UNKNOWN | Actual plan UNKNOWN |
+| App security log | request ID, elapsed ms, exception type | same | — |
+| **Platform HTTP logs (Railway)** | per request: `@srcIp` (client IP), path, method, status, user agent, timings, edge region | same plan retention | Outside app control; documented in SECURITY.md; privacy notice must cover it |
+| Vercel runtime logs | middleware/functions (app writes none) | Hobby 1 h (VERIFIED docs) | — |
+| Excluded from app logs | place names/IDs, coordinates, dates, IPs (redacted from library logs), plans, secrets, raw provider text, comparison savings | — | Tested |
+
+No separate archive or export.
+
+---
+
+## 11. Deployment order (after approvals)
+
+Each step lists its stop condition. "0 calls" = no Google calls.
+
+**0. Approvals and prerequisites**
+- Owner approves: D-4 option, Redis provider, D-1 (if Railway), D-5, D-6,
+  domain ownership confirmed, live-test allowance (§12).
+- Google Cloud: record this month's usage **per SKU across the whole
+  billing account** (Billing → Reports, grouped by SKU and project); set
+  budget alerts (they do not cap spend); set temporary low daily quotas on
+  Places API (New) and Routes API (e.g. 100/day each) for the test window.
+- Check the **existing live browser key's** restrictions now (it is public
+  in the live bundle).
+- Stop if any SKU in §12 is near its monthly free cap.
+
+**1. Local pre-flight** (commands in §15), then `git push origin main`
+(only with D-6 approval) and wait for all four CI jobs to pass.
+
+**2. Redis (Upstash, proposed)** — create one database in `eu-west-1`;
+copy the `rediss://` URL into the backend secret only. 0 calls.
+
+**3. Backend hosting (depends on D-4)**
+- Railway Pro: enable Static Outbound IPs on the backend service, redeploy,
+  read the IPs in Settings → Networking.
+- Fly.io: create the app in a European region, `fly ips allocate-egress
+  --app <app> -r <region>`, read the IPs from `fly ips list`.
+- No volume, `RAILWAY_RUN_UID` unset (Railway), 1 instance, healthcheck path
+  `/healthz`, no TCP proxy, no other services in the project.
+
+**4. Server key** — create a new key: API restriction Places API (New) +
+Routes API; IP restriction = the verified egress IP(s) from step 3. Never
+reuse the browser key.
+
+**5. Backend variables and deploy** (secrets in the dashboard):
+`GOOGLE_MAPS_API_KEY`, `RATE_LIMIT_STORAGE_URI=rediss://…`,
+`APP_ENV=production`, `ALLOWED_ORIGINS=https://routewright.vercel.app`,
+`LOG_LEVEL=INFO`, `HSTS_ENABLED=false`, `TRUSTED_PROXY_IPS` empty,
+`CLIENT_IP_SOURCE` per D-1 (once implemented). Deploy (`railway up
+--detach` / `fly deploy`). Stop on any startup validation error — fix the
+variable, not the code. 0 calls.
+
+**6. Frontend** — Vercel env: `NEXT_PUBLIC_API_URL=<BACKEND>`,
+`NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` (browser key, restricted per §4),
+`NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID`; confirm no `GOOGLE_MAPS_API_KEY`;
+`vercel --prod`. 0 calls except map loads.
+
+**7. Zero-call verification** — PRODUCTION_VERIFICATION.md items marked
+"0 calls" (health, headers, CORS, retired routes 404, rate limit via
+rejected plans, Redis outage behaviour, logs without IPs, forged headers).
+
+**8. Live test** (§12) with the owner present and low quotas.
+
+**9. Afterwards** — `HSTS_ENABLED=true`; restore normal quotas (still no
+free-tier guarantee); if the backend moved, decommission the old Railway
+service (remove domain, delete service and any volume after confirming its
+contents); record results.
+
+**Streaming:** 60 s operations fit Railway's limits (15 min while data
+flows; 5 min idle) (VERIFIED docs); Fly limits not verified; absence of
+proxy buffering is checked live.
+
+---
+
+## 12. Minimal live test (unauthorised until approved)
+
+Dublin, transit, departure a few days ahead, one operator. Upper estimates:
+
+| # | Test | Autocomplete | PD Essentials | PD Pro | PD Enterprise | Compute Routes | Dynamic Maps |
+|---|------|-------------:|--------------:|-------:|--------------:|---------------:|-------------:|
+| L1 | Load page; map under CSP | – | – | – | – | – | 1 |
+| L2 | Select city + 4 stops | 10–20 | 4 | 1 | – | – | – |
+| L3 | Plan 3 stops; stream visibly incremental | – | – | 1 | 3 | 2 | 1 |
+| L4 | Refresh from the second leg | – | – | 1 | 2 | 1 | – |
+| L5 | Plan 4 stops (inefficient order), Compare | – | – | 2 | 8 | ≤9 | – |
+| L6 | Compare again, Cancel after first progress | – | – | ≤1 | ≤4 | ≤6 | – |
+| L7 | Final walking: arrivals vs Google Maps; no `arrival_unknown` | – | – | – | – | – | – |
+| | **Total (upper)** | **≤20** | **4** | **≤6** | **≤17** | **≤18** | **≤2** |
+
+≈ 65 billable events. The application budget (2,000/day) and limits are
+not a cost guarantee; existing usage on the **billing account** (other
+projects and apps share the per-SKU monthly caps) is UNKNOWN. Abandoned
+autocomplete sessions bill per request. No zero-charge claim.
+
+L7 is indirect: raw Routes responses are not logged by design.
+
+---
+
+## 13. Rollback and emergency stop
+
+| Situation | Action |
+|-----------|--------|
+| Bad backend deploy | Railway: previous deployment → Rollback (restores image and variables, within retention). Fly: redeploy the previous image (`fly releases`, `fly deploy --image <previous>`) |
+| Bad frontend deploy | `vercel rollback` (Hobby: previous production deployment only); `vercel promote <deployment>` to undo. **Note:** the previous production frontend is the old v1 build, which calls retired routes — rolling the frontend back alone does not restore a working site |
+| First v2 deploy fails | keep the new backend unreachable (remove public domain / stop it); frontend rollback restores the old (already broken) build |
+| Unexpected Google usage / key exposure | set Places API (New) and Routes API daily quotas to 0 (immediate stop), then restrict/rotate (rotation needs approval); budget alerts do not stop spend |
+| Redis outage or quota exhausted | app fails closed (503, no provider calls); restore or upgrade (needs approval) |
+| Abuse while D-1 is unimplemented | lower quotas; temporary platform IP blocks |
+
+Vercel rollback keeps current env vars; Railway rollback restores them.
+
+---
+
+## 14. Approval package (what needs a yes)
+
+1. **Hosting for A4**: Railway Pro ($20/month, shared static IPs) **or**
+   Fly.io migration (~$3.60/month IP + compute, dedicated egress IP).
+2. **Redis**: Upstash free plan, `eu-west-1`.
+3. **Client IP**: D-1 as in §7 if on Railway (Fly needs a new proposal).
+4. **Domains**: confirm `routewright.vercel.app` and the Railway project are
+   ours; final backend origin follows item 1.
+5. **Map ID**: create one raster JavaScript map ID.
+6. **Push**: all local commits to `origin/main`; CI must pass.
+7. **Deploy** in the §11 order, including decommissioning the old Railway
+   service if the backend moves.
+8. **Live test**: ≤ 65 billable events (§12), low quotas during the test.
+9. **Keys**: create the server key (and Map ID) only after 1 and 4.
+
+Deferred / release blockers regardless: monthly free-tier enforcement (A6),
+D36 selection limits (interim), D46 comparison-outcome permitted use,
+`braces` exception expiry 2026-11-04.
+
+---
+
+## 15. Commands
+
 ```bash
+# Pre-flight (local, no Google calls)
 cd backend
 .venv/bin/python -m pytest -q
 .venv/bin/python -m ruff check . && .venv/bin/python -m ruff format --check .
 .venv/bin/python -m mypy app
 cd ../frontend
 npm run type-check && npm run lint && npm run test:unit
-npm run check:types-drift && npm run security:audit
+PATH="../backend/.venv/bin:$PATH" npm run check:types-drift
+npm run security:audit
 GOOGLE_MAPS_API_KEY=AIzaPROBEserverKEYmustNOTbeBUNDLED12345678 npm run build
 SECURITY_BUNDLE_PROBE=AIzaPROBEserverKEYmustNOTbeBUNDLED12345678 npm run security:bundle
 npm run test:e2e
-```
-Then (approval D-6) `git push origin main` and wait for all four CI jobs to
-pass. Stop on any failure.
 
-### Step 2 — Railway: Redis and backend (dashboard for secrets)
-1. Create project (EU region, closest to Vercel `dub1`); add the Redis
-   service from Railway's template; keep it private (no public TCP proxy).
-2. Add the backend service: source = this repo, **root directory
-   `backend`** (Dockerfile build), 1 replica, no volume (D-2).
-3. Set variables from §2 in the dashboard (`GOOGLE_MAPS_API_KEY`,
-   `RATE_LIMIT_STORAGE_URI` as a reference to the Redis service,
-   `APP_ENV=production`, `ALLOWED_ORIGINS=https://<frontend domain>`,
-   `LOG_LEVEL=INFO`, `HSTS_ENABLED=false`, `TRUSTED_PROXY_IPS` empty).
-4. Settings → Healthcheck Path `/healthz`.
-5. Deploy (dashboard deploy from the pushed commit, or CLI):
-   ```bash
-   railway login
-   cd backend && railway link        # choose the project/service
-   railway up --detach
-   railway logs -n 100               # expect "Application startup complete"
-   railway domain                    # generate the public HTTPS domain
-   ```
-6. Stop if startup logs show a validation error (missing key, non-Redis
-   storage, bad origins, proxy settings) — fix the variable, not the code.
+# Railway (if chosen)
+railway login && cd backend && railway link
+railway up --detach && railway logs -n 100
 
-### Step 3 — Vercel frontend
-```bash
-cd frontend
-vercel link
-vercel env add NEXT_PUBLIC_API_URL production              # https://<railway domain>
-vercel env add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY production  # browser key (prompted, not echoed to history)
+# Vercel
+cd frontend && vercel link
+vercel env add NEXT_PUBLIC_API_URL production
+vercel env add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY production
 vercel env add NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID production
 vercel --prod
 ```
-Confirm the Vercel project has **no** `GOOGLE_MAPS_API_KEY`. If the final
-domain differs from the one used in `ALLOWED_ORIGINS`, update that backend
-variable (Railway redeploys).
-
-### Step 4 — zero-Google-call verification (§8 items marked "0 calls")
-### Step 5 — live test (§7), with the owner present and quotas low
-### Step 6 — after verification
-- `HSTS_ENABLED=true` on Railway; restore normal Google quotas (still not a
-  free-tier guarantee); record results in PRODUCTION_VERIFICATION.md.
-- Public announcement remains blocked by D-1 (if not done) and deferred
-  free-tier enforcement.
-
----
-
-## 7. Minimal live test plan
-
-One operator, one browser, Dublin, transit, a departure a few days ahead.
-Counts are upper estimates from the code paths (city lookup: Place Details
-Pro; stop verification: Place Details Enterprise per stop; routing: one
-Compute Routes per leg; selections: Autocomplete + Place Details
-Essentials/Pro). Autocomplete counts depend on typing and debounce.
-
-| # | Test | Autocomplete | PD Essentials | PD Pro | PD Enterprise | Compute Routes | Dynamic Maps |
-|---|------|-------------:|--------------:|-------:|--------------:|---------------:|-------------:|
-| L1 | Load page, map renders under CSP, no console violations | – | – | – | – | – | 1 |
-| L2 | Select city + 4 stops via suggestions | 10–20 | 4 | 1 | – | – | – |
-| L3 | Plan with the first 3 stops; watch progress stream incrementally (DevTools) | – | – | 1 | 3 | 2 | (reload) 1 |
-| L4 | "Refresh from here" on the second leg | – | – | 1 | 2 | 1 | – |
-| L5 | Plan all 4 stops in a deliberately inefficient order, then Compare | – | – | 2 | 8 | 3 + ≤6 | – |
-| L6 | Compare again and press Cancel after the first progress event; check metrics shows `cancelled` and no further calls | – | – | ≤1 | ≤4 | ≤6 | – |
-| L7 | Final walking times: for L3/L5 legs compare the shown arrival with Google Maps for the same departure; check metrics for `arrival_unknown` | – | – | – | – | – | – |
-| | **Total (upper)** | **≤20** | **4** | **≤6** | **≤17** | **≤18** | **≤3** |
-
-About 65 billable events in total, all well below the app's own daily
-provider budget (2,000) and the per-scope request limits. **This does not
-mean zero charges**: the project's existing usage this month is unknown,
-other apps on the same billing account count toward the same per-SKU caps,
-and abandoned autocomplete sessions bill per request. Check the billing
-report before and 24–48 h after the test.
-
-Optional (adds calls; run only if L6 is inconclusive): close the tab mid
-comparison instead of Cancel (≤1 Pro, ≤4 Enterprise, ≤6 Routes).
-
-L7 has a limit: the app does not log raw Routes responses (by design), so
-the walking-step `staticDuration` is checked indirectly (arrival present,
-plausible against Google Maps, no `arrival_unknown`). A raw-response check
-would need a staging-only debug tool, which does not exist and is not
-proposed.
-
----
-
-## 8. Production verification checklist (execution order)
-
-"0 calls" items make no Google calls.
-
-**After Step 2 (backend)**
-- [ ] (0 calls) `curl -s https://<backend>/healthz` → `{"status":"ok","version":"0.1.0"}`
-- [ ] (0 calls) `curl -sI http://<backend>/healthz` → redirect to HTTPS
-- [ ] (0 calls) headers on `/healthz` and on a rejected v2 plan (past
-      departure): `cache-control: no-store`, `nosniff`, `DENY`, CSP
-      `default-src 'none'`
-- [ ] (0 calls) CORS preflight: allowed origin echoed; another origin not
-- [ ] (0 calls) Railway logs: startup line present; a rejected plan logs one
-      metrics JSON line with `"calls": {}`; no uvicorn access lines; no IPs
-- [ ] (0 calls) Redis: limits survive a backend redeploy (same window);
-      `maxmemory-policy` noeviction or volatile-*; then briefly stop Redis →
-      v2 endpoints return 503 `usage_control_unavailable`, restart Redis
-- [ ] (0 calls) rate limit: 11 rejected plan requests within one minute →
-      11th is 429 (verified locally; note: with D-1 unresolved this blocks
-      everyone for that minute). Check the 429 log line contains no IP (D-9)
-- [ ] (0 calls) spoofed `X-Forwarded-For` / `X-Real-IP` from a client does
-      not create a separate bucket
-
-**After Step 3 (frontend)**
-- [ ] (0 calls) HTTP → HTTPS 308; HSTS present (Vercel default); CSP nonce
-      differs per response; no `unsafe-eval` in production
-- [ ] (0 calls) `curl` the built JS for the server key prefix → absent
-      (CI already checks the build)
-- [ ] Map loads on the production domain; blocked on another origin
-      (referrer restriction) — 1 map load each
-
-**Live test (§7)** — streaming incremental, terminal event on every run,
-refresh/compare semantics, cancellation, final walk.
-
-**Afterwards**
-- [ ] Billing report: SKUs and counts match §7's estimate (identifies the
-      Compute Routes tier)
-- [ ] Record Railway plan and log retention; Vercel runtime log retention
-- [ ] Mark items in PRODUCTION_VERIFICATION.md with date and evidence
-
-Ongoing health: Railway's healthcheck runs only at deploy time. An external
-uptime monitor on `/healthz` (zero Google calls) is recommended but not
-selected here.
-
----
-
-## 9. Rollback and emergency stop
-
-| Situation | Action |
-|-----------|--------|
-| Bad backend deploy (not the first) | Railway → Deployments → previous deployment → ⋮ → Rollback (restores image **and** variables; only within the plan's deployment retention) |
-| Bad frontend deploy | `vercel rollback` (Hobby: previous production deployment only), later `vercel promote <deployment>` to restore auto-assignment |
-| First deployment is bad (nothing to roll back to) | remove the public Railway domain or `railway down` (removes latest deployment); Vercel: remove the production domain assignment or `vercel rollback` is unavailable — delete the deployment |
-| Unexpected Google usage / key exposure | Google Cloud: set Places API (New) and Routes API daily quotas to 0 (immediate stop), then restrict or rotate the server key; budget alerts do **not** stop spend |
-| Redis outage | app fails closed (503) — no provider calls; restore Redis, no data migration needed |
-| Abuse with D-1 unresolved | lower quotas; Vercel/Railway WAF/IP blocks are limited on Hobby |
-
-Variable changes on Vercel are **not** rolled back by Instant Rollback; on
-Railway they are. Record every variable change with date.
-
----
-
-## 10. Summary: verified, missing, deploy-only
-
-**Verified (repo/local):** Dockerfile non-root + health (CI and locally),
-no access log, production startup validation (key, Redis, HTTPS origins,
-proxy settings), CORS shape, security headers on JSON and stream endpoints,
-nonce CSP, server key not bundled (CI), Redis fail-closed and shared limits
-(CI Redis service), 60 s deadline, metrics without personal data.
-
-**Verified (provider docs):** Railway streaming/request limits, X-Real-IP
-header, HTTPS redirect, healthcheck behaviour, log retention per plan,
-volume ownership/replica limits, static IPs Pro-only, private network
-encryption; Vercel HTTPS/HSTS defaults, rollback limits, Hobby
-non-commercial; Google key restriction guidance, Autocomplete session
-billing, free caps per SKU.
-
-**Decided:** D-2 ephemeral location cache (§5b).
-
-**Missing configuration:** Railway project/services/variables/healthcheck
-path; Vercel project/env vars; both Google keys and their restrictions;
-quotas and budget alerts; Map ID (if D-5); railway config-as-code (optional).
-
-**Deployment-only:** no buffering at Railway's edge, disconnect propagation,
-live CSP map, actual HTTPS/HSTS headers, client identity behaviour, Redis
-eviction/persistence, live walking-step durations, billing SKU mapping,
-actual log retention.
-
-**Defect found and fixed locally:** 429 log line contained the client key/IP (D-9).
-
-**Deferred:** monthly free-tier enforcement (blocks a free-tier-safe public
-release); legacy endpoint retirement; D36 selection limits; D46 permitted use
-of comparison outcomes; `braces` exception (expires 2026-11-04).
 
 ---
 
 ## Sources (checked 2026-10-06)
 
 - Railway: [Specs & limits](https://docs.railway.com/networking/public-networking/specs-and-limits),
+  [Edge networking](https://docs.railway.com/networking/edge-networking),
+  [TCP proxy](https://docs.railway.com/networking/tcp-proxy),
+  [Variables](https://docs.railway.com/reference/variables),
+  [Private networking](https://docs.railway.com/networking/private-networking/how-it-works),
   [Healthchecks](https://docs.railway.com/reference/healthchecks),
   [Volumes](https://docs.railway.com/reference/volumes),
   [Static outbound IPs](https://docs.railway.com/reference/static-outbound-ips),
-  [Private networking](https://docs.railway.com/networking/private-networking/how-it-works),
   [Logging](https://docs.railway.com/reference/logging),
   [Deployment actions](https://docs.railway.com/guides/deployment-actions),
-  [CLI](https://docs.railway.com/reference/cli-api);
-  staff answers on client-IP headers:
-  [2026-05](https://station.railway.com/questions/need-authoritative-railway-client-ip-p-b7a7b4bd),
-  [2024-08](https://station.railway.com/questions/edge-proxy-x-forwarded-for-and-x-real-ip-c5a50049).
+  [CLI](https://docs.railway.com/reference/cli-api),
+  [Pricing](https://railway.com/pricing);
+  staff forum: [Redis SSL](https://station.railway.com/questions/redis-ssl-support-0deb1f16),
+  [client IP 2026-05](https://station.railway.com/questions/need-authoritative-railway-client-ip-p-b7a7b4bd),
+  [client IP 2024-08](https://station.railway.com/questions/edge-proxy-x-forwarded-for-and-x-real-ip-c5a50049).
 - Vercel: [Encryption/HSTS](https://vercel.com/docs/cdn-security/encryption),
   [Instant Rollback](https://vercel.com/docs/instant-rollback),
   [vercel rollback](https://vercel.com/docs/cli/rollback),
   [Hobby plan](https://vercel.com/docs/plans/hobby).
+- Redis providers: [Upstash pricing](https://upstash.com/pricing/redis),
+  [Upstash security](https://upstash.com/docs/redis/features/security),
+  [Upstash regions (API docs)](https://upstash.com/docs/devops/developer-api/redis/create_database_global),
+  [Redis Cloud pricing](https://redis.io/pricing/),
+  [Aiven pricing](https://aiven.io/pricing?product=valkey).
+- Egress IPs: [Fly.io egress IPs](https://docs.fly.io/networking/egress-ips),
+  [Render outbound IPs](https://render.com/docs/outbound-ip-addresses).
 - Google: [API security best practices](https://developers.google.com/maps/api-security-best-practices),
   [Places session pricing](https://developers.google.com/maps/documentation/places/web-service/session-pricing),
   [Pricing](https://developers.google.com/maps/billing-and-pricing/pricing),
   [Routes usage and billing](https://developers.google.com/maps/documentation/routes/usage-and-billing),
-  [Map IDs](https://developers.google.com/maps/documentation/javascript/map-ids/mapid-over).
+  [Get a map ID](https://developers.google.com/maps/documentation/javascript/map-ids/get-map-id),
+  [Advanced Markers](https://developers.google.com/maps/documentation/javascript/advanced-markers/overview),
+  [Maps JS usage and billing](https://developers.google.com/maps/documentation/javascript/usage-and-billing).

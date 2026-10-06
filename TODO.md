@@ -956,26 +956,60 @@ from RouteWright's external-API model.
 ## Existing security follow-ups
 
 The security code is implemented and commit `49a77e8` passed all four GitHub CI
-jobs. This does not verify the deployment's settings. See
-[SECURITY.md](SECURITY.md) for the configuration and verification steps.
+jobs; later local commits have not run in CI (not pushed). None of this
+verifies the deployment's settings. See [SECURITY.md](SECURITY.md),
+[DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md) (proposal) and
+[PRODUCTION_VERIFICATION.md](PRODUCTION_VERIFICATION.md) (all unverified).
 
-- [ ] Verify production HTTPS redirects/HSTS, trusted proxy topology, shared
-  Redis configuration, restricted separate Google browser/server keys (the
-  server key must allow Places Autocomplete). Storage: decided ephemeral
-  location cache, no volume (DEPLOYMENT_PLAN.md D-2). Checklist: [PRODUCTION_VERIFICATION.md](PRODUCTION_VERIFICATION.md).
-- [ ] Check live Google Maps loading under the production CSP; the browser smoke
-  test used no Maps key.
-- [ ] Verify Railway streaming (60 s, no buffering) and disconnect propagation,
-  live transit walking-step `staticDuration`, and the actual log retention.
-- [x] Local container check (2026-10-06): non-root `uid=1000(app)`,
-  `/healthz` 200, request reached the intended container, no client IPs in
-  application logs. Repeat on Railway (PRODUCTION_VERIFICATION.md §9).
-- [x] Shared-Redis regression tests (`tests/test_security_redis.py`) pass
-  against a local disposable Redis (2026-10-06); still run them in the
-  deployment network.
-- [x] Server-key bundle leak check runs in CI (`npm run security:bundle`
-  after a build with a probe key).
-- [x] npm audit (postcss-selector-parser/postcss) fixed with scoped overrides,
-  no --force and no new exception (e3192f5).
+### Approved 2026-10-06 and implemented locally
+- [x] Ephemeral location cache, no volume, non-root container; cache failures
+  are misses; planning independent of it (`7365dee`). Storage-security
+  considerations remain (host disk, shell access, old deployment's data).
+- [x] Redis must use verified TLS (`rediss://`); production refuses plaintext
+  or weakened TLS (`5ef006d`).
+- [x] v1 endpoints `/api/plan`, `/api/optimise`, `/api/refresh-leg` retired;
+  v2 services and the local optimiser kept; retired routes 404 (`3c9f7ec`).
+- [x] Client IPs removed from 429 log lines (`8123f47`) and uvicorn WebSocket
+  log lines (`f3901c9`, `--ws none` + redaction filter).
+- [x] Metrics: aggregate app logs on the hosting platform only; no archive; no
+  sensitive content or comparison savings.
+
+### Deployment blockers and open approvals
+- [ ] **Server key outbound-IP restriction (approved requirement):** current
+  hosting has no static egress IP; choose Railway Pro ($20/month, shared IPs)
+  or a Fly.io migration (dedicated egress IP $3.60/month + compute) — no paid
+  upgrade authorised yet (DEPLOYMENT_PLAN.md §6).
+- [ ] Redis provider with TLS (proposal: Upstash free plan, `eu-west-1`).
+- [ ] Client-IP integration (proposal D-1 for Railway; a Fly move needs a new
+  design). Until then all visitors share one rate-limit identity.
+- [ ] Confirm ownership of `routewright.vercel.app` and the Railway project;
+  the live frontend serves an old build and its backend returns 502.
+- [ ] Check the restrictions of the browser key embedded in the live bundle.
+- [ ] Production Map ID (proposal; creating one is free).
+- [ ] Push local commits and get green CI.
+
+### Unverified until deployed (PRODUCTION_VERIFICATION.md)
+- [ ] HTTPS/HSTS, CORS, retired routes on the live host, headers.
+- [ ] Streaming (60 s, no buffering) and disconnect propagation through the
+  host's proxy.
+- [ ] Key restrictions (browser and server), live map under CSP.
+- [ ] Redis TLS connection, eviction policy, outage behaviour.
+- [ ] Live walking-step `staticDuration` completeness; billing SKU mapping.
+- [ ] Actual log retention for the hosting plan; platform HTTP logs access.
+- [ ] Container non-root and `/healthz` on the host (CI and local checks only).
+
+### Deferred
+- [ ] Monthly free-tier enforcement (approved deferral). Quotas, alerts and the
+  app budget do not guarantee zero charges.
+- [ ] D36 selection limits: lookups share the combined 30/min + 100/day
+  allowance as an interim choice.
+- [ ] D46: permitted use before logging how often alternatives meet the
+  five-minute threshold.
 - [ ] Resolve or reassess the development-only `braces@3.0.3` advisory exception
   before it expires on **2026-11-04**. Do not silently extend the exception.
+
+### Done earlier
+- [x] Shared-Redis regression tests pass against a disposable local Redis.
+- [x] Server-key bundle leak check runs in CI.
+- [x] npm audit fixed with scoped overrides (e3192f5).
+- [x] Local container check (non-root, `/healthz`, intended container, no IPs).
