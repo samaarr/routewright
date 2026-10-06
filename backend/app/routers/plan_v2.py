@@ -47,9 +47,11 @@ from fastapi.responses import StreamingResponse
 from starlette.types import Message
 
 from app.core.deadline import DeadlineExceededError, DeadlineScope
-from app.core.limiter import PLAN_LIMITS, REFRESH_LIMITS, limiter, request_cost
-from app.models.request import ItineraryRequest, RefreshRequest
+from app.core.limiter import OPTIMISE_LIMITS, PLAN_LIMITS, REFRESH_LIMITS, limiter, request_cost
+from app.models.request import ComparisonRequest, ItineraryRequest, RefreshRequest
 from app.models.response import (
+    ComparisonOutcome,
+    ComparisonResult,
     CompletePlan,
     ErrorDetails,
     ErrorOutcome,
@@ -70,6 +72,7 @@ from app.models.response import (
     RefreshResult,
     TerminalEvent,
     TimeoutOutcome,
+    UnknownStop,
     Warning,
     WarningSeverity,
 )
@@ -78,6 +81,14 @@ from app.services.area import (
     AREA_UNAVAILABLE_MESSAGE,
     OUTSIDE_AREA_MESSAGE,
     area_status,
+)
+from app.services.comparison import (
+    CandidateIntegrityError,
+    RoutingBudget,
+    decide,
+    generate_candidate,
+    is_complete,
+    path_km,
 )
 from app.services.departure import (
     DepartureError,
@@ -92,6 +103,7 @@ from app.services.engine import (
     PlacesAdapter,
     ProgressEmitter,
     RoutesAdapter,
+    VerifiedStop,
     place_type_defaults,
     plan_sequential,
     refresh_suffix,
@@ -124,6 +136,8 @@ TERMINAL_GRACE_SECONDS = 2.0
 # refresh has its own allowance with the existing refresh limits (D21).
 _PLAN_V2_SCOPE = "plan-v2"
 _REFRESH_V2_SCOPE = "refresh-v2"
+# Comparisons use the existing optimise limits with their own allowance.
+_COMPARE_V2_SCOPE = "compare-v2"
 
 
 class _NullEmitter:
@@ -334,12 +348,16 @@ def _hours_warnings(timeline: list[Any], first_stop_index: int = 0) -> list[Warn
 
 
 def _area_warnings(
-    itinerary: VerifiedItinerary, first_stop_index: int = 0, skip_first: bool = False
+    itinerary: VerifiedItinerary,
+    first_stop_index: int = 0,
+    skip_first: bool = False,
+    stops: list[VerifiedStop] | None = None,
 ) -> list[Warning]:
     """D44: compare every verified stop (known or unknown timing) with the viewport.
 
     For a refresh, ``itinerary.stops`` starts at stop k (global index
     ``first_stop_index``), which belongs to the unchanged prefix and is skipped.
+    ``stops`` overrides the order (a comparison candidate).
     """
     viewport = itinerary.city.viewport
     if viewport is None:
@@ -352,7 +370,7 @@ def _area_warnings(
             affects_instance_id=stop.instance_id,
             code="outside_city_area",
         )
-        for i, stop in enumerate(itinerary.stops)
+        for i, stop in enumerate(itinerary.stops if stops is None else stops)
         if not (skip_first and i == 0) and area_status(viewport, stop.lat, stop.lng) == "outside"
     ]
 
@@ -394,8 +412,18 @@ async def execute_plan(
         trip_timezone=itinerary.timezone,
     )
 
-    overview_url = _overview_url([(v.lat, v.lng) for v in itinerary.stops])
-    warnings = _hours_warnings(timeline) + _area_warnings(itinerary)
+    return _assemble_plan(req, itinerary, itinerary.stops, timeline)
+
+
+def _assemble_plan(
+    req: ItineraryRequest,
+    itinerary: VerifiedItinerary,
+    ordered: list[VerifiedStop],
+    timeline: list[KnownStop | PlannedLeg | FailedLeg | UnknownStop],
+) -> PlanResult:
+    """CompletePlan/PartialPlan for ``timeline`` computed over ``ordered`` stops."""
+    overview_url = _overview_url([(v.lat, v.lng) for v in ordered])
+    warnings = _hours_warnings(timeline) + _area_warnings(itinerary, stops=ordered)
     failed = next(
         ((i, item) for i, item in enumerate(timeline) if isinstance(item, FailedLeg)), None
     )
@@ -492,6 +520,153 @@ async def execute_refresh(
         warnings=warnings,
         failed_at_leg_index=k + routed,
         failure_reason=failed_leg.failure_reason,
+    )
+
+
+_COMPARISON_MESSAGES = {
+    "no_different_order": "No different order found by the current search.",
+    "recommended": (
+        "A different order is estimated to save at least 5 minutes of travel for this "
+        "departure. It is an estimate, not a guarantee."
+    ),
+    "not_faster": (
+        "The other order checked is not at least 5 minutes faster, so your order is kept."
+    ),
+    "hours_ineligible": (
+        "The other order checked would arrive at a venue while it appears closed, so your "
+        "order is kept."
+    ),
+    "original_incomplete": (
+        "Your current order could not be fully recalculated, so the comparison stopped. "
+        "Your previous plan is unchanged."
+    ),
+    "candidate_incomplete": (
+        "The other order could not be fully calculated, so no change is suggested. Your "
+        "current order was recalculated."
+    ),
+}
+
+
+async def execute_compare(
+    req: ComparisonRequest,
+    *,
+    departure_utc: datetime,
+    places: PlacesAdapter,
+    routes: RoutesAdapter,
+    emitter: ProgressEmitter,
+    ctx: OperationContext,
+    deadline: DeadlineScope,
+) -> ComparisonResult:
+    """Step 8: one local candidate compared with a fresh original (D3-D12, D15-D20).
+
+    Verified place details are fetched once and shared by both orders (D37);
+    nothing is stored across requests (D10). Routing calls are capped at
+    2(N-1) by RoutingBudget; none are made when the order is unchanged (D9).
+    """
+    op, rev = ctx.operation_id, ctx.input_revision
+    phases: list[PhaseName] = ["verification", "candidate", "original_route", "alternative_route"]
+    await emitter.emit(OperationStartEvent(operation_id=op, input_revision=rev, phases=phases))
+    await emitter.emit(PhaseStartEvent(operation_id=op, input_revision=rev, phase="verification"))
+    itinerary = await verify_itinerary(req, places, ctx, deadline)
+    await emitter.emit(
+        PhaseCompleteEvent(operation_id=op, input_revision=rev, phase="verification")
+    )
+    stops = itinerary.stops
+    n = len(stops)
+    original_ids = [s.instance_id for s in stops]
+    # Fixed durations from the ORIGINAL order, carried by instance (D11).
+    durations = resolve_durations(
+        [(s.instance_id, s.stay_minutes) for s in req.stops], place_type_defaults(stops)
+    )
+
+    await emitter.emit(PhaseStartEvent(operation_id=op, input_revision=rev, phase="candidate"))
+    order = await generate_candidate(
+        stops, fixed_first=req.fixed_first, fixed_last=req.fixed_last, deadline=deadline
+    )
+    await emitter.emit(PhaseCompleteEvent(operation_id=op, input_revision=rev, phase="candidate"))
+    candidate_ids = [original_ids[i] for i in order]
+    common = {
+        "operation_id": op,
+        "input_revision": rev,
+        "original_order": original_ids,
+        "fixed_first": req.fixed_first,
+        "fixed_last": req.fixed_last,
+        "original_distance_km": round(path_km(stops, list(range(n))), 3),
+        "candidate_distance_km": round(path_km(stops, order), 3),
+    }
+    if candidate_ids == original_ids:  # by stop-instance identity
+        return ComparisonResult(
+            **common,
+            status="no_different_order",
+            message=_COMPARISON_MESSAGES["no_different_order"],
+            routing_calls=0,
+        )
+
+    budget = RoutingBudget(routes, 2 * (n - 1))
+    original_tl = await plan_sequential(
+        stops,
+        durations,
+        departure_utc,
+        req.mode,
+        budget,
+        emitter,
+        ctx,
+        deadline,
+        itinerary.timezone,
+        phase="original_route",
+    )
+    original_plan = _assemble_plan(req, itinerary, stops, original_tl)
+    if not is_complete(original_tl):
+        return ComparisonResult(
+            **common,
+            candidate_order=candidate_ids,
+            status="original_incomplete",
+            message=_COMPARISON_MESSAGES["original_incomplete"],
+            original=original_plan,
+            routing_calls=budget.calls,
+        )
+
+    candidate_stops = [stops[i] for i in order]
+    candidate_tl = await plan_sequential(
+        candidate_stops,
+        durations,
+        departure_utc,
+        req.mode,
+        budget,
+        emitter,
+        ctx,
+        deadline,
+        itinerary.timezone,
+        phase="alternative_route",
+    )
+    if not is_complete(candidate_tl):
+        return ComparisonResult(
+            **common,
+            candidate_order=candidate_ids,
+            status="candidate_incomplete",
+            message=_COMPARISON_MESSAGES["candidate_incomplete"],
+            original=original_plan,
+            routing_calls=budget.calls,
+        )
+
+    verdict = decide(original_tl, candidate_tl)
+    candidate_plan = _assemble_plan(req, itinerary, candidate_stops, candidate_tl)
+    if verdict.decision == "recommended" and not isinstance(candidate_plan, CompletePlan):
+        raise CandidateIntegrityError("recommended candidate is not complete")
+    return ComparisonResult(
+        **common,
+        candidate_order=candidate_ids,
+        status=verdict.decision,
+        message=_COMPARISON_MESSAGES[verdict.decision],
+        original=original_plan,
+        candidate=candidate_plan
+        if verdict.decision == "recommended" and isinstance(candidate_plan, CompletePlan)
+        else None,
+        original_seconds=verdict.original_seconds,
+        candidate_seconds=verdict.candidate_seconds,
+        saving_seconds=verdict.saving_seconds,
+        ineligible_instance_ids=verdict.ineligible,
+        routing_calls=budget.calls,
     )
 
 
@@ -639,8 +814,19 @@ class PlanStream:
     async def _produce(self) -> None:
         outcome: OperationOutcome
         try:
-            result: PlanResult | RefreshResult
-            if isinstance(self.req, RefreshRequest):
+            result: PlanResult | RefreshResult | ComparisonResult
+            if isinstance(self.req, ComparisonRequest):
+                assert self.departure_utc is not None
+                result = await execute_compare(
+                    self.req,
+                    departure_utc=self.departure_utc,
+                    places=self.places,
+                    routes=self.routes,
+                    emitter=self.emitter,
+                    ctx=self.ctx,
+                    deadline=self.deadline,
+                )
+            elif isinstance(self.req, RefreshRequest):
                 result = await execute_refresh(
                     self.req,
                     places=self.places,
@@ -667,6 +853,8 @@ class PlanStream:
                 outcome = self._timeout(result)
             elif isinstance(result, RefreshComplete | RefreshPartial):
                 outcome = RefreshOutcome(result=result)
+            elif isinstance(result, ComparisonResult):
+                outcome = ComparisonOutcome(result=result)
             else:
                 outcome = PlanOutcome(result=result)
         except asyncio.CancelledError:
@@ -784,6 +972,59 @@ async def refresh_v2_stream(request: Request, req: RefreshRequest) -> StreamingR
     _validated_refresh(req)
     stream = PlanStream(
         req,
+        places=places_adapter(),
+        routes=routes_adapter(),
+        ctx=ctx,
+        deadline=deadline,
+        receive=request.receive,
+    )
+    return StreamingResponse(
+        stream.events(),
+        media_type=NDJSON_MEDIA_TYPE,
+        headers={"X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Comparison endpoints (Step 8)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/compare", response_model=ComparisonResult)
+@limiter.shared_limit(OPTIMISE_LIMITS, scope=_COMPARE_V2_SCOPE, cost=request_cost)
+async def compare_v2(request: Request, req: ComparisonRequest) -> ComparisonResult:
+    """Compare the current order with one local candidate; one JSON response."""
+    deadline = DeadlineScope()
+    ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
+    departure_utc = _validated_departure(req)
+    try:
+        return await execute_compare(
+            req,
+            departure_utc=departure_utc,
+            places=places_adapter(),
+            routes=routes_adapter(),
+            emitter=_NullEmitter(),
+            ctx=ctx,
+            deadline=deadline,
+        )
+    except Exception as exc:
+        failure = describe_failure(exc)
+        if failure is None:
+            raise
+        _raise_http(_with_instance_ids(failure, req))
+
+
+@router.post("/compare/stream")
+@limiter.shared_limit(OPTIMISE_LIMITS, scope=_COMPARE_V2_SCOPE, cost=request_cost)
+async def compare_v2_stream(request: Request, req: ComparisonRequest) -> StreamingResponse:
+    """Streamed comparison: phases verification, candidate, original_route,
+    alternative_route; terminal ComparisonOutcome (or timeout/error)."""
+    deadline = DeadlineScope()
+    ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
+    departure_utc = _validated_departure(req)
+    stream = PlanStream(
+        req,
+        departure_utc=departure_utc,
         places=places_adapter(),
         routes=routes_adapter(),
         ctx=ctx,

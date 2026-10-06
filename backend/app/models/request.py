@@ -358,6 +358,17 @@ class RefreshRequest(ItineraryRequest):
         return self
 
 
+class ComparisonRequest(ItineraryRequest):
+    """Compare the current order with one locally generated alternative (Step 8).
+
+    ``fixed_first`` / ``fixed_last`` pin whichever stop instances occupy the
+    first/last positions when the comparison starts (D16, D17); the client
+    sends the user's current pin settings (pinned by default). Durations are
+    resolved once from this order and carried by stop instance into the
+    candidate (D11). No browser-supplied totals are accepted (D10).
+    """
+
+
 # ---------------------------------------------------------------------------
 # City/place suggestion and selection requests (D34-D36)
 # ---------------------------------------------------------------------------

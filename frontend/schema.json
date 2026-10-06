@@ -20,6 +20,217 @@
       "title": "CancelledOutcome",
       "type": "object"
     },
+    "ComparisonOutcome": {
+      "description": "Terminal outcome for a comparison operation.",
+      "properties": {
+        "outcome_type": {
+          "const": "comparison",
+          "default": "comparison",
+          "title": "Outcome Type",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/ComparisonResult"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "ComparisonOutcome",
+      "type": "object"
+    },
+    "ComparisonResult": {
+      "description": "Outcome of comparing the user's order with one local candidate (Step 8).\n\n- ``no_different_order``: the distance search returned the same order (or\n  pins left no freedom); zero comparison routing calls. Never a claim that\n  the original is fastest.\n- ``recommended``: both itineraries complete, the candidate passes the\n  opening-hours eligibility rules and saves >= ``threshold_seconds``.\n  ``candidate`` is the complete verified timeline to apply on acceptance.\n- ``not_faster`` / ``hours_ineligible``: complete comparison, original kept.\n- ``original_incomplete``: the fresh original failed; comparison stopped and\n  the client keeps its previous plan (``original`` shows the partial run).\n- ``candidate_incomplete``: candidate failed; ``original`` is the complete\n  freshly recalculated original; no saving is claimed.\n\nTotals are server-computed journey seconds (arrival minus planned\ndeparture of each leg, so waiting and transfers are included); distances\nare the candidate heuristic only, not evidence of a saving.",
+      "properties": {
+        "result_type": {
+          "const": "comparison",
+          "default": "comparison",
+          "title": "Result Type",
+          "type": "string"
+        },
+        "operation_id": {
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "input_revision": {
+          "title": "Input Revision",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "no_different_order",
+            "recommended",
+            "not_faster",
+            "hours_ineligible",
+            "original_incomplete",
+            "candidate_incomplete"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "original_order": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Original Order",
+          "type": "array"
+        },
+        "candidate_order": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Order"
+        },
+        "fixed_first": {
+          "title": "Fixed First",
+          "type": "boolean"
+        },
+        "fixed_last": {
+          "title": "Fixed Last",
+          "type": "boolean"
+        },
+        "original": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "complete": "#/$defs/CompletePlan",
+                  "partial": "#/$defs/PartialPlan"
+                },
+                "propertyName": "result_type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/CompletePlan"
+                },
+                {
+                  "$ref": "#/$defs/PartialPlan"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Original"
+        },
+        "candidate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompletePlan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Only for status=recommended: the plan to apply on acceptance."
+        },
+        "original_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Original Seconds"
+        },
+        "candidate_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Seconds"
+        },
+        "saving_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Saving Seconds"
+        },
+        "threshold_seconds": {
+          "default": 300,
+          "title": "Threshold Seconds",
+          "type": "integer"
+        },
+        "original_distance_km": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Original Distance Km"
+        },
+        "candidate_distance_km": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Distance Km"
+        },
+        "ineligible_instance_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Ineligible Instance Ids",
+          "type": "array"
+        },
+        "routing_calls": {
+          "description": "Routing calls issued by this comparison.",
+          "title": "Routing Calls",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operation_id",
+        "input_revision",
+        "status",
+        "message",
+        "original_order",
+        "fixed_first",
+        "fixed_last",
+        "routing_calls"
+      ],
+      "title": "ComparisonResult",
+      "type": "object"
+    },
     "CompletePlan": {
       "description": "All legs routed successfully \u2014 every stop has a known schedule.",
       "properties": {
@@ -784,7 +995,10 @@
           "items": {
             "enum": [
               "verification",
-              "routing"
+              "routing",
+              "candidate",
+              "original_route",
+              "alternative_route"
             ],
             "type": "string"
           },
@@ -995,7 +1209,10 @@
         "phase": {
           "enum": [
             "verification",
-            "routing"
+            "routing",
+            "candidate",
+            "original_route",
+            "alternative_route"
           ],
           "title": "Phase",
           "type": "string"
@@ -1029,7 +1246,10 @@
         "phase": {
           "enum": [
             "verification",
-            "routing"
+            "routing",
+            "candidate",
+            "original_route",
+            "alternative_route"
           ],
           "title": "Phase",
           "type": "string"
@@ -1774,6 +1994,7 @@
           "discriminator": {
             "mapping": {
               "cancelled": "#/$defs/CancelledOutcome",
+              "comparison": "#/$defs/ComparisonOutcome",
               "error": "#/$defs/ErrorOutcome",
               "plan": "#/$defs/PlanOutcome",
               "refresh": "#/$defs/RefreshOutcome",
@@ -1787,6 +2008,9 @@
             },
             {
               "$ref": "#/$defs/RefreshOutcome"
+            },
+            {
+              "$ref": "#/$defs/ComparisonOutcome"
             },
             {
               "$ref": "#/$defs/CancelledOutcome"
@@ -1821,7 +2045,10 @@
         "phase": {
           "enum": [
             "verification",
-            "routing"
+            "routing",
+            "candidate",
+            "original_route",
+            "alternative_route"
           ],
           "title": "Phase",
           "type": "string"
@@ -2038,6 +2265,17 @@
       "default": null,
       "title": "Refresh Result"
     },
+    "comparison_result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ComparisonResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "stream_event": {
       "anyOf": [
         {
@@ -2090,6 +2328,7 @@
           "discriminator": {
             "mapping": {
               "cancelled": "#/$defs/CancelledOutcome",
+              "comparison": "#/$defs/ComparisonOutcome",
               "error": "#/$defs/ErrorOutcome",
               "plan": "#/$defs/PlanOutcome",
               "refresh": "#/$defs/RefreshOutcome",
@@ -2103,6 +2342,9 @@
             },
             {
               "$ref": "#/$defs/RefreshOutcome"
+            },
+            {
+              "$ref": "#/$defs/ComparisonOutcome"
             },
             {
               "$ref": "#/$defs/CancelledOutcome"

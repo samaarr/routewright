@@ -5,8 +5,19 @@ Used by the route optimiser (app/services/optimise.py).
 """
 
 import math
+from typing import Protocol
 
 from app.services.geocoder import GeocodedPlace
+
+
+class HasLatLng(Protocol):
+    """Anything with coordinates: v1 GeocodedPlace or v2 VerifiedStop."""
+
+    @property
+    def lat(self) -> float: ...
+
+    @property
+    def lng(self) -> float: ...
 
 
 def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:

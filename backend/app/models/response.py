@@ -386,7 +386,12 @@ class RefreshOutcome(BaseModel):
     result: RefreshResult
 
 
-PhaseName: TypeAlias = Literal["verification", "routing"]
+# Planning/refresh use verification + routing. A comparison (Step 8) uses
+# verification, candidate (local distance search), original_route and
+# alternative_route so progress identifies which itinerary is being checked.
+PhaseName: TypeAlias = Literal[
+    "verification", "routing", "candidate", "original_route", "alternative_route"
+]
 
 
 class CancelledOutcome(BaseModel):
@@ -399,6 +404,68 @@ class CancelledOutcome(BaseModel):
 
     outcome_type: Literal["cancelled"] = "cancelled"
     reason: str
+
+
+ComparisonStatus: TypeAlias = Literal[
+    "no_different_order",
+    "recommended",
+    "not_faster",
+    "hours_ineligible",
+    "original_incomplete",
+    "candidate_incomplete",
+]
+
+
+class ComparisonResult(BaseModel):
+    """Outcome of comparing the user's order with one local candidate (Step 8).
+
+    - ``no_different_order``: the distance search returned the same order (or
+      pins left no freedom); zero comparison routing calls. Never a claim that
+      the original is fastest.
+    - ``recommended``: both itineraries complete, the candidate passes the
+      opening-hours eligibility rules and saves >= ``threshold_seconds``.
+      ``candidate`` is the complete verified timeline to apply on acceptance.
+    - ``not_faster`` / ``hours_ineligible``: complete comparison, original kept.
+    - ``original_incomplete``: the fresh original failed; comparison stopped and
+      the client keeps its previous plan (``original`` shows the partial run).
+    - ``candidate_incomplete``: candidate failed; ``original`` is the complete
+      freshly recalculated original; no saving is claimed.
+
+    Totals are server-computed journey seconds (arrival minus planned
+    departure of each leg, so waiting and transfers are included); distances
+    are the candidate heuristic only, not evidence of a saving.
+    """
+
+    result_type: Literal["comparison"] = "comparison"
+    operation_id: str
+    input_revision: int
+    status: ComparisonStatus
+    message: str
+    original_order: list[str]
+    candidate_order: list[str] | None = None
+    fixed_first: bool
+    fixed_last: bool
+    original: Annotated[CompletePlan | PartialPlan, Field(discriminator="result_type")] | None = (
+        None
+    )
+    candidate: CompletePlan | None = Field(
+        default=None, description="Only for status=recommended: the plan to apply on acceptance."
+    )
+    original_seconds: int | None = None
+    candidate_seconds: int | None = None
+    saving_seconds: int | None = None
+    threshold_seconds: int = 300
+    original_distance_km: float | None = None
+    candidate_distance_km: float | None = None
+    ineligible_instance_ids: list[str] = Field(default_factory=list)
+    routing_calls: int = Field(..., description="Routing calls issued by this comparison.")
+
+
+class ComparisonOutcome(BaseModel):
+    """Terminal outcome for a comparison operation."""
+
+    outcome_type: Literal["comparison"] = "comparison"
+    result: ComparisonResult
 
 
 class TimeoutOutcome(BaseModel):
@@ -442,7 +509,12 @@ class ErrorOutcome(BaseModel):
 
 
 OperationOutcome: TypeAlias = Annotated[
-    PlanOutcome | RefreshOutcome | CancelledOutcome | TimeoutOutcome | ErrorOutcome,
+    PlanOutcome
+    | RefreshOutcome
+    | ComparisonOutcome
+    | CancelledOutcome
+    | TimeoutOutcome
+    | ErrorOutcome,
     Field(discriminator="outcome_type"),
 ]
 
@@ -597,6 +669,7 @@ class ContractRoot(BaseModel):
     # New streaming / engine types
     plan_result: PlanResult | None = None
     refresh_result: RefreshResult | None = None
+    comparison_result: ComparisonResult | None = None
     stream_event: StreamEvent | None = None
     operation_outcome: OperationOutcome | None = None
     known_stop: KnownStop | None = None

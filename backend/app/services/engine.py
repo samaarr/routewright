@@ -6,7 +6,7 @@ never touch the network.
 
 plan_sequential (ordinary planning) and refresh_suffix (D21 suffix refresh)
 share one sequential routing loop, including opening-hours assessment of each
-known stop. compare_orders remains a stub until the comparison stage.
+known stop. The Step 8 comparison (services/comparison.py) runs it twice.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from app.models.response import (
     LegProgressEvent,
     LegReadyEvent,
     PhaseCompleteEvent,
+    PhaseName,
     PhaseStartEvent,
     PlanFailureReason,
     PlannedLeg,
@@ -292,8 +293,9 @@ async def _route_sequence(
     ctx: OperationContext,
     deadline: DeadlineScope,
     trip_timezone: str,
+    phase: PhaseName = "routing",
 ) -> list[KnownStop | PlannedLeg | FailedLeg | UnknownStop]:
-    """Shared sequential routing loop for planning and suffix refresh.
+    """Shared sequential routing loop for planning, refresh and comparison.
 
     Each leg departs at the actual arrival of the previous leg plus the next
     stop's fixed stay (D1). On the first failed leg the loop stops: a
@@ -317,7 +319,7 @@ async def _route_sequence(
         PhaseStartEvent(
             operation_id=ctx.operation_id,
             input_revision=ctx.input_revision,
-            phase="routing",
+            phase=phase,
         )
     )
 
@@ -463,7 +465,7 @@ async def _route_sequence(
         PhaseCompleteEvent(
             operation_id=ctx.operation_id,
             input_revision=ctx.input_revision,
-            phase="routing",
+            phase=phase,
         )
     )
 
@@ -520,6 +522,7 @@ async def plan_sequential(
     ctx: OperationContext,
     deadline: DeadlineScope,
     trip_timezone: str,
+    phase: PhaseName = "routing",
 ) -> list[KnownStop | PlannedLeg | FailedLeg | UnknownStop]:
     """Sequential planner (D1, D2) with opening-hours assessment (D42, D43).
 
@@ -539,30 +542,13 @@ async def plan_sequential(
         ctx=ctx,
         deadline=deadline,
         trip_timezone=trip_timezone,
+        phase=phase,
     )
 
 
 # ---------------------------------------------------------------------------
-# Engine entry points (stubs -- implemented in Steps 6 and 7)
+# Engine entry points
 # ---------------------------------------------------------------------------
-
-
-async def compare_orders(
-    original: list[VerifiedStop],
-    alternative: list[VerifiedStop],
-    durations: ResolvedDurations,
-    departure: datetime,
-    mode: TransportMode,
-    routes: RoutesAdapter,
-    emitter: ProgressEmitter,
-    ctx: OperationContext,
-    deadline: DeadlineScope,
-) -> tuple[
-    list[KnownStop | PlannedLeg | FailedLeg | UnknownStop],
-    list[KnownStop | PlannedLeg | FailedLeg | UnknownStop],
-]:
-    """Comparison planner -- implemented in Step 7."""
-    raise NotImplementedError("compare_orders: implemented in Step 7")
 
 
 async def refresh_suffix(

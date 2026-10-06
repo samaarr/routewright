@@ -9,13 +9,14 @@ Stage 2 (optimise_order_with_hours): adds opening-hours soft constraints via
 Stage 3 wires user-facing fixed_first/fixed_last pinning and the UI button.
 """
 
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 from app.models.response import InfeasibilityFlag
-from app.services.geo import haversine_km
+from app.services.geo import HasLatLng, haversine_km
 from app.services.geocoder import GeocodedPlace
 from app.services.hours import compute_hours_status
 
@@ -36,7 +37,7 @@ _COEFF_CLOSED_ON_ARRIVAL = round(CLOSED_ON_ARRIVAL_PENALTY_KM * _SCALE / 60)
 _COEFF_CLOSES_DURING_VISIT = round(CLOSES_DURING_VISIT_PENALTY_KM * _SCALE / 60)
 
 
-def build_haversine_matrix(places: list[GeocodedPlace]) -> list[list[float]]:
+def build_haversine_matrix(places: Sequence[HasLatLng]) -> list[list[float]]:
     """Return an N×N symmetric matrix of haversine_km distances."""
     n = len(places)
     return [
@@ -46,9 +47,10 @@ def build_haversine_matrix(places: list[GeocodedPlace]) -> list[list[float]]:
 
 
 def optimise_order(
-    places: list[GeocodedPlace],
+    places: Sequence[HasLatLng],
     fixed_first: bool = False,
     fixed_last: bool = False,
+    time_limit_seconds: float = _TIME_LIMIT_SECONDS,
 ) -> list[int]:
     """Return an index permutation that minimises the total haversine path.
 
@@ -57,6 +59,10 @@ def optimise_order(
 
     fixed_first / fixed_last pin stop 0 or stop n-1 to their position.
     Both default to False; Stage 3 wires these to user-facing UI controls.
+
+    ``time_limit_seconds`` bounds the OR-Tools search (the v2 comparison
+    passes min(2 s, remaining operation deadline)), so the worker thread
+    always finishes promptly even if the awaiting request was cancelled.
 
     Open-path formulation: a virtual dummy depot (index n) with zero-cost
     arcs to/from all real stops lets the solver find the best start and end
@@ -93,7 +99,9 @@ def optimise_order(
 
     params = pywrapcp.DefaultRoutingSearchParameters()
     params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    params.time_limit.seconds = _TIME_LIMIT_SECONDS
+    whole = int(time_limit_seconds)
+    params.time_limit.seconds = whole
+    params.time_limit.nanos = int((time_limit_seconds - whole) * 1e9)
 
     solution = routing.SolveWithParameters(params)
     if solution is None:

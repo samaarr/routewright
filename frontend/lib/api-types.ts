@@ -134,6 +134,33 @@ export type FailureReason2 =
   | "place_temporary"
   | "deadline_exceeded"
   | "cancelled";
+export type ResultType4 = "comparison";
+export type OperationId4 = string;
+export type InputRevision4 = number;
+export type Status =
+  | "no_different_order"
+  | "recommended"
+  | "not_faster"
+  | "hours_ineligible"
+  | "original_incomplete"
+  | "candidate_incomplete";
+export type Message1 = string;
+export type OriginalOrder = string[];
+export type CandidateOrder = string[] | null;
+export type FixedFirst = boolean;
+export type FixedLast = boolean;
+export type Original = (CompletePlan | PartialPlan) | null;
+export type OriginalSeconds = number | null;
+export type CandidateSeconds = number | null;
+export type SavingSeconds = number | null;
+export type ThresholdSeconds = number;
+export type OriginalDistanceKm = number | null;
+export type CandidateDistanceKm = number | null;
+export type IneligibleInstanceIds = string[];
+/**
+ * Routing calls issued by this comparison.
+ */
+export type RoutingCalls = number;
 export type StreamEvent =
   | (
       | OperationStartEvent
@@ -145,25 +172,25 @@ export type StreamEvent =
       | TerminalEvent
     )
   | null;
-export type OperationId4 = string;
-export type InputRevision4 = number;
-export type Type = "operation_start";
-export type Phases = ("verification" | "routing")[];
 export type OperationId5 = string;
 export type InputRevision5 = number;
-export type Type1 = "phase_start";
-export type Phase = "verification" | "routing";
+export type Type = "operation_start";
+export type Phases = ("verification" | "routing" | "candidate" | "original_route" | "alternative_route")[];
 export type OperationId6 = string;
 export type InputRevision6 = number;
+export type Type1 = "phase_start";
+export type Phase = "verification" | "routing" | "candidate" | "original_route" | "alternative_route";
+export type OperationId7 = string;
+export type InputRevision7 = number;
 export type Type2 = "leg_progress";
 export type LegIndex2 = number;
 export type TotalLegs = number;
-export type OperationId7 = string;
-export type InputRevision7 = number;
-export type Type3 = "stop_ready";
-export type StopIndex = number;
 export type OperationId8 = string;
 export type InputRevision8 = number;
+export type Type3 = "stop_ready";
+export type StopIndex = number;
+export type OperationId9 = string;
+export type InputRevision9 = number;
 export type Type4 = "leg_ready";
 export type LegIndex3 = number;
 export type Leg = PlannedLeg | FailedLeg;
@@ -172,35 +199,38 @@ export type Leg = PlannedLeg | FailedLeg;
  */
 export type CompletedLegs = number;
 export type TotalLegs1 = number;
-export type OperationId9 = string;
-export type InputRevision9 = number;
-export type Type5 = "phase_complete";
-export type Phase1 = "verification" | "routing";
 export type OperationId10 = string;
 export type InputRevision10 = number;
+export type Type5 = "phase_complete";
+export type Phase1 = "verification" | "routing" | "candidate" | "original_route" | "alternative_route";
+export type OperationId11 = string;
+export type InputRevision11 = number;
 export type Type6 = "terminal";
-export type Outcome = PlanOutcome | RefreshOutcome | CancelledOutcome | TimeoutOutcome | ErrorOutcome;
+export type Outcome =
+  PlanOutcome | RefreshOutcome | ComparisonOutcome | CancelledOutcome | TimeoutOutcome | ErrorOutcome;
 export type OutcomeType = "plan";
 export type Result = CompletePlan | PartialPlan;
 export type OutcomeType1 = "refresh";
 export type Result1 = RefreshComplete | RefreshPartial;
-export type OutcomeType2 = "cancelled";
+export type OutcomeType2 = "comparison";
+export type OutcomeType3 = "cancelled";
 export type Reason = string;
-export type OutcomeType3 = "timeout";
-export type Phase2 = "verification" | "routing";
-export type Message1 = string;
-export type Partial = (PartialPlan | RefreshPartial) | null;
-export type OutcomeType4 = "error";
-export type Code1 = string;
+export type OutcomeType4 = "timeout";
+export type Phase2 = "verification" | "routing" | "candidate" | "original_route" | "alternative_route";
 export type Message2 = string;
+export type Partial = (PartialPlan | RefreshPartial) | null;
+export type OutcomeType5 = "error";
+export type Code1 = string;
+export type Message3 = string;
 export type Role = ("city" | "stop") | null;
 export type Reason1 = string | null;
 export type PlaceId2 = string | null;
 export type InstanceIds = string[] | null;
 export type MovedPlaceId = string | null;
 export type RetryAfterSeconds = number | null;
-export type OperationOutcome = (PlanOutcome | RefreshOutcome | CancelledOutcome | TimeoutOutcome | ErrorOutcome) | null;
-export type Status = "ok" | "no_matches";
+export type OperationOutcome =
+  (PlanOutcome | RefreshOutcome | ComparisonOutcome | CancelledOutcome | TimeoutOutcome | ErrorOutcome) | null;
+export type Status1 = "ok" | "no_matches";
 export type PlaceId3 = string;
 export type PrimaryText = string;
 export type SecondaryText = string | null;
@@ -329,6 +359,7 @@ export type Errors =
 export interface ContractRoot {
   plan_result?: PlanResult;
   refresh_result?: RefreshResult;
+  comparison_result?: ComparisonResult | null;
   stream_event?: StreamEvent;
   operation_outcome?: OperationOutcome;
   known_stop?: KnownStop | null;
@@ -540,14 +571,61 @@ export interface RefreshPartial {
   [k: string]: unknown;
 }
 /**
+ * Outcome of comparing the user's order with one local candidate (Step 8).
+ *
+ * - ``no_different_order``: the distance search returned the same order (or
+ *   pins left no freedom); zero comparison routing calls. Never a claim that
+ *   the original is fastest.
+ * - ``recommended``: both itineraries complete, the candidate passes the
+ *   opening-hours eligibility rules and saves >= ``threshold_seconds``.
+ *   ``candidate`` is the complete verified timeline to apply on acceptance.
+ * - ``not_faster`` / ``hours_ineligible``: complete comparison, original kept.
+ * - ``original_incomplete``: the fresh original failed; comparison stopped and
+ *   the client keeps its previous plan (``original`` shows the partial run).
+ * - ``candidate_incomplete``: candidate failed; ``original`` is the complete
+ *   freshly recalculated original; no saving is claimed.
+ *
+ * Totals are server-computed journey seconds (arrival minus planned
+ * departure of each leg, so waiting and transfers are included); distances
+ * are the candidate heuristic only, not evidence of a saving.
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "ComparisonResult".
+ */
+export interface ComparisonResult {
+  result_type?: ResultType4;
+  operation_id: OperationId4;
+  input_revision: InputRevision4;
+  status: Status;
+  message: Message1;
+  original_order: OriginalOrder;
+  candidate_order?: CandidateOrder;
+  fixed_first: FixedFirst;
+  fixed_last: FixedLast;
+  original?: Original;
+  /**
+   * Only for status=recommended: the plan to apply on acceptance.
+   */
+  candidate?: CompletePlan | null;
+  original_seconds?: OriginalSeconds;
+  candidate_seconds?: CandidateSeconds;
+  saving_seconds?: SavingSeconds;
+  threshold_seconds?: ThresholdSeconds;
+  original_distance_km?: OriginalDistanceKm;
+  candidate_distance_km?: CandidateDistanceKm;
+  ineligible_instance_ids?: IneligibleInstanceIds;
+  routing_calls: RoutingCalls;
+  [k: string]: unknown;
+}
+/**
  * First event in a stream — announces phases and operation identity.
  *
  * This interface was referenced by `ContractRoot`'s JSON-Schema
  * via the `definition` "OperationStartEvent".
  */
 export interface OperationStartEvent {
-  operation_id: OperationId4;
-  input_revision: InputRevision4;
+  operation_id: OperationId5;
+  input_revision: InputRevision5;
   type?: Type;
   phases?: Phases;
   [k: string]: unknown;
@@ -559,8 +637,8 @@ export interface OperationStartEvent {
  * via the `definition` "PhaseStartEvent".
  */
 export interface PhaseStartEvent {
-  operation_id: OperationId5;
-  input_revision: InputRevision5;
+  operation_id: OperationId6;
+  input_revision: InputRevision6;
   type?: Type1;
   phase: Phase;
   [k: string]: unknown;
@@ -572,8 +650,8 @@ export interface PhaseStartEvent {
  * via the `definition` "LegProgressEvent".
  */
 export interface LegProgressEvent {
-  operation_id: OperationId6;
-  input_revision: InputRevision6;
+  operation_id: OperationId7;
+  input_revision: InputRevision7;
   type?: Type2;
   leg_index: LegIndex2;
   total_legs: TotalLegs;
@@ -586,8 +664,8 @@ export interface LegProgressEvent {
  * via the `definition` "StopReadyEvent".
  */
 export interface StopReadyEvent {
-  operation_id: OperationId7;
-  input_revision: InputRevision7;
+  operation_id: OperationId8;
+  input_revision: InputRevision8;
   type?: Type3;
   stop_index: StopIndex;
   stop: KnownStop;
@@ -600,8 +678,8 @@ export interface StopReadyEvent {
  * via the `definition` "LegReadyEvent".
  */
 export interface LegReadyEvent {
-  operation_id: OperationId8;
-  input_revision: InputRevision8;
+  operation_id: OperationId9;
+  input_revision: InputRevision9;
   type?: Type4;
   leg_index: LegIndex3;
   leg: Leg;
@@ -616,8 +694,8 @@ export interface LegReadyEvent {
  * via the `definition` "PhaseCompleteEvent".
  */
 export interface PhaseCompleteEvent {
-  operation_id: OperationId9;
-  input_revision: InputRevision9;
+  operation_id: OperationId10;
+  input_revision: InputRevision10;
   type?: Type5;
   phase: Phase1;
   [k: string]: unknown;
@@ -629,8 +707,8 @@ export interface PhaseCompleteEvent {
  * via the `definition` "TerminalEvent".
  */
 export interface TerminalEvent {
-  operation_id: OperationId10;
-  input_revision: InputRevision10;
+  operation_id: OperationId11;
+  input_revision: InputRevision11;
   type?: Type6;
   outcome: Outcome;
   [k: string]: unknown;
@@ -658,6 +736,17 @@ export interface RefreshOutcome {
   [k: string]: unknown;
 }
 /**
+ * Terminal outcome for a comparison operation.
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "ComparisonOutcome".
+ */
+export interface ComparisonOutcome {
+  outcome_type?: OutcomeType2;
+  result: ComparisonResult;
+  [k: string]: unknown;
+}
+/**
  * Terminal outcome when the operation was cancelled.
  *
  * A client that cancels by disconnecting cannot receive this; the server
@@ -668,7 +757,7 @@ export interface RefreshOutcome {
  * via the `definition` "CancelledOutcome".
  */
 export interface CancelledOutcome {
-  outcome_type?: OutcomeType2;
+  outcome_type?: OutcomeType3;
   reason: Reason;
   [k: string]: unknown;
 }
@@ -683,9 +772,9 @@ export interface CancelledOutcome {
  * via the `definition` "TimeoutOutcome".
  */
 export interface TimeoutOutcome {
-  outcome_type?: OutcomeType3;
+  outcome_type?: OutcomeType4;
   phase: Phase2;
-  message: Message1;
+  message: Message2;
   partial?: Partial;
   [k: string]: unknown;
 }
@@ -699,9 +788,9 @@ export interface TimeoutOutcome {
  * via the `definition` "ErrorOutcome".
  */
 export interface ErrorOutcome {
-  outcome_type?: OutcomeType4;
+  outcome_type?: OutcomeType5;
   code: Code1;
-  message: Message2;
+  message: Message3;
   details?: ErrorDetails | null;
   [k: string]: unknown;
 }
@@ -727,7 +816,7 @@ export interface ErrorDetails {
  * via the `definition` "SuggestionsResponse".
  */
 export interface SuggestionsResponse {
-  status: Status;
+  status: Status1;
   suggestions?: Suggestions;
   [k: string]: unknown;
 }
