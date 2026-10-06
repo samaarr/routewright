@@ -3,8 +3,22 @@
 import type { Warning } from "@/lib/api-types";
 import { fmtDuration, fmtTime } from "@/lib/utils";
 import { legPosition } from "@/lib/v2/refresh.ts";
-import { progressLabel, refreshableTarget, resultIsStale, type PlannerState } from "@/lib/v2/state.ts";
-import type { VFailedLeg, VKnownStop, VPlanResult, VPlannedLeg, VTimelineItem } from "@/lib/v2/validate.ts";
+import {
+  acceptableComparison,
+  canCompare,
+  progressLabel,
+  refreshableTarget,
+  resultIsStale,
+  type PlannerState,
+} from "@/lib/v2/state.ts";
+import type {
+  VComparisonResult,
+  VFailedLeg,
+  VKnownStop,
+  VPlanResult,
+  VPlannedLeg,
+  VTimelineItem,
+} from "@/lib/v2/validate.ts";
 
 const FAILURE_TEXT: Record<string, string> = {
   no_route: "No route was found for this journey at that time.",
@@ -274,14 +288,223 @@ function RefreshingView({ state, plan, onCancel }: { state: PlannerState; plan: 
   );
 }
 
+export const COMPARE_EXPLANATION =
+  "We checked one alternative suggested by straight-line distance. Other orders may be faster.";
+
+function stopNames(...plans: (VPlanResult | null | undefined)[]): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const p of plans) {
+    p?.timeline.forEach((i) => {
+      if (i.item_type === "stop" || i.item_type === "unknown_stop") names.set(i.instance_id, i.name);
+    });
+  }
+  return names;
+}
+
+function Totals({ r }: { r: VComparisonResult }) {
+  if (r.original_seconds === null || r.candidate_seconds === null) return null;
+  return (
+    <p className="mt-1 text-xs text-text-secondary" data-testid="comparison-totals">
+      Journey time — your order: {fmtDuration(r.original_seconds)} · alternative: {fmtDuration(r.candidate_seconds)}
+    </p>
+  );
+}
+
+function ComparisonCard({
+  state,
+  onAccept,
+  onDismiss,
+}: {
+  state: PlannerState;
+  onAccept: () => void;
+  onDismiss: () => void;
+}) {
+  const c = state.comparison;
+  if (!c) return null;
+  const r = c.result;
+  const names = stopNames(r.candidate, r.original, state.result?.plan);
+  const name = (id: string) => names.get(id) ?? id;
+  const acceptable = acceptableComparison(state) !== null;
+  let body: React.ReactNode;
+  switch (r.status) {
+    case "recommended": {
+      const warnings = (r.candidate?.warnings ?? []).filter((w) => w.severity !== "info" || w.code === "hours_unknown");
+      body = (
+        <>
+          <p className="text-body-strong text-text-primary" data-testid="comparison-headline">
+            Estimated journey-time saving: {Math.floor((r.saving_seconds ?? 0) / 60)} min.
+          </p>
+          <p className="mt-1 text-xs text-text-muted">{COMPARE_EXPLANATION}</p>
+          <Totals r={r} />
+          <p className="mt-2 text-sm text-text-secondary" data-testid="comparison-order">
+            Suggested order: {(r.candidate_order ?? []).map(name).join(" → ")}
+          </p>
+          {warnings.length > 0 && (
+            <ul className="mt-2 space-y-0.5" data-testid="comparison-warnings">
+              {warnings.map((w, i) => (
+                <li key={i} className="text-xs text-warning-strong">
+                  {w.message}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              onClick={onAccept}
+              disabled={!acceptable}
+              title={acceptable ? undefined : "Trip details changed — compare again"}
+              className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Use this order
+            </button>
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="rounded-md border border-border-default px-4 py-2 text-sm font-medium text-text-primary hover:border-border-strong"
+            >
+              Keep my order
+            </button>
+          </div>
+        </>
+      );
+      break;
+    }
+    case "no_different_order":
+      body = (
+        <>
+          <p className="text-body text-text-primary">No different order found by the current search.</p>
+          <p className="mt-1 text-xs text-text-muted">{COMPARE_EXPLANATION}</p>
+        </>
+      );
+      break;
+    case "not_faster":
+      body = (
+        <>
+          <p className="text-body text-text-primary">
+            The alternative isn&apos;t at least {Math.round(r.threshold_seconds / 60)} minutes faster, so your order is kept.
+          </p>
+          <p className="mt-1 text-xs text-text-muted">{COMPARE_EXPLANATION}</p>
+          <Totals r={r} />
+        </>
+      );
+      break;
+    case "hours_ineligible": {
+      const closed = r.ineligible_instance_ids.map(name);
+      body = (
+        <>
+          <p className="text-body text-text-primary">
+            The alternative would arrive at {closed.join(", ")} while {closed.length === 1 ? "it appears" : "they appear"} closed,
+            so your order is kept.
+          </p>
+          <p className="mt-1 text-xs text-text-muted">{COMPARE_EXPLANATION}</p>
+          <Totals r={r} />
+        </>
+      );
+      break;
+    }
+    case "original_incomplete":
+      body = (
+        <p className="text-body text-text-primary">
+          Your current order couldn&apos;t be fully recalculated, so the comparison stopped. Your plan is unchanged.
+        </p>
+      );
+      break;
+    case "candidate_incomplete":
+      body = (
+        <p className="text-body text-text-primary">
+          The alternative couldn&apos;t be fully calculated, so no change is suggested. Your order was recalculated.
+        </p>
+      );
+      break;
+  }
+  return (
+    <section
+      aria-label="Comparison result"
+      data-testid={`comparison-${r.status}`}
+      className="mb-4 rounded-md border border-accent-faint bg-accent-soft/40 px-3 py-3"
+    >
+      {body}
+      {r.status !== "recommended" && (
+        <button type="button" onClick={onDismiss} className="mt-2 text-xs text-text-muted underline">
+          Close
+        </button>
+      )}
+    </section>
+  );
+}
+
+function pinText(first: boolean, last: boolean): string {
+  if (first && last) return "Your first and last stops stay in place.";
+  if (first) return "Your first stop stays in place; the last stop may move.";
+  if (last) return "Your last stop stays in place; the first stop may move.";
+  return "Any stop may move, including the first and last.";
+}
+
+function ComparePanel({
+  state,
+  onCompare,
+  onCancel,
+  onAccept,
+  onDismiss,
+}: {
+  state: PlannerState;
+  onCompare: () => void;
+  onCancel: () => void;
+  onAccept: () => void;
+  onDismiss: () => void;
+}) {
+  const op = state.operation;
+  if (op.kind === "running" && op.purpose === "compare") {
+    return (
+      <div className="mb-4 flex items-center gap-2 rounded-md border border-accent-faint bg-accent-soft/40 px-3 py-3">
+        <p role="status" aria-live="polite" className="flex-1 text-sm text-text-secondary" data-testid="compare-progress">
+          {progressLabel(op)}
+        </p>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md border border-border-default px-3 py-1.5 text-sm font-medium text-text-primary hover:border-border-strong"
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+  if (state.comparison) return <ComparisonCard state={state} onAccept={onAccept} onDismiss={onDismiss} />;
+  if (op.kind === "running" || !canCompare(state)) return null;
+  const n = state.draft.stops.length;
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1">
+      <button
+        type="button"
+        onClick={onCompare}
+        className="rounded-md border border-accent px-3 py-1.5 text-sm font-medium text-accent hover:bg-accent-soft"
+      >
+        Compare with another order
+      </button>
+      <span className="text-xs text-text-muted">
+        Checks one alternative suggested by straight-line distance (up to {2 * (n - 1)} journey lookups).{" "}
+        {pinText(state.draft.pinFirst, state.draft.pinLast)}
+      </span>
+    </div>
+  );
+}
+
 export default function TimelineV2({
   state,
   onRefresh,
   onCancel,
+  onCompare,
+  onAccept,
+  onDismiss,
 }: {
   state: PlannerState;
   onRefresh: (legIndex: number) => void;
   onCancel: () => void;
+  onCompare: () => void;
+  onAccept: () => void;
+  onDismiss: () => void;
 }) {
   const { operation, result, notice } = state;
   const stale = resultIsStale(state);
@@ -341,8 +564,17 @@ export default function TimelineV2({
 
       {refreshing && plan && <RefreshingView state={state} plan={plan} onCancel={onCancel} />}
 
+      {plan && !refreshing && !planning && (
+        <ComparePanel state={state} onCompare={onCompare} onCancel={onCancel} onAccept={onAccept} onDismiss={onDismiss} />
+      )}
+
       {plan && !refreshing && (
         <section aria-label={planning || stale ? "Previous plan" : "Plan"}>
+          {result?.label === "recalculated" && !planning && !stale && (
+            <p className="mb-2 text-xs font-medium text-accent" data-testid="recalculated-label">
+              Your order — recalculated.
+            </p>
+          )}
           {(planning || stale) && (
             <p className="mb-2 text-xs font-medium text-text-muted" data-testid="stale-label">
               {stale

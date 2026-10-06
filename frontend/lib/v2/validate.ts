@@ -28,7 +28,7 @@ export class ValidationError extends Error {
 
 // ---- Narrowed shapes (discriminators always present) -------------------------
 
-export type PhaseName = "verification" | "routing";
+export type PhaseName = "verification" | "routing" | "candidate" | "original_route" | "alternative_route";
 export type VKnownStop = KnownStop & { item_type: "stop" };
 export type VPlannedLeg = PlannedLeg & { item_type: "leg" };
 export type VFailedLeg = FailedLeg & { item_type: "failed_leg" };
@@ -71,11 +71,41 @@ export type VRefreshPartial = RefreshCommon & {
 export type VRefreshResult = VRefreshComplete | VRefreshPartial;
 
 /** Which operation a stream belongs to; decides which terminal results are valid. */
-export type StreamKind = "plan" | "refresh";
+export type StreamKind = "plan" | "refresh" | "compare";
+
+export type ComparisonStatus =
+  | "no_different_order"
+  | "recommended"
+  | "not_faster"
+  | "hours_ineligible"
+  | "original_incomplete"
+  | "candidate_incomplete";
+
+export interface VComparisonResult {
+  operation_id: string;
+  input_revision: number;
+  status: ComparisonStatus;
+  message: string;
+  original_order: string[];
+  candidate_order: string[] | null;
+  fixed_first: boolean;
+  fixed_last: boolean;
+  original: VPlanResult | null;
+  candidate: VCompletePlan | null;
+  original_seconds: number | null;
+  candidate_seconds: number | null;
+  saving_seconds: number | null;
+  threshold_seconds: number;
+  original_distance_km: number | null;
+  candidate_distance_km: number | null;
+  ineligible_instance_ids: string[];
+  routing_calls: number;
+}
 
 export type VOutcome =
   | { outcome_type: "plan"; result: VPlanResult }
   | { outcome_type: "refresh"; result: VRefreshResult }
+  | { outcome_type: "comparison"; result: VComparisonResult }
   | {
       outcome_type: "timeout";
       phase: PhaseName;
@@ -213,7 +243,7 @@ function isoTime(o: Obj, key: string, path: string): string {
 // ---- Domain validators ---------------------------------------------------------
 
 const MODES = ["transit", "walking", "driving"] as const;
-const PHASES = ["verification", "routing"] as const;
+const PHASES = ["verification", "routing", "candidate", "original_route", "alternative_route"] as const;
 const HOURS_STATUSES = [
   "open",
   "closed_on_arrival",
@@ -424,18 +454,83 @@ export function refreshResult(v: unknown, path = "refresh"): VRefreshResult {
   throw new ValidationError(`${path}.result_type`, "expected refresh_complete or refresh_partial");
 }
 
+function strArray(o: Obj, key: string, path: string): string[] {
+  return arr(o, key, path, 20).map((x, i) => {
+    if (typeof x !== "string") throw new ValidationError(`${path}.${key}[${i}]`, "expected string");
+    return x;
+  });
+}
+
+const COMPARISON_STATUSES = [
+  "no_different_order",
+  "recommended",
+  "not_faster",
+  "hours_ineligible",
+  "original_incomplete",
+  "candidate_incomplete",
+] as const;
+
+export function comparisonResult(v: unknown, path = "comparison"): VComparisonResult {
+  const o = obj(v, path);
+  const status = oneOf(o, "status", path, COMPARISON_STATUSES);
+  const original = o.original === undefined || o.original === null ? null : planResult(o.original, `${path}.original`);
+  const candidate = o.candidate === undefined || o.candidate === null ? null : planResult(o.candidate, `${path}.candidate`);
+  const optInt = (key: string) => (o[key] === undefined || o[key] === null ? null : int(o, key, path, -86400 * 7, 86400 * 7));
+  const r: VComparisonResult = {
+    operation_id: str(o, "operation_id", path),
+    input_revision: int(o, "input_revision", path),
+    status,
+    message: str(o, "message", path),
+    original_order: strArray(o, "original_order", path),
+    candidate_order: o.candidate_order === undefined || o.candidate_order === null ? null : strArray(o, "candidate_order", path),
+    fixed_first: bool(o, "fixed_first", path, false),
+    fixed_last: bool(o, "fixed_last", path, false),
+    original,
+    candidate: candidate && candidate.result_type === "complete" ? candidate : null,
+    original_seconds: optInt("original_seconds"),
+    candidate_seconds: optInt("candidate_seconds"),
+    saving_seconds: optInt("saving_seconds"),
+    threshold_seconds: o.threshold_seconds === undefined ? 300 : int(o, "threshold_seconds", path, 0, 86400),
+    original_distance_km: optNum(o, "original_distance_km", path),
+    candidate_distance_km: optNum(o, "candidate_distance_km", path),
+    ineligible_instance_ids: o.ineligible_instance_ids === undefined ? [] : strArray(o, "ineligible_instance_ids", path),
+    routing_calls: int(o, "routing_calls", path, 0, 100),
+  };
+  // Internal consistency: anything off is treated as malformed (never applied).
+  const completeOriginal = ["recommended", "not_faster", "hours_ineligible", "candidate_incomplete"].includes(status);
+  if (completeOriginal && r.original?.result_type !== "complete") throw new ValidationError(path, "expected a complete original");
+  if (status === "original_incomplete" && r.original?.result_type !== "partial") throw new ValidationError(path, "expected a partial original");
+  if (status === "no_different_order" && (r.original !== null || r.routing_calls !== 0)) throw new ValidationError(path, "unchanged order must not route");
+  if (status === "recommended") {
+    if (!candidate || candidate.result_type !== "complete" || !r.candidate_order) throw new ValidationError(path, "recommended needs a complete candidate");
+    if (r.saving_seconds === null || r.saving_seconds < r.threshold_seconds) throw new ValidationError(path, "saving below threshold");
+    const ids = candidate.timeline.flatMap((i) => (i.item_type === "stop" ? [i.instance_id] : []));
+    if (ids.join("\u0000") !== r.candidate_order.join("\u0000")) throw new ValidationError(path, "candidate order mismatch");
+    if ([...r.candidate_order].sort().join("\u0000") !== [...r.original_order].sort().join("\u0000")) {
+      throw new ValidationError(path, "candidate has different stops");
+    }
+  } else if (candidate !== null) {
+    throw new ValidationError(path, "only a recommendation may carry a candidate");
+  }
+  return r;
+}
+
 function outcome(v: unknown, path: string, kind: StreamKind): VOutcome {
   const o = obj(v, path);
   switch (o.outcome_type) {
     case "plan":
-      if (kind !== "plan") throw new ValidationError(`${path}.outcome_type`, "plan outcome in a refresh stream");
+      if (kind !== "plan") throw new ValidationError(`${path}.outcome_type`, "plan outcome in another stream");
       return { outcome_type: "plan", result: planResult(o.result, `${path}.result`) };
     case "refresh":
-      if (kind !== "refresh") throw new ValidationError(`${path}.outcome_type`, "refresh outcome in a plan stream");
+      if (kind !== "refresh") throw new ValidationError(`${path}.outcome_type`, "refresh outcome in another stream");
       return { outcome_type: "refresh", result: refreshResult(o.result, `${path}.result`) };
+    case "comparison":
+      if (kind !== "compare") throw new ValidationError(`${path}.outcome_type`, "comparison outcome in another stream");
+      return { outcome_type: "comparison", result: comparisonResult(o.result, `${path}.result`) };
     case "timeout": {
       let partial: VPartialPlan | VRefreshPartial | null = null;
       if (o.partial !== undefined && o.partial !== null) {
+        if (kind === "compare") throw new ValidationError(`${path}.partial`, "comparison timeouts carry no plan");
         const p = kind === "plan" ? planResult(o.partial, `${path}.partial`) : refreshResult(o.partial, `${path}.partial`);
         if (p.result_type !== "partial" && p.result_type !== "refresh_partial") {
           throw new ValidationError(`${path}.partial`, "expected a partial result");

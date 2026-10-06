@@ -43,6 +43,7 @@ let planMode; // how the mocked stream answers
 let suggestDelays; // query -> ms
 let pendingPlan; // resolve fn for a held stream
 let refreshMode; // how the mocked refresh stream answers
+let compareMode; // how the mocked comparison stream answers
 let slow; // local HTTPS server that streams refresh events progressively
 let releaseRefresh; // lets a progressive refresh stream send its terminal event
 
@@ -151,6 +152,62 @@ function refreshEvents(req, mode) {
   return out;
 }
 
+// A consistent comparison result built from the request (as the backend would).
+function comparePlan(req, ids, legMinutes, op) {
+  const byId = new Map(req.stops.map((s) => [s.instance_id, s]));
+  const timeline = [];
+  let t = Date.parse("2026-10-21T09:00:00Z");
+  ids.forEach((id, i) => {
+    const s = byId.get(id);
+    const stay = s.stay_minutes ?? (req.stops[0].instance_id === id || req.stops.at(-1).instance_id === id ? 0 : 60);
+    timeline.push({ item_type: "stop", instance_id: id, place_id: s.selection.place_id, name: s.selection.name, address: null, lat: s.selection.lat, lng: s.selection.lng,
+      arrive_at: new Date(t).toISOString(), depart_at: new Date(t + stay * 60000).toISOString(), stay_minutes: stay, stay_source: "default", map_url: "x",
+      hours_status: "open", hours_detail: { closes_at: "18:00", hours_source: "weekly", exceptions_unconfirmed: true } });
+    t += stay * 60000;
+    if (i < ids.length - 1) {
+      const next = byId.get(ids[i + 1]);
+      timeline.push({ item_type: "leg", from_stop_id: id, to_stop_id: ids[i + 1], from_name: s.selection.name, to_name: next.selection.name, mode: req.mode,
+        duration_seconds: legMinutes * 60, distance_meters: 900, depart_at: new Date(t).toISOString(), arrive_at: new Date(t + legMinutes * 60000).toISOString(),
+        summary: `Bus ${legMinutes} min${op === "cand" ? " (alt)" : " (fresh)"}`, map_url: "m" });
+      t += legMinutes * 60000;
+    }
+  });
+  return { operation_id: req.operation_id, input_revision: req.input_revision, result_type: "complete", city: "Dublin", mode: req.mode,
+    timezone: req.departure.timezone, timeline, overview_map_url: "o", warnings: [] };
+}
+
+function compareEvents(req, mode) {
+  const op = { operation_id: req.operation_id, input_revision: req.input_revision };
+  const ids = req.stops.map((s) => s.instance_id);
+  const cand = [ids[0], ids[2], ids[1], ...ids.slice(3)];
+  const n = ids.length;
+  const ev = (type, extra) => ({ ...op, type, ...extra });
+  const events = [ev("operation_start", { phases: ["verification", "candidate", "original_route", "alternative_route"] }),
+    ev("phase_start", { phase: "verification" }), ev("phase_complete", { phase: "verification" }), ev("phase_start", { phase: "candidate" })];
+  const base = { ...op, message: "m", original_order: ids, fixed_first: req.fixed_first, fixed_last: req.fixed_last, threshold_seconds: 300,
+    original_distance_km: 3, candidate_distance_km: 2, ineligible_instance_ids: [], candidate: null, candidate_order: cand };
+  const original = comparePlan(req, ids, 25, "orig");
+  const totals = (o, c) => ({ original_seconds: o, candidate_seconds: c, saving_seconds: o - c });
+  let result;
+  if (mode === "no_different_order") {
+    result = { ...base, status: mode, candidate_order: ids, original: null, routing_calls: 0, original_seconds: null, candidate_seconds: null, saving_seconds: null };
+  } else if (mode === "original_incomplete") {
+    const partial = { ...original, result_type: "partial", failed_at_leg_index: 0, failure_reason: "no_route",
+      timeline: [original.timeline[0], { item_type: "failed_leg", from_stop_id: ids[0], to_stop_id: ids[1], from_name: "a", to_name: "b", failure_reason: "no_route" },
+        ...req.stops.slice(1).map((s) => ({ item_type: "unknown_stop", instance_id: s.instance_id, place_id: s.selection.place_id, name: s.selection.name }))] };
+    result = { ...base, status: mode, original: partial, routing_calls: 1, original_seconds: null, candidate_seconds: null, saving_seconds: null };
+  } else {
+    events.push(ev("phase_start", { phase: "original_route" }), ev("leg_progress", { leg_index: 0, total_legs: n - 1 }));
+    const status = mode;
+    const candidate = status === "recommended" ? comparePlan(req, cand, 23, "cand") : null;
+    const t = status === "recommended" ? totals(75 * 60, 69 * 60) : status === "hours_ineligible" ? totals(75 * 60, 60 * 60) : totals(75 * 60, 73 * 60);
+    result = { ...base, status, original, candidate, routing_calls: 2 * (n - 1), ...t,
+      ineligible_instance_ids: status === "hours_ineligible" ? [ids[2]] : [] };
+  }
+  events.push(ev("terminal", { outcome: { outcome_type: "comparison", result } }));
+  return events;
+}
+
 async function apiRoute(route) {
   const req = route.request();
   if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors() });
@@ -185,6 +242,15 @@ async function apiRoute(route) {
     let text = planEvents(body, planMode).map((e) => JSON.stringify(e)).join("\n") + "\n";
     if (planMode === "truncated") text = text.split("\n").slice(0, -2).join("\n") + "\n"; // no terminal
     if (planMode === "malformed") text = text.replace('"stop_ready"', '"stop_ready","stop_index":"zero"').replace('"stop_index":0,', "");
+    return route.fulfill({ status: 200, headers: cors({ "content-type": "application/x-ndjson" }), body: text });
+  }
+  if (path === "/api/v2/compare/stream") {
+    if (compareMode === "hang") {
+      await new Promise((resolve) => { pendingPlan = resolve; });
+      return route.abort().catch(() => {});
+    }
+    const lines = compareEvents(body, compareMode).map((e) => JSON.stringify(e));
+    const text = compareMode === "truncated" ? lines.slice(0, -1).join("\n") + "\n" : lines.join("\n") + "\n";
     return route.fulfill({ status: 200, headers: cors({ "content-type": "application/x-ndjson" }), body: text });
   }
   if (path === "/api/v2/refresh/stream") {
@@ -290,6 +356,7 @@ describe("v2 planner (browser)", () => {
     log = [];
     planMode = "complete";
     refreshMode = "ok";
+    compareMode = "recommended";
     releaseRefresh = null;
     suggestDelays = {};
     pendingPlan = null;
@@ -572,11 +639,119 @@ describe("v2 planner (browser)", () => {
     assert.equal(await page.getByTestId("previous-timings").count(), 0);
   });
 
-  test("optimisation stays unavailable; legacy endpoints unused; desktop tabs preserved", async () => {
+  const compareButton = () => page.getByRole("button", { name: "Compare with another order" });
+  const compareRuns = () => log.filter((r) => r.path === "/api/v2/compare/stream").map((r) => r.body);
+
+  test("compare is offered only on a complete plan with at least three stops", async () => {
+    await fillReadyDraft();
+    await planButton().click();
+    await page.getByTestId("current-result").waitFor();
+    assert.equal(await compareButton().count(), 0); // two stops
+    await page.getByRole("button", { name: "+ Add another stop" }).filter({ visible: true }).click();
+    await chooseStop(3, "trinity", "Trinity College");
+    assert.equal(await compareButton().count(), 0); // plan is now for earlier details
+    await planButton().click();
+    await page.getByTestId("current-result").waitFor();
+    assert.match(await page.getByText(/journey lookups/).innerText(), /up to 4 journey lookups\)\. Your first and last stops stay in place\./);
+  });
+
+  test("recommended: saving, explanation, totals; Use this order applies it with no network calls", async () => {
     await planThreeStops();
+    await compareButton().click();
+    await page.getByTestId("comparison-recommended").waitFor();
+    const req = compareRuns()[0];
+    assert.equal(req.fixed_first && req.fixed_last, true);
+    const card = await page.getByTestId("comparison-recommended").innerText();
+    assert.match(card, /Estimated journey-time saving: 6 min\./);
+    assert.match(card, /We checked one alternative suggested by straight-line distance\. Other orders may be faster\./);
+    assert.match(card, /your order: 1 hr 15 min · alternative: 1 hr 9 min/);
+    assert.match(card, /Suggested order: Trinity College → Trinity College → Guinness Storehouse/);
+    assert.equal(await page.getByTestId("recalculated-label").innerText(), "Your order — recalculated.");
+    assert.match(await page.getByTestId("current-result").innerText(), /\(fresh\)/); // fresh original displayed
+    const before = log.length;
+    await page.getByRole("button", { name: "Use this order" }).click();
+    await page.getByTestId("comparison-recommended").waitFor({ state: "detached" });
+    assert.equal(log.length, before); // acceptance made no network requests
+    assert.match(await page.getByTestId("current-result").innerText(), /\(alt\)/); // compared candidate shown
+    assert.equal(await page.getByTestId("recalculated-label").count(), 0);
+    assert.equal(await stopBox(2).inputValue(), "Trinity College"); // form reordered
+    assert.equal(await stopBox(3).inputValue(), "Guinness Storehouse");
+    const stays = await page.locator('input[aria-label^="Stay at stop"]').filter({ visible: true }).evaluateAll((els) => els.map((e) => e.value));
+    // Every compared stay is now explicit (and editable), carried by stop instance (D11):
+    // the original last stop keeps 0 min in the middle; the original middle stop keeps 60 at the end.
+    assert.deepEqual(stays, ["0", "0", "60"]);
+  });
+
+  const outcomes = [
+    ["not_faster", /isn't at least 5 minutes faster, so your order is kept/, true],
+    ["hours_ineligible", /would arrive at Trinity College while it appears closed, so your order is kept/, true],
+    ["no_different_order", /No different order found by the current search\./, false],
+    ["original_incomplete", /couldn't be fully recalculated, so the comparison stopped\. Your plan is unchanged\./, false],
+  ];
+  for (const [mode, pattern, recalculated] of outcomes) {
+    test(`${mode}: explained without claiming an improvement`, async () => {
+      await planThreeStops();
+      compareMode = mode;
+      await compareButton().click();
+      await page.getByTestId(`comparison-${mode}`).waitFor();
+      const text = await page.getByTestId(`comparison-${mode}`).innerText();
+      assert.match(text, pattern);
+      assert.doesNotMatch(text, /saving|fastest/i);
+      assert.equal(await page.getByRole("button", { name: "Use this order" }).count(), 0);
+      assert.equal(await page.getByTestId("recalculated-label").count(), recalculated ? 1 : 0);
+      if (!recalculated) assert.match(await page.getByTestId("current-result").innerText(), /Bus 15, 20 min/); // previous plan kept
+    });
+  }
+
+  test("cancelling a comparison keeps the plan visible and unchanged", async () => {
+    await planThreeStops();
+    compareMode = "hang";
+    const aborted = page.waitForEvent("requestfailed", (r) => r.url().endsWith("/api/v2/compare/stream"));
+    await compareButton().click();
+    await page.getByTestId("compare-progress").waitFor();
+    assert.match(await page.getByTestId("compare-progress").innerText(), /Checking your places…/);
+    await page.getByTestId("current-result").waitFor(); // plan stays visible, not dimmed
+    await page.getByTestId("compare-progress").locator("..").getByRole("button", { name: "Cancel" }).click();
+    await aborted;
+    assert.equal(await page.getByTestId("plan-notice").innerText(), "Comparison cancelled — your plan is unchanged.");
+    assert.match(await page.getByTestId("current-result").innerText(), /Bus 15, 20 min/);
+  });
+
+  test("an interrupted comparison stream leaves the plan unchanged", async () => {
+    await planThreeStops();
+    compareMode = "truncated";
+    await compareButton().click();
+    await page.getByTestId("plan-notice").waitFor();
+    assert.equal(await page.getByTestId("plan-notice").innerText(), "Comparison didn't finish — your plan is unchanged.");
+    assert.equal(await page.getByTestId("recalculated-label").count(), 0);
+  });
+
+  test("an input edit invalidates the suggestion", async () => {
+    await planThreeStops();
+    await compareButton().click();
+    await page.getByTestId("comparison-recommended").waitFor();
+    await page.getByLabel("Departure time").filter({ visible: true }).fill("10:30");
+    await page.getByTestId("comparison-recommended").waitFor({ state: "detached" });
+    assert.equal(await page.getByRole("button", { name: "Use this order" }).count(), 0);
+  });
+
+  test("planning cancels a running comparison", async () => {
+    await planThreeStops();
+    compareMode = "hang";
+    const aborted = page.waitForEvent("requestfailed", (r) => r.url().endsWith("/api/v2/compare/stream"));
+    await compareButton().click();
+    await page.getByTestId("compare-progress").waitFor();
+    await planButton().click();
+    await aborted;
+    await page.getByTestId("current-result").waitFor();
+    assert.equal(count("/api/v2/plan/stream"), 2);
+  });
+
+  test("legacy endpoints are never called; desktop tabs preserved", async () => {
+    await planThreeStops();
+    await compareButton().click();
+    await page.getByTestId("comparison-recommended").waitFor();
     await page.getByRole("button", { name: "Map", exact: true }).filter({ visible: true }).click();
-    await page.getByTestId("optimise-unavailable").filter({ visible: true }).waitFor();
-    assert.equal(await page.getByRole("button", { name: /Optimise/ }).count(), 0);
     assert.equal(count("/api/optimise") + count("/api/refresh-leg") + count("/api/plan"), 0);
   });
 });

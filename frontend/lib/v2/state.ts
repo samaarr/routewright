@@ -25,6 +25,7 @@ import type {
   VPlanResult,
   VPlannedLeg,
   VSelectedCity,
+  VComparisonResult,
   VSelectedPlace,
   VStreamEvent,
 } from "./validate.ts";
@@ -62,8 +63,9 @@ export type Operation =
   | { kind: "idle" }
   | {
       kind: "running";
-      // "refresh" recomputes the suffix of the current plan from leg k (D21).
-      purpose: "plan" | "refresh";
+      // "refresh" recomputes the suffix of the current plan from leg k (D21);
+      // "compare" checks one alternative order against a fresh original (Step 8).
+      purpose: "plan" | "refresh" | "compare";
       refresh: RefreshTarget | null;
       operationId: string;
       revision: number;
@@ -85,7 +87,11 @@ export interface PlannerState {
   draft: Draft;
   revision: number;
   operation: Operation;
-  result: { plan: VPlanResult; revision: number } | null;
+  // label "recalculated": the plan is the fresh original from a comparison.
+  result: { plan: VPlanResult; revision: number; label?: "recalculated" } | null;
+  // Latest comparison outcome for the current inputs (cleared by any edit,
+  // Plan or Refresh). Only a "recommended" one can be accepted.
+  comparison: { result: VComparisonResult; revision: number } | null;
   notice: Notice;
 }
 
@@ -106,6 +112,9 @@ export type Action =
   // planStarted / refreshStarted replace any running operation (Step 8 #9).
   | { type: "planStarted"; operationId: string }
   | { type: "refreshStarted"; operationId: string; legIndex: number }
+  | { type: "compareStarted"; operationId: string }
+  | { type: "comparisonAccepted" }
+  | { type: "comparisonDismissed" }
   | { type: "streamEvent"; operationId: string; event: VStreamEvent }
   | { type: "streamEnded"; operationId: string; end: StreamEnd }
   | { type: "planFailed"; operationId: string; code: string; message: string; instanceIds?: string[]; role?: string | null }
@@ -127,6 +136,7 @@ export function initialState(ids: [string, string]): PlannerState {
     revision: 0,
     operation: { kind: "idle" },
     result: null,
+    comparison: null,
     notice: null,
   };
 }
@@ -135,6 +145,9 @@ const STOPPED_BY_EDIT = "Planning stopped because the trip details changed. Pres
 const CANCELLED = "Planning cancelled. Calls already sent to Google still count toward today's allowance.";
 export const REFRESH_CANCELLED = "Refresh cancelled — showing previous timings.";
 export const REFRESH_INCOMPLETE = "Refresh incomplete — showing previous timings.";
+export const COMPARE_CANCELLED = "Comparison cancelled — your plan is unchanged.";
+export const COMPARE_INCOMPLETE = "Comparison didn't finish — your plan is unchanged.";
+const COMPARE_STOPPED_BY_EDIT = "Comparison stopped because the trip details changed — your plan is unchanged.";
 const REFRESH_STOPPED_BY_EDIT =
   "Refresh stopped because the trip details changed — showing previous timings. Press Plan when ready.";
 
@@ -143,13 +156,21 @@ function isRefresh(op: Operation): boolean {
 }
 
 function edited(state: PlannerState, draft: Draft): PlannerState {
-  const wasRunning = state.operation.kind === "running";
-  const message = isRefresh(state.operation) ? REFRESH_STOPPED_BY_EDIT : STOPPED_BY_EDIT;
+  const op = state.operation;
+  const wasRunning = op.kind === "running";
+  const message = !wasRunning
+    ? STOPPED_BY_EDIT
+    : op.purpose === "refresh"
+      ? REFRESH_STOPPED_BY_EDIT
+      : op.purpose === "compare"
+        ? COMPARE_STOPPED_BY_EDIT
+        : STOPPED_BY_EDIT;
   return {
     ...state,
     draft,
     revision: state.revision + 1,
     operation: { kind: "idle" },
+    comparison: null, // input edits invalidate any suggestion
     notice: wasRunning ? { kind: "cancelled", message } : state.notice?.kind === "error" ? null : state.notice,
   };
 }
@@ -241,6 +262,7 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
       return {
         ...state,
         notice: null,
+        comparison: null,
         operation: {
           kind: "running",
           purpose: "plan",
@@ -260,6 +282,7 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
       return {
         ...state,
         notice: null,
+        comparison: null,
         operation: {
           kind: "running",
           purpose: "refresh",
@@ -274,6 +297,29 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
         },
       };
     }
+    case "compareStarted":
+      if (!canCompare(state)) return state;
+      return {
+        ...state,
+        notice: null,
+        comparison: null,
+        operation: {
+          kind: "running",
+          purpose: "compare",
+          refresh: null,
+          operationId: action.operationId,
+          revision: state.revision,
+          phase: null,
+          completedLegs: 0,
+          totalLegs: null,
+          stops: [],
+          legs: [],
+        },
+      };
+    case "comparisonDismissed":
+      return state.comparison ? { ...state, comparison: null } : state;
+    case "comparisonAccepted":
+      return acceptComparison(state);
     case "streamEvent": {
       if (!isCurrentOp(state, action.operationId)) return state;
       const op = state.operation;
@@ -281,7 +327,8 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
       if (e.operation_id !== op.operationId || e.input_revision !== op.revision) return state;
       switch (e.type) {
         case "phase_start":
-          return { ...state, operation: { ...op, phase: e.phase } };
+          // Counts are per phase (a comparison routes two itineraries).
+          return { ...state, operation: { ...op, phase: e.phase, completedLegs: 0, totalLegs: null, stops: [], legs: [] } };
         case "leg_progress":
           return { ...state, operation: { ...op, totalLegs: e.total_legs } };
         case "stop_ready":
@@ -301,6 +348,7 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
       const end = action.end;
       const idle = { ...state, operation: { kind: "idle" } as const };
       if (op.purpose === "refresh") return endRefresh(state, idle, op.revision, end);
+      if (op.purpose === "compare") return endCompare(state, idle, op.revision, end);
       if (end.kind === "aborted") return { ...idle, notice: { kind: "cancelled", message: CANCELLED } };
       if (end.kind === "incomplete") {
         return {
@@ -341,6 +389,7 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
         case "cancelled":
           return { ...idle, notice: { kind: "cancelled", message: CANCELLED } };
         case "refresh":
+        case "comparison":
           return state; // impossible: validated per stream kind
       }
       return state;
@@ -363,7 +412,14 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
       return {
         ...state,
         operation: { kind: "idle" },
-        notice: { kind: "cancelled", message: isRefresh(state.operation) ? REFRESH_CANCELLED : CANCELLED },
+        notice: {
+          kind: "cancelled",
+          message: isRefresh(state.operation)
+            ? REFRESH_CANCELLED
+            : state.operation.purpose === "compare"
+              ? COMPARE_CANCELLED
+              : CANCELLED,
+        },
       };
   }
 }
@@ -417,8 +473,101 @@ function endRefresh(
     case "cancelled":
       return { ...idle, notice: { kind: "cancelled", message: REFRESH_CANCELLED } };
     case "plan":
+    case "comparison":
       return incomplete; // impossible: validated per stream kind
   }
+}
+
+/**
+ * Outcome of a comparison. A complete fresh original replaces the displayed
+ * plan atomically ("Your order — recalculated."); an incomplete original,
+ * cancellation, timeout or error leaves the plan untouched.
+ */
+function endCompare(state: PlannerState, idle: PlannerState, revision: number, end: StreamEnd): PlannerState {
+  if (end.kind === "aborted") return { ...idle, notice: { kind: "cancelled", message: COMPARE_CANCELLED } };
+  if (end.kind === "incomplete") return { ...idle, notice: { kind: "incomplete", message: COMPARE_INCOMPLETE } };
+  const outcome = end.event.outcome;
+  switch (outcome.outcome_type) {
+    case "comparison": {
+      const r = outcome.result;
+      const fresh = r.original && r.original.result_type === "complete" ? r.original : null;
+      return {
+        ...idle,
+        notice: null,
+        comparison: { result: r, revision },
+        result: fresh ? { plan: fresh, revision, label: "recalculated" } : state.result,
+      };
+    }
+    case "timeout":
+      return { ...idle, notice: { kind: "timeout", message: `${outcome.message} Your plan is unchanged.` } };
+    case "error":
+      return {
+        ...idle,
+        notice: {
+          kind: "error",
+          code: outcome.code,
+          message: `${outcome.message} Your plan is unchanged.`,
+          instanceIds: outcome.details?.instance_ids ?? [],
+          role: outcome.details?.role ?? null,
+        },
+      };
+    case "cancelled":
+      return { ...idle, notice: { kind: "cancelled", message: COMPARE_CANCELLED } };
+    default:
+      return { ...idle, notice: { kind: "incomplete", message: COMPARE_INCOMPLETE } };
+  }
+}
+
+/** Compare is offered on a current, complete plan with at least three stops. */
+export function canCompare(state: PlannerState): boolean {
+  const r = state.result;
+  return (
+    r !== null &&
+    !resultIsStale(state) &&
+    r.plan.result_type === "complete" &&
+    state.draft.stops.length >= 3 &&
+    readiness(state).ready
+  );
+}
+
+/** The verified recommendation that can be accepted now, or null. */
+export function acceptableComparison(state: PlannerState): VComparisonResult | null {
+  const c = state.comparison;
+  if (!c || c.revision !== state.revision || state.operation.kind === "running") return null;
+  return c.result.status === "recommended" && c.result.candidate ? c.result : null;
+}
+
+/**
+ * "Use this order": apply the compared candidate atomically, with no network
+ * call. The form takes the candidate order, every stay becomes an explicit
+ * (editable) value equal to the compared duration, and the displayed plan is
+ * exactly the compared candidate timeline.
+ */
+function acceptComparison(state: PlannerState): PlannerState {
+  const r = acceptableComparison(state);
+  if (!r || !r.candidate || !r.candidate_order) return state;
+  const byId = new Map(state.draft.stops.map((s) => [s.id, s]));
+  const stays = new Map(
+    r.candidate.timeline.flatMap((i) => (i.item_type === "stop" ? [[i.instance_id, i.stay_minutes] as const] : [])),
+  );
+  if (r.candidate_order.some((id) => !byId.has(id) || !stays.has(id)) || r.candidate_order.length !== byId.size) return state;
+  const stops = r.candidate_order.map((id) => ({ ...byId.get(id)!, stayMinutes: stays.get(id)! }));
+  const revision = state.revision + 1;
+  return {
+    ...state,
+    draft: { ...state.draft, stops },
+    revision,
+    result: { plan: r.candidate, revision },
+    comparison: null,
+    notice: null,
+  };
+}
+
+/** The comparison request for the current inputs (with current pins), or null. */
+export function compareRequest(state: PlannerState): (Omit<PlanStreamRequest, "operation_id" | "input_revision"> & { fixed_first: boolean; fixed_last: boolean }) | null {
+  const ready = readiness(state);
+  if (!canCompare(state) || !ready.ready) return null;
+  return { ...ready.request, fixed_first: state.draft.pinFirst, fixed_last: state.draft.pinLast };
 }
 
 /** A refresh target, only for a current (not stale) plan. Starting a refresh
@@ -506,6 +655,13 @@ function journeys(n: number): string {
 
 export function progressLabel(op: Operation): string | null {
   if (op.kind !== "running") return null;
+  if (op.purpose === "compare") {
+    const n = op.totalLegs === null ? "" : `: journey ${Math.min(op.completedLegs + 1, op.totalLegs)} of ${op.totalLegs}`;
+    if (op.phase === null || op.phase === "verification") return "Checking your places…";
+    if (op.phase === "candidate") return "Finding another order…";
+    if (op.phase === "original_route") return `Recalculating your order${n}…`;
+    return `Checking the alternative${n}…`;
+  }
   if (op.purpose === "refresh") {
     if (op.phase === null || op.phase === "verification") return "Checking the remaining places…";
     if (op.totalLegs === null) return "Refreshing journeys…";

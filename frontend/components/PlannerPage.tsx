@@ -13,18 +13,22 @@
 // v1 results into a v2 plan.
 
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ApiError, messageFor, streamPlan, streamRefresh } from "@/lib/v2/client.ts";
+import { ApiError, messageFor, streamCompare, streamPlan, streamRefresh } from "@/lib/v2/client.ts";
 import type { StreamEnd } from "@/lib/v2/ndjson.ts";
-import { initialState, readiness, reducer, refreshRequest, resultIsStale } from "@/lib/v2/state.ts";
+import {
+  compareRequest,
+  initialState,
+  readiness,
+  reducer,
+  refreshRequest,
+  resultIsStale,
+} from "@/lib/v2/state.ts";
 import PlanMap, { type MapPin } from "./PlanMap";
 import PlanFormV2 from "./v2/PlanFormV2";
 import TimelineV2 from "./v2/TimelineV2";
 
 type MobileTab = "form" | "map" | "timeline";
 type RightTab = "map" | "timeline";
-
-export const OPTIMISE_UNAVAILABLE =
-  "Route optimisation is coming in a later update. For now, drag stops in the form to change the order, then press Plan.";
 
 function uid(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -138,6 +142,23 @@ export default function PlannerPage() {
     );
   }
 
+  // Compare: one alternative order vs a fresh original (Step 8).
+  function startCompare() {
+    const r = compareRequest(state);
+    if (!r) return;
+    const { operationId, signal } = begin();
+    dispatch({ type: "compareStarted", operationId });
+    focusTimeline();
+    follow(
+      operationId,
+      streamCompare(
+        { ...r, operation_id: operationId, input_revision: state.revision },
+        (event) => dispatch({ type: "streamEvent", operationId, event }),
+        signal,
+      ),
+    );
+  }
+
   const pins: MapPin[] = useMemo(() => {
     const current = state.result && !resultIsStale(state) ? state.result.plan : null;
     if (current) {
@@ -155,21 +176,18 @@ export default function PlannerPage() {
     />
   );
   const timelinePane = (
-    <TimelineV2 state={state} onRefresh={startRefresh} onCancel={() => dispatch({ type: "cancelRequested" })} />
+    <TimelineV2
+      state={state}
+      onRefresh={startRefresh}
+      onCancel={() => dispatch({ type: "cancelRequested" })}
+      onCompare={startCompare}
+      onAccept={() => dispatch({ type: "comparisonAccepted" })}
+      onDismiss={() => dispatch({ type: "comparisonDismissed" })}
+    />
   );
   const mapPane = (
     <>
       <PlanMap stops={pins} optimiseState={{ kind: "none" }} onApply={NOOP} onDismiss={NOOP} onToggleView={NOOP} />
-      {pins.length >= 3 && (
-        <div className="absolute bottom-3 left-0 right-0 z-20 flex justify-center px-3">
-          <p
-            className="rounded-full border border-border-subtle bg-pane-bg/95 px-4 py-2 text-center text-xs text-text-muted shadow-raised"
-            data-testid="optimise-unavailable"
-          >
-            {OPTIMISE_UNAVAILABLE}
-          </p>
-        </div>
-      )}
     </>
   );
 

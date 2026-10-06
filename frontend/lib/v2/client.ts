@@ -251,6 +251,20 @@ export function streamPlan(
   return streamOperation("/api/v2/plan/stream", request, "plan", onEvent, signal);
 }
 
+export interface CompareStreamRequest extends PlanStreamRequest {
+  fixed_first: boolean;
+  fixed_last: boolean;
+}
+
+/** Start one streamed comparison (Step 8); same semantics as streamPlan. */
+export function streamCompare(
+  request: CompareStreamRequest,
+  onEvent: (event: VStreamEvent) => void,
+  signal: AbortSignal,
+): Promise<StreamEnd> {
+  return streamOperation("/api/v2/compare/stream", request, "compare", onEvent, signal);
+}
+
 /** Start one streamed suffix refresh (D21); same semantics as streamPlan. */
 export function streamRefresh(
   request: RefreshStreamRequest,
