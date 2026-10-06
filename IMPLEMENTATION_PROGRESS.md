@@ -190,7 +190,7 @@ claimed beyond what the code and tests show.
 | 5 | Opening-hours rules | DONE FOR v2 PLANNING (V2-VH; DST fix in SSV) — instant-based comparison across clock changes, next-opening date. Comparison/acceptance retention is Step 8. v1 `/api/plan` keeps its weekly-only logic |
 | 6 | Frontend state + streaming | COMPLETE (SSV): items 1-7; frontend now plans only via `/api/v2/plan/stream`. Item 6 pins: default on, visible, preserved through edits; their effect on optimisation arrives with Step 8 |
 | 7 | Suffix refresh via shared engine | COMPLETE — backend e4f5f27 (`/api/v2/refresh[/stream]`, planned departure never now, unchanged prefix, ≤ N−1−k calls, failure → unknown downstream); refresh UI committed with this record ("Refresh from here" / "Try again", previous timings labelled while refreshing, atomic suffix replacement, cancel/incomplete keep the previous plan). Step 8 hook (refresh cancels optimisation) applies once optimisation exists |
-| 8 | Compare one local candidate with fresh original | IN PROGRESS — backend complete and committed (6329b9d): `/api/v2/compare[/stream]`, one distance candidate with pins, no routing when unchanged, fresh original + candidate ≤ 2(N−1) calls, 300 s exact threshold, hours eligibility, 60 s deadline incl. solver. Operation coordination (any start supersedes the running operation) implemented in the frontend. Comparison UI awaits approval of the proposal below |
+| 8 | Compare one local candidate with fresh original | COMPLETE — backend 6329b9d; final-walk arrival fix 25de41b (applies to planning, refresh and comparison); comparison UI with the approved decisions (Compare on a current complete plan ≥ 3 stops, real phases + Cancel, "Your order — recalculated.", "Estimated journey-time saving: X min.", atomic "Use this order" with explicit stays and no network calls, edits invalidate). Live Google verification of the response shape and deployment checks remain (Step 9/10) |
 | 9 | Metrics, security regression, deployment verification | PENDING (B2, B4) |
 | 10 | Review, release readiness, completion report | PENDING |
 
@@ -747,7 +747,7 @@ earlier unexplained failure in the progressive test; its progress assertion
 now waits for the label update); security smoke passed; security audit
 FAILED (pre-existing B3, dev-only postcss-selector-parser via tailwindcss).
 
-## Step 8 — comparison (backend done 2026-10-06; UI awaiting approval)
+## Step 8 — comparison (completed 2026-10-06)
 
 ### Backend — commit 6329b9d
 - `ComparisonRequest` (= itinerary + current `fixed_first`/`fixed_last`).
@@ -767,8 +767,8 @@ FAILED (pre-existing B3, dev-only postcss-selector-parser via tailwindcss).
   `not_faster`, `hours_ineligible` (with instance IDs), `original_incomplete`
   (stop; client keeps previous plan), `candidate_incomplete` (complete fresh
   original kept). Journey seconds = Σ(arrival − planned departure) per leg,
-  so waiting/transfers count; the final walk after the last transit step is
-  not represented (existing parser limitation, same for both orders).
+  so waiting/transfers count. Since 25de41b the arrival includes the
+  documented final walk (see "Destination arrival correction").
   Distances are reported as the heuristic only.
 - `recommended` carries the complete candidate plan for zero-call acceptance.
 - Endpoints share planning's stream/deadline/disconnect handling; own
@@ -786,47 +786,86 @@ FAILED (pre-existing B3, dev-only postcss-selector-parser via tailwindcss).
   same rule. Tests: unit (plan↔refresh supersession, late events) and a
   browser test (Plan during a refresh aborts the refresh request).
 
-### Comparison UI proposal (needs approval before implementation)
-1. **Entry:** on a current, complete plan with ≥ 3 stops, the Map/Plan view
-   offers "Compare with another order" (replacing the "coming later" note),
-   with a line explaining it checks ONE alternative suggested by
-   straight-line distance and may use up to 2(N−1) journey lookups. Pin
-   controls (on by default) are shown next to the first/last stops.
-2. **Progress:** the current plan stays visible; a status panel shows real
-   phases — "Checking places…", "Finding another order…", "Recalculating your
-   order: journey 2 of 5", "Checking the alternative: journey 3 of 5" — with
-   Cancel. No percentages or countdowns.
-3. **Results:**
-   - No different order: "No different order found by the current search."
-   - Recommended: "Another order could save about N min (estimate for this
-     departure, not a guarantee)", both totals, the proposed order, any
-     warnings (closing during a visit, unknown hours), and "Use this order" /
-     "Keep my order".
-   - Not ≥ 5 min faster / opening-hours conflict: explain, show both totals
-     (or the closed stop), keep the order.
-   - Original could not be recalculated: previous plan unchanged and
-     labelled; candidate incomplete: show the freshly recalculated original.
-   - Cancel / timeout / error / interrupted stream: "Comparison didn't finish
-     — your plan is unchanged."
-4. **Accept:** only for `recommended` with a matching input revision; one
-   atomic update with no network calls: the form's stop order becomes the
-   candidate order, each stop's stay is fixed to the compared duration (so a
-   later Plan reproduces the same durations, D11/D18), and the displayed plan
-   becomes the compared candidate timeline, labelled as calculated at
-   comparison time. Any edit, Plan or Refresh before accepting invalidates the
-   suggestion ("Trip details changed — compare again").
-5. **Coordination:** starting a comparison supersedes plan/refresh and vice
-   versa; a refresh cancels a running comparison and clears its suggestion.
+### Destination arrival correction — commit 25de41b
+- Review found transit arrival = last scheduled alighting time, omitting the
+  walk to the destination (and, if the last ride lacked an arrivalTime, an
+  earlier ride's arrival could be reused).
+- Verified against Google's computeRoutes reference and transit-route guide
+  (2026-10-06): walking to/from/between stations appears as steps with
+  travelMode WALK and `staticDuration` (documented as possibly absent);
+  TRANSIT steps carry `stopDetails.departureTime/arrivalTime`. The docs do
+  not say whether a transit route's `duration` is measured from the
+  requested departure, so it is not used for transit arrival.
+- Arrival = last ride's arrivalTime + `staticDuration` of every later step.
+  Missing ride arrival, missing/invalid final-walk duration, or an arrival
+  before the requested departure → leg fails `arrival_unknown`; downstream
+  times unknown; nothing invented. Walk-only routes and walking/driving keep
+  departure + documented route duration. Field mask adds
+  `routes.legs.steps.staticDuration`.
+- Shared by planning, refresh and comparison (and v1 `/api/plan`).
+- Tests: parser cases + `tests/test_final_walk.py` through the real parser
+  with mocked HTTP: arrival and the next requested departure shift with the
+  walk; a walk turns "closes soon" into "closed on arrival"; refresh includes
+  it; final walks move a comparison across 300 s both ways; undocumented walk
+  → arrival_unknown. Dropping the walk again fails 8 tests.
 
-**Decisions needed:** (a) should a complete freshly recalculated original
-replace the displayed plan after a non-recommended comparison? (proposed:
-yes, labelled "recalculated during comparison"); (b) on acceptance, fix
-defaulted durations as explicit values in the form (proposed) or add a
-separate "fixed from comparison" marker; (c) final wording above.
+### Comparison UI — approved decisions implemented
+- Compare appears only on a current, complete plan with ≥ 3 stops, with
+  "Checks one alternative suggested by straight-line distance (up to 2(N−1)
+  journey lookups)" and the current pin effect. Request sends current pins.
+- During comparison the plan stays visible (not dimmed); status shows real
+  phases ("Checking your places…", "Finding another order…", "Recalculating
+  your order: journey 2 of 3…", "Checking the alternative: journey 1 of 3…")
+  with Cancel. Counts reset per route.
+- A complete fresh original replaces the displayed plan atomically, labelled
+  "Your order — recalculated." Original incomplete, unchanged order,
+  cancellation, timeout, error or interrupted stream leave the plan as it was
+  ("Comparison cancelled/didn't finish — your plan is unchanged.").
+- Recommended: "Estimated journey-time saving: X min." (floor of exact
+  seconds), "We checked one alternative suggested by straight-line distance.
+  Other orders may be faster.", both totals, suggested order, candidate
+  warnings, "Use this order" / "Keep my order". Not-faster, hours-ineligible
+  (names the closed stop), unchanged and failed outcomes are explained with no
+  improvement claim and no accept action.
+- "Use this order": one reducer step, no network call — form order becomes
+  the candidate order, every compared stay becomes an explicit editable value
+  (carried by stop instance, D11), and the displayed plan is exactly the
+  compared candidate. Only allowed while the input revision still matches.
+- Any input edit, Plan or Refresh clears the suggestion; plan/refresh/compare
+  supersede each other and late events are rejected by operation ID and
+  revision. Comparison outcomes are only valid in comparison streams, and
+  results are checked for internal consistency (recommended needs a complete
+  candidate in the stated order with saving ≥ threshold; other statuses may
+  not carry a candidate).
+- Tests: `tests/unit/compare.test.ts` (13) and 10 browser scenarios
+  (offer conditions, recommended + zero-network acceptance with explicit
+  stays, four non-improving outcomes, cancel, interrupted stream, edit
+  invalidation, plan supersession, no legacy calls). Mutation checks
+  (replacing the plan on an incomplete original; not making stays explicit)
+  fail tests.
+
+### Checks (2026-10-06)
+Backend 402 passed, 1 skipped (Redis, not verified); ruff, format, mypy
+clean. Frontend: types drift clean; type-check, lint clean; unit 87; build
+OK; browser 31; security smoke passed; security audit FAILED (pre-existing
+B3, dev-only postcss-selector-parser via tailwindcss).
+
+### Unresolved timing issues (explicit)
+- No live Google call has verified that transit WALK steps actually include
+  `staticDuration` in our responses (no live testing authorised). If Google
+  omits it in practice, affected legs become `arrival_unknown` rather than
+  wrong — but plans could fail more often; check during deployment
+  verification.
+- Transit legs whose ride lacks stopDetails times now fail as
+  `arrival_unknown` instead of using the route duration from the requested
+  departure, because the docs don't define that duration's start.
+- The leg line shows the provider's route `duration`; comparison totals use
+  arrival − planned departure (includes waiting), so the two can differ.
 
 ## Next action
 
 1. Decide selection-lookup limits (D36) and the B3 audit fix.
 2. Monthly free-tier enforcement remains deferred; existing limits retained.
-3. **Step 8:** approve the comparison UI proposal (and decisions a–c), then
-   build the UI, acceptance and tests; then Step 9 (metrics/security).
+3. **Step 9:** metrics (needs D46 retention decision), security regression
+   checks and deployment verification, incl. live checks of the Routes
+   response shape (final-walk staticDuration) and 60 s streaming support.
