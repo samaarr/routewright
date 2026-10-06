@@ -142,6 +142,9 @@ export default function PlannerPage() {
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const [planVersion, setPlanVersion] = useState(0);
   const [mobileTab, setMobileTab] = useState<MobileTab>("form");
+  // Controls the right-pane tab for tablet (md) AND desktop (lg). Desktop now
+  // uses the same map-tab / plan-tab layout as tablet (D48). The three-pane
+  // simultaneous layout is retired; map and timeline are never shown together.
   const [tabletRightTab, setTabletRightTab] = useState<TabletRightTab>("timeline");
 
   // Optimise state
@@ -166,7 +169,7 @@ export default function PlannerPage() {
 
   function focusTimeline() {
     if (typeof window === "undefined") return;
-    if (window.innerWidth >= 1024) return;
+    // Tablet and desktop both use the tab layout (D48) — switch to Plan tab.
     if (window.innerWidth >= 768) {
       setTabletRightTab("timeline");
       return;
@@ -560,8 +563,8 @@ export default function PlannerPage() {
         {/* TABLET + DESKTOP layout (>=768px) */}
         <div className="hidden md:flex md:flex-col md:flex-1 md:min-h-0 w-full">
 
-          {/* Tablet-only tab toggle */}
-          <div className="mb-4 flex rounded-lg border border-border-subtle bg-bg-base p-0.5 lg:hidden">
+          {/* Tab toggle — tablet and desktop (D48: desktop now uses same tab layout as tablet) */}
+          <div className="mb-4 flex rounded-lg border border-border-subtle bg-bg-base p-0.5">
             <TabButton
               active={tabletRightTab === "map"}
               onClick={() => setTabletRightTab("map")}
@@ -583,23 +586,23 @@ export default function PlannerPage() {
               {formPane(true)}
             </div>
 
-            {/* MAP PANE */}
+            {/* MAP PANE — visible only when Map tab is active (tablet + desktop) */}
             <div
-              className={`relative overflow-hidden rounded-lg border border-border-subtle bg-pane-bg shadow-subtle min-w-0 lg:flex lg:flex-1 lg:min-h-0 lg:min-w-0 ${
+              className={`relative overflow-hidden rounded-lg border border-border-subtle bg-pane-bg shadow-subtle min-w-0 ${
                 tabletRightTab === "map"
                   ? "flex flex-1 min-h-0"
-                  : "hidden lg:flex"
+                  : "hidden"
               }`}
             >
               {mapPane}
             </div>
 
-            {/* TIMELINE PANE */}
+            {/* TIMELINE PANE — visible only when Plan tab is active (tablet + desktop) */}
             <div
-              className={`rounded-lg border border-border-subtle bg-pane-bg shadow-subtle lg:flex lg:flex-col lg:w-[360px] lg:flex-shrink-0 lg:min-h-0 lg:overflow-y-auto lg:p-8 lg:[scrollbar-gutter:stable] ${
+              className={`rounded-lg border border-border-subtle bg-pane-bg shadow-subtle ${
                 tabletRightTab === "timeline"
-                  ? "flex flex-col flex-1 min-h-0 overflow-y-auto p-6"
-                  : "hidden lg:flex"
+                  ? "flex flex-col flex-1 min-h-0 overflow-y-auto p-6 lg:p-8 [scrollbar-gutter:stable]"
+                  : "hidden"
               }`}
             >
               {timelinePane}
