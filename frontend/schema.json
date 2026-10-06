@@ -1,0 +1,1491 @@
+{
+  "$defs": {
+    "CancelledOutcome": {
+      "description": "Terminal outcome when the operation was cancelled (client disconnect).",
+      "properties": {
+        "outcome_type": {
+          "const": "cancelled",
+          "default": "cancelled",
+          "title": "Outcome Type",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "CancelledOutcome",
+      "type": "object"
+    },
+    "CompletePlan": {
+      "description": "All legs routed successfully \u2014 every stop has a known schedule.",
+      "properties": {
+        "result_type": {
+          "const": "complete",
+          "default": "complete",
+          "title": "Result Type",
+          "type": "string"
+        },
+        "operation_id": {
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "input_revision": {
+          "title": "Input Revision",
+          "type": "integer"
+        },
+        "city": {
+          "title": "City",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "transit",
+            "walking",
+            "driving"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "timezone": {
+          "description": "IANA timezone derived from the first stop's coordinates.",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "timeline": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "failed_leg": "#/$defs/FailedLeg",
+                "leg": "#/$defs/PlannedLeg",
+                "stop": "#/$defs/KnownStop",
+                "unknown_stop": "#/$defs/UnknownStop"
+              },
+              "propertyName": "item_type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/KnownStop"
+              },
+              {
+                "$ref": "#/$defs/PlannedLeg"
+              },
+              {
+                "$ref": "#/$defs/FailedLeg"
+              },
+              {
+                "$ref": "#/$defs/UnknownStop"
+              }
+            ]
+          },
+          "title": "Timeline",
+          "type": "array"
+        },
+        "overview_map_url": {
+          "title": "Overview Map Url",
+          "type": "string"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operation_id",
+        "input_revision",
+        "city",
+        "mode",
+        "timezone",
+        "timeline",
+        "overview_map_url"
+      ],
+      "title": "CompletePlan",
+      "type": "object"
+    },
+    "ErrorOutcome": {
+      "description": "Terminal outcome for an unrecoverable error.\n\nNever exposes raw provider error text \u2014 only a structured code and a\nsafe user-facing message.",
+      "properties": {
+        "outcome_type": {
+          "const": "error",
+          "default": "error",
+          "title": "Outcome Type",
+          "type": "string"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ErrorOutcome",
+      "type": "object"
+    },
+    "ErrorResponse": {
+      "properties": {
+        "error": {
+          "title": "Error",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "errors": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Errors"
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "title": "ErrorResponse",
+      "type": "object"
+    },
+    "FailedLeg": {
+      "description": "A leg that could not be routed \u2014 terminates the valid timeline prefix.\n\nStops that follow a FailedLeg have unknown arrival/departure times and\nare represented as UnknownStop. There is no invented fallback duration.",
+      "properties": {
+        "item_type": {
+          "const": "failed_leg",
+          "default": "failed_leg",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "from_stop_id": {
+          "title": "From Stop Id",
+          "type": "string"
+        },
+        "to_stop_id": {
+          "title": "To Stop Id",
+          "type": "string"
+        },
+        "from_name": {
+          "title": "From Name",
+          "type": "string"
+        },
+        "to_name": {
+          "title": "To Name",
+          "type": "string"
+        },
+        "failure_reason": {
+          "enum": [
+            "no_route",
+            "provider_temporary",
+            "quota_exceeded",
+            "place_invalid",
+            "place_temporary",
+            "deadline_exceeded",
+            "cancelled"
+          ],
+          "title": "Failure Reason",
+          "type": "string"
+        },
+        "failure_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable detail. Never contains raw provider error text.",
+          "title": "Failure Message"
+        }
+      },
+      "required": [
+        "from_stop_id",
+        "to_stop_id",
+        "from_name",
+        "to_name",
+        "failure_reason"
+      ],
+      "title": "FailedLeg",
+      "type": "object"
+    },
+    "HoursDetail": {
+      "description": "Machine-readable time facts for a stop's hours status.\n\nTimes are HH:MM in the trip-city's local timezone (same tz as start_time).\nFields not relevant to the current status are None.\nFrontend composes the display sentence; this model carries only the facts.",
+      "properties": {
+        "closes_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Closes At"
+        },
+        "opens_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Opens At"
+        }
+      },
+      "title": "HoursDetail",
+      "type": "object"
+    },
+    "InfeasibilityFlag": {
+      "description": "A stop that remains hours-violated in the chosen order.\n\nReported when the solver could not schedule the stop within its opening\nhours even as a soft constraint (e.g. the stop is closed all day).\nThe frontend uses this to display a warning inline \u2014 it never blocks the\nresponse.",
+      "properties": {
+        "stop_index": {
+          "description": "Index of the stop in the output order (0-based).",
+          "title": "Stop Index",
+          "type": "integer"
+        },
+        "stop_name": {
+          "title": "Stop Name",
+          "type": "string"
+        },
+        "issue": {
+          "description": "'closed_on_arrival' or 'closes_during_visit'.",
+          "enum": [
+            "open",
+            "closed_on_arrival",
+            "closes_during_visit",
+            "closes_soon",
+            "unknown"
+          ],
+          "title": "Issue",
+          "type": "string"
+        }
+      },
+      "required": [
+        "stop_index",
+        "stop_name",
+        "issue"
+      ],
+      "title": "InfeasibilityFlag",
+      "type": "object"
+    },
+    "KnownStop": {
+      "description": "A stop with fully resolved coordinates and a complete schedule.",
+      "properties": {
+        "item_type": {
+          "const": "stop",
+          "default": "stop",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "instance_id": {
+          "description": "Client-assigned stable stop identifier.",
+          "title": "Instance Id",
+          "type": "string"
+        },
+        "place_id": {
+          "title": "Place Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "address": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Address"
+        },
+        "lat": {
+          "title": "Lat",
+          "type": "number"
+        },
+        "lng": {
+          "title": "Lng",
+          "type": "number"
+        },
+        "arrive_at": {
+          "format": "date-time",
+          "title": "Arrive At",
+          "type": "string"
+        },
+        "depart_at": {
+          "format": "date-time",
+          "title": "Depart At",
+          "type": "string"
+        },
+        "stay_minutes": {
+          "title": "Stay Minutes",
+          "type": "integer"
+        },
+        "stay_source": {
+          "enum": [
+            "user",
+            "default"
+          ],
+          "title": "Stay Source",
+          "type": "string"
+        },
+        "map_url": {
+          "title": "Map Url",
+          "type": "string"
+        },
+        "hours_status": {
+          "default": "unknown",
+          "enum": [
+            "open",
+            "closed_on_arrival",
+            "closes_during_visit",
+            "closes_soon",
+            "unknown"
+          ],
+          "title": "Hours Status",
+          "type": "string"
+        },
+        "hours_detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HoursDetail"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "instance_id",
+        "place_id",
+        "name",
+        "lat",
+        "lng",
+        "arrive_at",
+        "depart_at",
+        "stay_minutes",
+        "stay_source",
+        "map_url"
+      ],
+      "title": "KnownStop",
+      "type": "object"
+    },
+    "LegItem": {
+      "description": "A single travel segment between two stops.",
+      "properties": {
+        "item_type": {
+          "const": "leg",
+          "default": "leg",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "from_name": {
+          "title": "From Name",
+          "type": "string"
+        },
+        "to_name": {
+          "title": "To Name",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "transit",
+            "walking",
+            "driving"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "duration_seconds": {
+          "title": "Duration Seconds",
+          "type": "integer"
+        },
+        "distance_meters": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance Meters"
+        },
+        "depart_at": {
+          "format": "date-time",
+          "title": "Depart At",
+          "type": "string"
+        },
+        "arrive_at": {
+          "format": "date-time",
+          "title": "Arrive At",
+          "type": "string"
+        },
+        "summary": {
+          "description": "Human-readable summary, e.g. 'Take the 47 bus, 18 min'.",
+          "title": "Summary",
+          "type": "string"
+        },
+        "map_url": {
+          "description": "Google Maps directions deeplink.",
+          "title": "Map Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from_name",
+        "to_name",
+        "mode",
+        "duration_seconds",
+        "depart_at",
+        "arrive_at",
+        "summary",
+        "map_url"
+      ],
+      "title": "LegItem",
+      "type": "object"
+    },
+    "LegProgressEvent": {
+      "description": "Emitted when a leg routing call starts.",
+      "properties": {
+        "operation_id": {
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "input_revision": {
+          "title": "Input Revision",
+          "type": "integer"
+        },
+        "type": {
+          "const": "leg_progress",
+          "default": "leg_progress",
+          "title": "Type",
+          "type": "string"
+        },
+        "leg_index": {
+          "title": "Leg Index",
+          "type": "integer"
+        },
+        "total_legs": {
+          "title": "Total Legs",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operation_id",
+        "input_revision",
+        "leg_index",
+        "total_legs"
+      ],
+      "title": "LegProgressEvent",
+      "type": "object"
+    },
+    "LegReadyEvent": {
+      "description": "Emitted when a leg routing call completes (success or failure).",
+      "properties": {
+        "operation_id": {
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "input_revision": {
+          "title": "Input Revision",
+          "type": "integer"
+        },
+        "type": {
+          "const": "leg_ready",
+          "default": "leg_ready",
+          "title": "Type",
+          "type": "string"
+        },
+        "leg_index": {
+          "title": "Leg Index",
+          "type": "integer"
+        },
+        "leg": {
+          "discriminator": {
+            "mapping": {
+              "failed_leg": "#/$defs/FailedLeg",
+              "leg": "#/$defs/PlannedLeg"
+            },
+            "propertyName": "item_type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PlannedLeg"
+            },
+            {
+              "$ref": "#/$defs/FailedLeg"
+            }
+          ],
+          "title": "Leg"
+        }
+      },
+      "required": [
+        "operation_id",
+        "input_revision",
+        "leg_index",
+        "leg"
+      ],
+      "title": "LegReadyEvent",
+      "type": "object"
+    },
+    "OperationStartEvent": {
+      "description": "First event in a stream \u2014 announces phases and operation identity.",
+      "properties": {
+        "operation_id": {
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "input_revision": {
+          "title": "Input Revision",
+          "type": "integer"
+        },
+        "type": {
+          "const": "operation_start",
+          "default": "operation_start",
+          "title": "Type",
+          "type": "string"
+        },
+        "phases": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Phases",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operation_id",
+        "input_revision"
+      ],
+      "title": "OperationStartEvent",
+      "type": "object"
+    },
+    "OptimiseResponse": {
+      "description": "Result of POST /api/optimise \u2014 reordered stops plus path-length stats.",
+      "properties": {
+        "stops": {
+          "items": {
+            "$ref": "#/$defs/OptimisedStop"
+          },
+          "title": "Stops",
+          "type": "array"
+        },
+        "original_km": {
+          "description": "Haversine path length of the input order (km).",
+          "title": "Original Km",
+          "type": "number"
+        },
+        "optimised_km": {
+          "description": "Haversine path length after optimisation (km).",
+          "title": "Optimised Km",
+          "type": "number"
+        },
+        "infeasibility_flags": {
+          "description": "Stops that remain hours-violated in the chosen order.",
+          "items": {
+            "$ref": "#/$defs/InfeasibilityFlag"
+          },
+          "title": "Infeasibility Flags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "stops",
+        "original_km",
+        "optimised_km"
+      ],
+      "title": "OptimiseResponse",
+      "type": "object"
+    },
+    "OptimisedStop": {
+      "description": "One stop in an optimised route, preserving the original query and stay override.",
+      "properties": {
+        "query": {
+          "title": "Query",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "stay_minutes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stay Minutes"
+        }
+      },
+      "required": [
+        "query",
+        "name"
+      ],
+      "title": "OptimisedStop",
+      "type": "object"
+    },
+    "PartialPlan": {
+      "description": "Valid prefix up to a failed leg \u2014 downstream times are unknown.\n\nThe timeline contains KnownStop/PlannedLeg items up to the failure,\nthen exactly one FailedLeg, then UnknownStop items for all remaining\nstops. No times are invented for the unknown suffix.",
+      "properties": {
+        "result_type": {
+          "const": "partial",
+          "default": "partial",
+          "title": "Result Type",
+          "type": "string"
+        },
+        "operation_id": {
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "input_revision": {
+          "title": "Input Revision",
+          "type": "integer"
+        },
+        "city": {
+          "title": "City",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "transit",
+            "walking",
+            "driving"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "timezone": {
+          "title": "Timezone",
+          "type": "string"
+        },
+        "timeline": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "failed_leg": "#/$defs/FailedLeg",
+                "leg": "#/$defs/PlannedLeg",
+                "stop": "#/$defs/KnownStop",
+                "unknown_stop": "#/$defs/UnknownStop"
+              },
+              "propertyName": "item_type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/KnownStop"
+              },
+              {
+                "$ref": "#/$defs/PlannedLeg"
+              },
+              {
+                "$ref": "#/$defs/FailedLeg"
+              },
+              {
+                "$ref": "#/$defs/UnknownStop"
+              }
+            ]
+          },
+          "title": "Timeline",
+          "type": "array"
+        },
+        "failed_at_leg_index": {
+          "description": "0-based index of the FailedLeg within the stop list.",
+          "title": "Failed At Leg Index",
+          "type": "integer"
+        },
+        "failure_reason": {
+          "enum": [
+            "no_route",
+            "provider_temporary",
+            "quota_exceeded",
+            "place_invalid",
+            "place_temporary",
+            "deadline_exceeded",
+            "cancelled"
+          ],
+          "title": "Failure Reason",
+          "type": "string"
+        },
+        "overview_map_url": {
+          "title": "Overview Map Url",
+          "type": "string"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operation_id",
+        "input_revision",
+        "city",
+        "mode",
+        "timezone",
+        "timeline",
+        "failed_at_leg_index",
+        "failure_reason",
+        "overview_map_url"
+      ],
+      "title": "PartialPlan",
+      "type": "object"
+    },
+    "PhaseCompleteEvent": {
+      "description": "Emitted when a named phase finishes (e.g. 'geocoding', 'routing').",
+      "properties": {
+        "operation_id": {
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "input_revision": {
+          "title": "Input Revision",
+          "type": "integer"
+        },
+        "type": {
+          "const": "phase_complete",
+          "default": "phase_complete",
+          "title": "Type",
+          "type": "string"
+        },
+        "phase": {
+          "title": "Phase",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "input_revision",
+        "phase"
+      ],
+      "title": "PhaseCompleteEvent",
+      "type": "object"
+    },
+    "Plan": {
+      "description": "Full timeline response.",
+      "properties": {
+        "generated_at": {
+          "format": "date-time",
+          "title": "Generated At",
+          "type": "string"
+        },
+        "city": {
+          "title": "City",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "transit",
+            "walking",
+            "driving"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "timezone": {
+          "description": "IANA timezone for the trip city, e.g. 'Europe/London'. Derived from the first stop's coordinates. Used by the frontend to display arrival times in destination time regardless of the user's browser timezone.",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "timeline": {
+          "description": "Alternating stop/leg/stop/leg/... in chronological order.",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StopItem"
+              },
+              {
+                "$ref": "#/$defs/LegItem"
+              }
+            ]
+          },
+          "title": "Timeline",
+          "type": "array"
+        },
+        "overview_map_url": {
+          "description": "Google Maps URL showing all stops as a driving-mode overview.",
+          "title": "Overview Map Url",
+          "type": "string"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "generated_at",
+        "city",
+        "mode",
+        "timezone",
+        "timeline",
+        "overview_map_url"
+      ],
+      "title": "Plan",
+      "type": "object"
+    },
+    "PlanOutcome": {
+      "description": "Terminal outcome for a plan or comparison operation.",
+      "properties": {
+        "outcome_type": {
+          "const": "plan",
+          "default": "plan",
+          "title": "Outcome Type",
+          "type": "string"
+        },
+        "result": {
+          "discriminator": {
+            "mapping": {
+              "complete": "#/$defs/CompletePlan",
+              "partial": "#/$defs/PartialPlan"
+            },
+            "propertyName": "result_type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/CompletePlan"
+            },
+            {
+              "$ref": "#/$defs/PartialPlan"
+            }
+          ],
+          "title": "Result"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "PlanOutcome",
+      "type": "object"
+    },
+    "PlannedLeg": {
+      "description": "A successfully routed travel leg.",
+      "properties": {
+        "item_type": {
+          "const": "leg",
+          "default": "leg",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "from_stop_id": {
+          "description": "instance_id of the origin stop.",
+          "title": "From Stop Id",
+          "type": "string"
+        },
+        "to_stop_id": {
+          "description": "instance_id of the destination stop.",
+          "title": "To Stop Id",
+          "type": "string"
+        },
+        "from_name": {
+          "title": "From Name",
+          "type": "string"
+        },
+        "to_name": {
+          "title": "To Name",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "transit",
+            "walking",
+            "driving"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "duration_seconds": {
+          "title": "Duration Seconds",
+          "type": "integer"
+        },
+        "distance_meters": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance Meters"
+        },
+        "depart_at": {
+          "format": "date-time",
+          "title": "Depart At",
+          "type": "string"
+        },
+        "arrive_at": {
+          "format": "date-time",
+          "title": "Arrive At",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "map_url": {
+          "title": "Map Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from_stop_id",
+        "to_stop_id",
+        "from_name",
+        "to_name",
+        "mode",
+        "duration_seconds",
+        "depart_at",
+        "arrive_at",
+        "summary",
+        "map_url"
+      ],
+      "title": "PlannedLeg",
+      "type": "object"
+    },
+    "RefreshOutcome": {
+      "description": "Terminal outcome for a single-leg refresh (D21).",
+      "properties": {
+        "outcome_type": {
+          "const": "refresh",
+          "default": "refresh",
+          "title": "Outcome Type",
+          "type": "string"
+        },
+        "leg": {
+          "discriminator": {
+            "mapping": {
+              "failed_leg": "#/$defs/FailedLeg",
+              "leg": "#/$defs/PlannedLeg"
+            },
+            "propertyName": "item_type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PlannedLeg"
+            },
+            {
+              "$ref": "#/$defs/FailedLeg"
+            }
+          ],
+          "title": "Leg"
+        },
+        "subsequent_stops": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "stop": "#/$defs/KnownStop",
+                "unknown_stop": "#/$defs/UnknownStop"
+              },
+              "propertyName": "item_type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/KnownStop"
+              },
+              {
+                "$ref": "#/$defs/UnknownStop"
+              }
+            ]
+          },
+          "title": "Subsequent Stops",
+          "type": "array"
+        }
+      },
+      "required": [
+        "leg"
+      ],
+      "title": "RefreshOutcome",
+      "type": "object"
+    },
+    "StopItem": {
+      "description": "A scheduled stop on the timeline.",
+      "properties": {
+        "item_type": {
+          "const": "stop",
+          "default": "stop",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "query": {
+          "description": "What the user typed.",
+          "title": "Query",
+          "type": "string"
+        },
+        "name": {
+          "description": "Resolved place name from geocoder.",
+          "title": "Name",
+          "type": "string"
+        },
+        "address": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Address"
+        },
+        "lat": {
+          "title": "Lat",
+          "type": "number"
+        },
+        "lng": {
+          "title": "Lng",
+          "type": "number"
+        },
+        "arrive_at": {
+          "format": "date-time",
+          "title": "Arrive At",
+          "type": "string"
+        },
+        "depart_at": {
+          "format": "date-time",
+          "title": "Depart At",
+          "type": "string"
+        },
+        "stay_minutes": {
+          "title": "Stay Minutes",
+          "type": "integer"
+        },
+        "stay_source": {
+          "description": "Whether stay_minutes came from the user or our default table.",
+          "enum": [
+            "user",
+            "default"
+          ],
+          "title": "Stay Source",
+          "type": "string"
+        },
+        "map_url": {
+          "description": "Google Maps search URL for the place itself.",
+          "title": "Map Url",
+          "type": "string"
+        },
+        "hours_status": {
+          "default": "unknown",
+          "description": "Open/closed status of this stop at planned arrival time.",
+          "enum": [
+            "open",
+            "closed_on_arrival",
+            "closes_during_visit",
+            "closes_soon",
+            "unknown"
+          ],
+          "title": "Hours Status",
+          "type": "string"
+        },
+        "hours_detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HoursDetail"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Machine-readable time facts (closes_at / opens_at as HH:MM)."
+        }
+      },
+      "required": [
+        "query",
+        "name",
+        "lat",
+        "lng",
+        "arrive_at",
+        "depart_at",
+        "stay_minutes",
+        "stay_source",
+        "map_url"
+      ],
+      "title": "StopItem",
+      "type": "object"
+    },
+    "StopReadyEvent": {
+      "description": "Emitted when a stop's schedule is fully resolved.",
+      "properties": {
+        "operation_id": {
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "input_revision": {
+          "title": "Input Revision",
+          "type": "integer"
+        },
+        "type": {
+          "const": "stop_ready",
+          "default": "stop_ready",
+          "title": "Type",
+          "type": "string"
+        },
+        "stop_index": {
+          "title": "Stop Index",
+          "type": "integer"
+        },
+        "stop": {
+          "$ref": "#/$defs/KnownStop"
+        }
+      },
+      "required": [
+        "operation_id",
+        "input_revision",
+        "stop_index",
+        "stop"
+      ],
+      "title": "StopReadyEvent",
+      "type": "object"
+    },
+    "TerminalEvent": {
+      "description": "Final event in a stream \u2014 carries the complete operation outcome.",
+      "properties": {
+        "operation_id": {
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "input_revision": {
+          "title": "Input Revision",
+          "type": "integer"
+        },
+        "type": {
+          "const": "terminal",
+          "default": "terminal",
+          "title": "Type",
+          "type": "string"
+        },
+        "outcome": {
+          "discriminator": {
+            "mapping": {
+              "cancelled": "#/$defs/CancelledOutcome",
+              "error": "#/$defs/ErrorOutcome",
+              "plan": "#/$defs/PlanOutcome",
+              "refresh": "#/$defs/RefreshOutcome"
+            },
+            "propertyName": "outcome_type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PlanOutcome"
+            },
+            {
+              "$ref": "#/$defs/RefreshOutcome"
+            },
+            {
+              "$ref": "#/$defs/CancelledOutcome"
+            },
+            {
+              "$ref": "#/$defs/ErrorOutcome"
+            }
+          ],
+          "title": "Outcome"
+        }
+      },
+      "required": [
+        "operation_id",
+        "input_revision",
+        "outcome"
+      ],
+      "title": "TerminalEvent",
+      "type": "object"
+    },
+    "UnknownStop": {
+      "description": "A stop that follows a FailedLeg \u2014 arrival/departure times are unknown.\n\nDownstream stops are always UnknownStop when any preceding leg failed.\nThe frontend should display these with a visual 'time unknown' state.",
+      "properties": {
+        "item_type": {
+          "const": "unknown_stop",
+          "default": "unknown_stop",
+          "title": "Item Type",
+          "type": "string"
+        },
+        "instance_id": {
+          "title": "Instance Id",
+          "type": "string"
+        },
+        "place_id": {
+          "title": "Place Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance_id",
+        "place_id",
+        "name"
+      ],
+      "title": "UnknownStop",
+      "type": "object"
+    },
+    "Warning": {
+      "description": "A timing/closure issue surfaced inline in the timeline.",
+      "properties": {
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "affects_stop_index": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Affects Stop Index"
+        }
+      },
+      "required": [
+        "severity",
+        "message"
+      ],
+      "title": "Warning",
+      "type": "object"
+    }
+  },
+  "description": "Aggregation root for JSON Schema export.\n\nNever serialised in production. All API types appear as optional fields\nso that json-schema-to-typescript generates a named interface for each\ntype in the schema's $defs section.",
+  "properties": {
+    "plan_result": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "complete": "#/$defs/CompletePlan",
+              "partial": "#/$defs/PartialPlan"
+            },
+            "propertyName": "result_type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/CompletePlan"
+            },
+            {
+              "$ref": "#/$defs/PartialPlan"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Plan Result"
+    },
+    "stream_event": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "leg_progress": "#/$defs/LegProgressEvent",
+              "leg_ready": "#/$defs/LegReadyEvent",
+              "operation_start": "#/$defs/OperationStartEvent",
+              "phase_complete": "#/$defs/PhaseCompleteEvent",
+              "stop_ready": "#/$defs/StopReadyEvent",
+              "terminal": "#/$defs/TerminalEvent"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OperationStartEvent"
+            },
+            {
+              "$ref": "#/$defs/LegProgressEvent"
+            },
+            {
+              "$ref": "#/$defs/StopReadyEvent"
+            },
+            {
+              "$ref": "#/$defs/LegReadyEvent"
+            },
+            {
+              "$ref": "#/$defs/PhaseCompleteEvent"
+            },
+            {
+              "$ref": "#/$defs/TerminalEvent"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Stream Event"
+    },
+    "operation_outcome": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "cancelled": "#/$defs/CancelledOutcome",
+              "error": "#/$defs/ErrorOutcome",
+              "plan": "#/$defs/PlanOutcome",
+              "refresh": "#/$defs/RefreshOutcome"
+            },
+            "propertyName": "outcome_type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PlanOutcome"
+            },
+            {
+              "$ref": "#/$defs/RefreshOutcome"
+            },
+            {
+              "$ref": "#/$defs/CancelledOutcome"
+            },
+            {
+              "$ref": "#/$defs/ErrorOutcome"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Operation Outcome"
+    },
+    "known_stop": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/KnownStop"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "planned_leg": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PlannedLeg"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "failed_leg": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FailedLeg"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "unknown_stop": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UnknownStop"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "plan": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Plan"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "optimise_response": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OptimiseResponse"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "error_response": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ErrorResponse"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "title": "ContractRoot",
+  "type": "object"
+}

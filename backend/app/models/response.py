@@ -3,10 +3,12 @@
 v1 returns a flat timeline: an ordered list of items, each either a Stop
 or a Leg. The frontend renders them in order. No nested place lookups
 needed — Stop carries its display info inline.
+
+New streaming/engine types are appended at the bottom of the file.
 """
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, Field
 
@@ -162,3 +164,287 @@ class ErrorResponse(BaseModel):
     detail: str | None = None
     # Structured field-level validation errors; omitted on non-validation errors.
     errors: list[dict[str, object]] | None = None
+
+
+# ---------------------------------------------------------------------------
+# New timeline item types (Step 3+ engine output)
+# ---------------------------------------------------------------------------
+
+PlanFailureReason: TypeAlias = Literal[
+    "no_route",
+    "provider_temporary",
+    "quota_exceeded",
+    "place_invalid",
+    "place_temporary",
+    "deadline_exceeded",
+    "cancelled",
+]
+
+
+class KnownStop(BaseModel):
+    """A stop with fully resolved coordinates and a complete schedule."""
+
+    item_type: Literal["stop"] = "stop"
+    instance_id: str = Field(..., description="Client-assigned stable stop identifier.")
+    place_id: str
+    name: str
+    address: str | None = None
+    lat: float
+    lng: float
+    arrive_at: datetime
+    depart_at: datetime
+    stay_minutes: int
+    stay_source: Literal["user", "default"]
+    map_url: str
+    hours_status: HoursStatus = "unknown"
+    hours_detail: HoursDetail | None = None
+
+
+class PlannedLeg(BaseModel):
+    """A successfully routed travel leg."""
+
+    item_type: Literal["leg"] = "leg"
+    from_stop_id: str = Field(..., description="instance_id of the origin stop.")
+    to_stop_id: str = Field(..., description="instance_id of the destination stop.")
+    from_name: str
+    to_name: str
+    mode: Literal["transit", "walking", "driving"]
+    duration_seconds: int
+    distance_meters: int | None = None
+    depart_at: datetime
+    arrive_at: datetime
+    summary: str
+    map_url: str
+
+
+class FailedLeg(BaseModel):
+    """A leg that could not be routed — terminates the valid timeline prefix.
+
+    Stops that follow a FailedLeg have unknown arrival/departure times and
+    are represented as UnknownStop. There is no invented fallback duration.
+    """
+
+    item_type: Literal["failed_leg"] = "failed_leg"
+    from_stop_id: str
+    to_stop_id: str
+    from_name: str
+    to_name: str
+    failure_reason: PlanFailureReason
+    failure_message: str | None = Field(
+        default=None,
+        description="Human-readable detail. Never contains raw provider error text.",
+    )
+
+
+class UnknownStop(BaseModel):
+    """A stop that follows a FailedLeg — arrival/departure times are unknown.
+
+    Downstream stops are always UnknownStop when any preceding leg failed.
+    The frontend should display these with a visual 'time unknown' state.
+    """
+
+    item_type: Literal["unknown_stop"] = "unknown_stop"
+    instance_id: str
+    place_id: str
+    name: str
+
+
+# Discriminated union of all new timeline item types.
+PlanTimelineItem: TypeAlias = Annotated[
+    KnownStop | PlannedLeg | FailedLeg | UnknownStop,
+    Field(discriminator="item_type"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Plan result shapes
+# ---------------------------------------------------------------------------
+
+
+class CompletePlan(BaseModel):
+    """All legs routed successfully — every stop has a known schedule."""
+
+    result_type: Literal["complete"] = "complete"
+    operation_id: str
+    input_revision: int
+    city: str
+    mode: Literal["transit", "walking", "driving"]
+    timezone: str = Field(
+        ...,
+        description="IANA timezone derived from the first stop's coordinates.",
+    )
+    timeline: list[PlanTimelineItem]
+    overview_map_url: str
+    warnings: list[Warning] = Field(default_factory=list)
+
+
+class PartialPlan(BaseModel):
+    """Valid prefix up to a failed leg — downstream times are unknown.
+
+    The timeline contains KnownStop/PlannedLeg items up to the failure,
+    then exactly one FailedLeg, then UnknownStop items for all remaining
+    stops. No times are invented for the unknown suffix.
+    """
+
+    result_type: Literal["partial"] = "partial"
+    operation_id: str
+    input_revision: int
+    city: str
+    mode: Literal["transit", "walking", "driving"]
+    timezone: str
+    timeline: list[PlanTimelineItem]
+    failed_at_leg_index: int = Field(
+        ...,
+        description="0-based index of the FailedLeg within the stop list.",
+    )
+    failure_reason: PlanFailureReason
+    overview_map_url: str
+    warnings: list[Warning] = Field(default_factory=list)
+
+
+PlanResult: TypeAlias = Annotated[
+    CompletePlan | PartialPlan,
+    Field(discriminator="result_type"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Operation outcome shapes
+# ---------------------------------------------------------------------------
+
+
+class PlanOutcome(BaseModel):
+    """Terminal outcome for a plan or comparison operation."""
+
+    outcome_type: Literal["plan"] = "plan"
+    result: PlanResult
+
+
+class RefreshOutcome(BaseModel):
+    """Terminal outcome for a single-leg refresh (D21)."""
+
+    outcome_type: Literal["refresh"] = "refresh"
+    leg: Annotated[PlannedLeg | FailedLeg, Field(discriminator="item_type")]
+    subsequent_stops: list[Annotated[KnownStop | UnknownStop, Field(discriminator="item_type")]] = (
+        Field(default_factory=list)
+    )
+
+
+class CancelledOutcome(BaseModel):
+    """Terminal outcome when the operation was cancelled (client disconnect)."""
+
+    outcome_type: Literal["cancelled"] = "cancelled"
+    reason: str
+
+
+class ErrorOutcome(BaseModel):
+    """Terminal outcome for an unrecoverable error.
+
+    Never exposes raw provider error text — only a structured code and a
+    safe user-facing message.
+    """
+
+    outcome_type: Literal["error"] = "error"
+    code: str
+    message: str
+
+
+OperationOutcome: TypeAlias = Annotated[
+    PlanOutcome | RefreshOutcome | CancelledOutcome | ErrorOutcome,
+    Field(discriminator="outcome_type"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Streaming event shapes (D6-D8, D22-D23)
+# ---------------------------------------------------------------------------
+
+
+class _BaseEvent(BaseModel):
+    """Common identity fields on every streaming event."""
+
+    operation_id: str
+    input_revision: int
+
+
+class OperationStartEvent(_BaseEvent):
+    """First event in a stream — announces phases and operation identity."""
+
+    type: Literal["operation_start"] = "operation_start"
+    phases: list[str] = Field(default_factory=list)
+
+
+class LegProgressEvent(_BaseEvent):
+    """Emitted when a leg routing call starts."""
+
+    type: Literal["leg_progress"] = "leg_progress"
+    leg_index: int
+    total_legs: int
+
+
+class StopReadyEvent(_BaseEvent):
+    """Emitted when a stop's schedule is fully resolved."""
+
+    type: Literal["stop_ready"] = "stop_ready"
+    stop_index: int
+    stop: KnownStop
+
+
+class LegReadyEvent(_BaseEvent):
+    """Emitted when a leg routing call completes (success or failure)."""
+
+    type: Literal["leg_ready"] = "leg_ready"
+    leg_index: int
+    leg: Annotated[PlannedLeg | FailedLeg, Field(discriminator="item_type")]
+
+
+class PhaseCompleteEvent(_BaseEvent):
+    """Emitted when a named phase finishes (e.g. 'geocoding', 'routing')."""
+
+    type: Literal["phase_complete"] = "phase_complete"
+    phase: str
+
+
+class TerminalEvent(_BaseEvent):
+    """Final event in a stream — carries the complete operation outcome."""
+
+    type: Literal["terminal"] = "terminal"
+    outcome: OperationOutcome
+
+
+StreamEvent: TypeAlias = Annotated[
+    OperationStartEvent
+    | LegProgressEvent
+    | StopReadyEvent
+    | LegReadyEvent
+    | PhaseCompleteEvent
+    | TerminalEvent,
+    Field(discriminator="type"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Schema export root — used by scripts/export_schema.py only
+# ---------------------------------------------------------------------------
+
+
+class ContractRoot(BaseModel):
+    """Aggregation root for JSON Schema export.
+
+    Never serialised in production. All API types appear as optional fields
+    so that json-schema-to-typescript generates a named interface for each
+    type in the schema's $defs section.
+    """
+
+    # New streaming / engine types
+    plan_result: PlanResult | None = None
+    stream_event: StreamEvent | None = None
+    operation_outcome: OperationOutcome | None = None
+    known_stop: KnownStop | None = None
+    planned_leg: PlannedLeg | None = None
+    failed_leg: FailedLeg | None = None
+    unknown_stop: UnknownStop | None = None
+    # Legacy v1 types (preserved for the existing /api/plan endpoint)
+    plan: Plan | None = None
+    optimise_response: OptimiseResponse | None = None
+    error_response: ErrorResponse | None = None

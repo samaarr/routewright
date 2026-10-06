@@ -1,5 +1,9 @@
-// Mirrors backend/app/models/response.py and request.py exactly.
-// Update both files together — there is no codegen yet.
+// API types are generated from the backend schema into api-types.ts.
+// Run `npm run gen:types` to regenerate after backend model changes.
+//
+// This file re-exports the generated types alongside frontend-only types
+// that are not part of the wire contract. Existing v1 components continue
+// to import from this file; new engine code imports from api-types.ts directly.
 
 export type TransportMode = "transit" | "walking" | "driving";
 export type StaySource = "user" | "default";
@@ -125,3 +129,26 @@ export interface Plan {
   overview_map_url: string;
   warnings: PlanWarning[];
 }
+
+// ---- New engine types (generated from backend schema) -----------------
+// Import these directly from api-types.ts in new code; they are re-exported
+// here so a single import covers both legacy and new types when convenient.
+
+export type {
+  KnownStop,
+  PlannedLeg,
+  FailedLeg,
+  UnknownStop,
+  CompletePlan,
+  PartialPlan,
+  PlanOutcome,
+  RefreshOutcome,
+  CancelledOutcome,
+  ErrorOutcome,
+  OperationStartEvent,
+  LegProgressEvent,
+  StopReadyEvent,
+  LegReadyEvent,
+  PhaseCompleteEvent,
+  TerminalEvent,
+} from "./api-types";
