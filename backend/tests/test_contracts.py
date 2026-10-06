@@ -130,10 +130,26 @@ def _stop_spec(instance_id: str = "abc123", **kwargs: object) -> StopSpec:
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_durations_single_stop() -> None:
-    """One stop acts as both first and last — duration is 0."""
-    result = resolve_durations([("s1", 30)], {})
-    assert result.get("s1") == 0
+def test_resolve_durations_explicit_endpoint_wins() -> None:
+    """D11: an explicit value wins even at an endpoint (was forced to 0 before)."""
+    result = resolve_durations([("s1", 30), ("s2", None)], {"s1": 90, "s2": 90})
+    assert result.get("s1") == 30
+    assert result.get_source("s1") == "user"
+    assert result.get("s2") == 0  # unspecified endpoint defaults to 0
+    assert result.get_source("s2") == "default"
+
+
+def test_resolve_durations_explicit_zero_in_middle_wins() -> None:
+    result = resolve_durations([("s1", None), ("s2", 0), ("s3", None)], {"s2": 90})
+    assert result.get("s2") == 0
+    assert result.get_source("s2") == "user"
+
+
+def test_resolve_durations_rejects_duplicate_instance_ids() -> None:
+    from app.services.engine import DuplicateInstanceIdError
+
+    with pytest.raises(DuplicateInstanceIdError):
+        resolve_durations([("s1", None), ("s1", None)], {})
 
 
 def test_resolve_durations_two_stops_both_zero() -> None:

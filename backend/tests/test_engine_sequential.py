@@ -9,7 +9,7 @@ Verifies:
 - Deadline enforcement stops the plan with FailedLeg reason=deadline_exceeded.
 - Cancellation stops the plan with FailedLeg reason=cancelled.
 - resolve_departure handles normal, spring-forward, fall-back, and occurrence.
-- verify_stops derives timezone and rejects timezone conflicts.
+- Provider-backed verification lives in test_plan_v2_verified.py.
 
 All tests use deterministic fakes; no real Google API calls are made.
 """
@@ -20,12 +20,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.core.deadline import DeadlineExceededError, DeadlineScope
-from app.models.request import DepartureInput, PlaceSelection, StopSpec
+from app.core.deadline import DeadlineScope
+from app.models.request import DepartureInput
 from app.models.response import FailedLeg, KnownStop, PlannedLeg, UnknownStop
 from app.services.departure import (
     AmbiguousDepartureError,
+    InvalidDepartureDateError,
     NonExistentDepartureError,
+    OccurrenceNotApplicableError,
     resolve_departure,
 )
 from app.services.engine import (
@@ -41,9 +43,7 @@ from app.services.errors import (
     NoRouteError,
     ProviderTemporaryError,
     QuotaExceededError,
-    TimezoneConflictError,
 )
-from app.services.verifier import verify_stops
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -73,7 +73,7 @@ def _durations(
     *instance_ids: str,
     explicit: dict[str, int] | None = None,
 ) -> ResolvedDurations:
-    """Build durations with D11 rules: first/last=0, middle=60 unless overridden."""
+    """Build durations with D11 rules: explicit wins; unspecified first/last=0, middle=60."""
     stops = [(iid, (explicit or {}).get(iid)) for iid in instance_ids]
     return resolve_durations(stops, {})
 
@@ -187,6 +187,7 @@ async def test_sequential_timestamps_thread_forward() -> None:
         emitter=_NullEmitter(),
         ctx=ctx,
         deadline=_deadline(),
+        trip_timezone="UTC",
     )
 
     # Stop a: arrive=T0, stay=0 (first), depart=T0
@@ -220,13 +221,10 @@ async def test_sequential_timestamps_thread_forward() -> None:
 
 
 @pytest.mark.asyncio
-async def test_first_and_last_stop_stay_zero() -> None:
-    """D11: first and last stops always have stay_minutes=0."""
+async def test_explicit_endpoint_durations_survive() -> None:
+    """D11: explicit first/last durations win; only unspecified endpoints default to 0."""
     stops = [_vstop("a"), _vstop("b")]
-    durations = _durations("a", "b", explicit={"a": 60, "b": 60})
-
-    # Even with explicit 60-minute overrides, D11 forces 0 for first/last.
-    # resolve_durations enforces this, so verify it carries through the engine.
+    durations = _durations("a", "b", explicit={"a": 45, "b": 30})
     adapter = _FakeRoutesAdapter()
     ctx = OperationContext()
 
@@ -239,14 +237,18 @@ async def test_first_and_last_stop_stay_zero() -> None:
         emitter=_NullEmitter(),
         ctx=ctx,
         deadline=_deadline(),
+        trip_timezone="UTC",
     )
 
     stop_a = timeline[0]
     stop_b = timeline[2]
     assert isinstance(stop_a, KnownStop)
     assert isinstance(stop_b, KnownStop)
-    assert stop_a.stay_minutes == 0
-    assert stop_b.stay_minutes == 0
+    assert stop_a.stay_minutes == 45
+    assert stop_b.stay_minutes == 30
+    assert stop_a.stay_source == "user"
+    # The 45-minute first-stop visit delays the first leg's departure.
+    assert adapter.depart_times[0] == _T0 + timedelta(minutes=45)
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +273,7 @@ async def test_routing_call_count_equals_n_minus_one() -> None:
         emitter=_NullEmitter(),
         ctx=ctx,
         deadline=_deadline(),
+        trip_timezone="UTC",
     )
 
     assert adapter.call_count == 3
@@ -299,6 +302,7 @@ async def test_partial_failure_no_invented_times() -> None:
         emitter=_NullEmitter(),
         ctx=ctx,
         deadline=_deadline(),
+        trip_timezone="UTC",
     )
 
     # a: KnownStop, leg a->b: PlannedLeg, b: KnownStop, leg b->c: FailedLeg, c: UnknownStop
@@ -338,6 +342,7 @@ async def test_partial_failure_first_leg() -> None:
         emitter=_NullEmitter(),
         ctx=ctx,
         deadline=_deadline(),
+        trip_timezone="UTC",
     )
 
     assert len(timeline) == 4  # a, failed a->b, unknown b, unknown c
@@ -365,6 +370,7 @@ async def test_provider_temporary_maps_to_reason() -> None:
         emitter=_NullEmitter(),
         ctx=ctx,
         deadline=_deadline(),
+        trip_timezone="UTC",
     )
 
     failed = timeline[1]
@@ -388,6 +394,7 @@ async def test_quota_exceeded_maps_to_reason() -> None:
         emitter=_NullEmitter(),
         ctx=ctx,
         deadline=_deadline(),
+        trip_timezone="UTC",
     )
 
     failed = timeline[1]
@@ -422,6 +429,7 @@ async def test_deadline_expired_before_leg_produces_failed_leg() -> None:
         emitter=_NullEmitter(),
         ctx=ctx,
         deadline=expired_deadline,
+        trip_timezone="UTC",
     )
 
     # With an expired deadline, the first stop is emitted then the leg fails.
@@ -462,6 +470,7 @@ async def test_cancelled_context_produces_failed_leg() -> None:
         emitter=_NullEmitter(),
         ctx=ctx,
         deadline=_deadline(),
+        trip_timezone="UTC",
     )
 
     failed = next((item for item in timeline if isinstance(item, FailedLeg)), None)
@@ -500,6 +509,7 @@ async def test_emitter_receives_expected_event_types() -> None:
         emitter=emitter,
         ctx=ctx,
         deadline=_deadline(),
+        trip_timezone="UTC",
     )
 
     types = [type(e) for e in emitter.events]
@@ -516,74 +526,13 @@ async def test_emitter_receives_expected_event_types() -> None:
 
 
 # ---------------------------------------------------------------------------
-# verify_stops
-# ---------------------------------------------------------------------------
-
-
-def _stop_spec(instance_id: str, lat: float = 53.344, lng: float = -6.254) -> StopSpec:
-    return StopSpec(
-        instance_id=instance_id,
-        selection=PlaceSelection(
-            place_id=f"ChIJ_{instance_id}",
-            name=f"Place {instance_id}",
-            lat=lat,
-            lng=lng,
-        ),
-    )
-
-
-def test_verify_stops_returns_verified_list() -> None:
-    stops = [_stop_spec("a"), _stop_spec("b")]
-    verified, tz = verify_stops(stops, _deadline())
-    assert len(verified) == 2
-    assert verified[0].instance_id == "a"
-    assert verified[1].instance_id == "b"
-    assert isinstance(tz, str)
-    assert len(tz) > 0
-
-
-def test_verify_stops_timezone_conflict_raises() -> None:
-    """A stop in a different timezone raises TimezoneConflictError."""
-    # Dublin, Ireland (Europe/Dublin) vs New York (America/New_York)
-    stops = [
-        _stop_spec("dublin", lat=53.344, lng=-6.254),  # Europe/Dublin
-        _stop_spec("nyc", lat=40.713, lng=-74.006),  # America/New_York
-    ]
-    with pytest.raises(TimezoneConflictError) as exc_info:
-        verify_stops(stops, _deadline())
-    assert "America/New_York" in str(exc_info.value) or "Europe/Dublin" in str(exc_info.value)
-
-
-def test_verify_stops_timezone_conflict_blocks_routing() -> None:
-    """After a timezone conflict, no routing calls should be made."""
-    # This test verifies that the verifier fails before any adapter is used.
-    stops = [
-        _stop_spec("dublin", lat=53.344, lng=-6.254),
-        _stop_spec("nyc", lat=40.713, lng=-74.006),
-    ]
-    adapter = _FakeRoutesAdapter()
-
-    with pytest.raises(TimezoneConflictError):
-        verify_stops(stops, _deadline())
-
-    # No routing calls made because verifier raised before any planning.
-    assert adapter.call_count == 0
-
-
-def test_verify_stops_expired_deadline_raises() -> None:
-    import time as _time
-
-    stops = [_stop_spec("a"), _stop_spec("b")]
-    dead = DeadlineScope(deadline_seconds=0.0)
-    _time.sleep(0.01)
-
-    with pytest.raises(DeadlineExceededError):
-        verify_stops(stops, dead)
-
-
-# ---------------------------------------------------------------------------
 # resolve_departure
 # ---------------------------------------------------------------------------
+
+
+def _now_before(dep: DepartureInput) -> datetime:
+    """A fixed "now" one day before the departure date, inside the supported range."""
+    return datetime.fromisoformat(dep.local_date).replace(tzinfo=_UTC) - timedelta(days=1)
 
 
 def test_resolve_departure_normal() -> None:
@@ -592,7 +541,7 @@ def test_resolve_departure_normal() -> None:
         local_time="09:00",
         timezone="Europe/Dublin",
     )
-    result = resolve_departure(dep)
+    result = resolve_departure(dep, now=_now_before(dep))
     # June 1 in Dublin is IST (UTC+1), so 09:00 local = 08:00 UTC.
     assert result.tzinfo is not None
     assert result.hour == 8
@@ -605,7 +554,7 @@ def test_resolve_departure_utc_zone() -> None:
         local_time="12:30",
         timezone="UTC",
     )
-    result = resolve_departure(dep)
+    result = resolve_departure(dep, now=_now_before(dep))
     assert result.hour == 12
     assert result.minute == 30
 
@@ -619,7 +568,7 @@ def test_resolve_departure_spring_forward_rejected() -> None:
         timezone="Europe/Dublin",
     )
     with pytest.raises(NonExistentDepartureError):
-        resolve_departure(dep)
+        resolve_departure(dep, now=_now_before(dep))
 
 
 def test_resolve_departure_fall_back_ambiguous_without_occurrence() -> None:
@@ -631,48 +580,54 @@ def test_resolve_departure_fall_back_ambiguous_without_occurrence() -> None:
         timezone="Europe/Dublin",
     )
     with pytest.raises(AmbiguousDepartureError):
-        resolve_departure(dep)
+        resolve_departure(dep, now=_now_before(dep))
 
 
 def test_resolve_departure_fall_back_with_occurrence_1() -> None:
-    """occurrence=1 selects the first (IST/UTC+1) occurrence."""
+    """occurrence=1 is the chronologically earlier instant (UTC+1 in Dublin)."""
     dep = DepartureInput(
         local_date="2026-10-25",
         local_time="01:30",
         timezone="Europe/Dublin",
         occurrence=1,
     )
-    result = resolve_departure(dep)
+    result = resolve_departure(dep, now=_now_before(dep))
     # First occurrence (IST = UTC+1): 01:30 IST = 00:30 UTC.
     assert result.hour == 0
     assert result.minute == 30
 
 
 def test_resolve_departure_fall_back_with_occurrence_2() -> None:
-    """occurrence=2 selects the second (GMT/UTC+0) occurrence."""
+    """occurrence=2 is the chronologically later instant (UTC+0 in Dublin)."""
     dep = DepartureInput(
         local_date="2026-10-25",
         local_time="01:30",
         timezone="Europe/Dublin",
         occurrence=2,
     )
-    result = resolve_departure(dep)
+    result = resolve_departure(dep, now=_now_before(dep))
     # Second occurrence (GMT = UTC+0): 01:30 GMT = 01:30 UTC.
     assert result.hour == 1
     assert result.minute == 30
 
 
-def test_resolve_departure_unambiguous_time_ignores_occurrence() -> None:
-    """A non-fold time with occurrence=1 works normally."""
+def test_resolve_departure_occurrence_on_unambiguous_time_rejected() -> None:
+    """An occurrence for a time that occurs once is a stale/invalid claim, not ignored."""
     dep = DepartureInput(
         local_date="2026-06-01",
         local_time="09:00",
         timezone="Europe/Dublin",
         occurrence=1,
     )
-    result = resolve_departure(dep)
-    # June is IST (UTC+1), 09:00 local = 08:00 UTC.
-    assert result.hour == 8
+    with pytest.raises(OccurrenceNotApplicableError):
+        resolve_departure(dep, now=_now_before(dep))
+
+
+def test_resolve_departure_invalid_calendar_date_rejected() -> None:
+    """Pattern-valid but impossible dates fail as a controlled error, not a 500."""
+    dep = DepartureInput(local_date="2026-02-30", local_time="09:00", timezone="Europe/Dublin")
+    with pytest.raises(InvalidDepartureDateError):
+        resolve_departure(dep)
 
 
 # ---------------------------------------------------------------------------
@@ -719,52 +674,6 @@ def test_plan_v2_rejects_spring_forward_departure() -> None:
         "departure": {
             "local_date": "2026-03-29",
             "local_time": "01:30",
-            "timezone": "Europe/Dublin",
-        },
-    }
-    response = client.post("/api/v2/plan", json=payload)
-    assert response.status_code == 422
-
-
-def test_plan_v2_rejects_timezone_conflict() -> None:
-    """The v2 endpoint returns 422 when stops span multiple timezones."""
-    from fastapi.testclient import TestClient
-
-    from app.main import app
-
-    client = TestClient(app)
-    payload = {
-        "operation_id": "op-002",
-        "input_revision": 0,
-        "city": {
-            "place_id": "ChIJ_Dublin",
-            "name": "Dublin, Ireland",
-            "lat": 53.344,
-            "lng": -6.254,
-        },
-        "stops": [
-            {
-                "instance_id": "a",
-                "selection": {
-                    "place_id": "ChIJ_a",
-                    "name": "Dublin Stop",
-                    "lat": 53.344,
-                    "lng": -6.254,
-                },
-            },
-            {
-                "instance_id": "b",
-                "selection": {
-                    "place_id": "ChIJ_b",
-                    "name": "New York Stop",
-                    "lat": 40.713,
-                    "lng": -74.006,
-                },
-            },
-        ],
-        "departure": {
-            "local_date": "2026-06-01",
-            "local_time": "09:00",
             "timezone": "Europe/Dublin",
         },
     }

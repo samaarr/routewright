@@ -19,6 +19,7 @@ Conversion: google_day = (python_weekday + 1) % 7
 """
 
 from datetime import datetime
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.models.response import HoursDetail, HoursSource, HoursStatus
@@ -160,6 +161,31 @@ def compute_hours_status(
     return "open", HoursDetail(closes_at=close_str, hours_source=hours_source)
 
 
+HoursEligibility = Literal["ok", "warning", "disqualifying"]
+
+
+def hours_eligibility(status: HoursStatus, stay_minutes: int) -> HoursEligibility:
+    """Classify an hours status for candidate eligibility and warnings (D24, D42, D43).
+
+    - closed_on_arrival with a positive stay → disqualifying for an
+      alternative order (D42). In the user's own order it is shown as a
+      warning; the planner never drops, shortens or delays the visit.
+    - closed_on_arrival with a zero-minute stay → warning only (D24); venue
+      hours do not prove a meeting point or station is inaccessible.
+    - closes_during_visit → warning only (D42).
+    - unknown → warning: hours could not be checked (missing hours are never
+      treated as open or closed).
+    - open / closes_soon → ok.
+
+    Reusable by the later comparison stage; no optimisation is done here.
+    """
+    if status == "closed_on_arrival":
+        return "disqualifying" if stay_minutes > 0 else "warning"
+    if status in ("closes_during_visit", "unknown"):
+        return "warning"
+    return "ok"
+
+
 def is_disqualifying_for_optimisation(
     status: HoursStatus,
     stay_minutes: int,
@@ -175,4 +201,4 @@ def is_disqualifying_for_optimisation(
       First/last stops are departure/arrival points; their hours don't constrain ordering.
     - open / closes_soon / unknown → not disqualifying.
     """
-    return status == "closed_on_arrival" and stay_minutes > 0
+    return hours_eligibility(status, stay_minutes) == "disqualifying"

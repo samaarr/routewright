@@ -7,13 +7,16 @@ needed — Stop carries its display info inline.
 New streaming/engine types are appended at the bottom of the file.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, Field
 
 WarningSeverity = Literal["info", "warning", "error"]
 HoursSource: TypeAlias = Literal["date_specific", "weekly"]
+# Why an hours status is "unknown": no data, data in an undocumented shape,
+# or only date-specific data that does not cover the visit date.
+HoursUnknownReason: TypeAlias = Literal["missing", "malformed", "outside_coverage"]
 
 # Status of a stop's opening hours relative to its planned arrival/departure.
 # "unknown" means no hours data was available — never implies closed.
@@ -39,6 +42,13 @@ class HoursDetail(BaseModel):
     hours_source: HoursSource | None = (
         None  # "weekly" for regularOpeningHours; "date_specific" for currentOpeningHours
     )
+    # v2 qualification facts (D43). Defaults keep the v1 /api/plan shape unchanged.
+    always_open: bool = False  # provider's documented 24-hour shape
+    exceptions_unconfirmed: bool = False  # weekly schedule; holidays not checked
+    coverage_start: date | None = None  # date-specific data window (inclusive)
+    coverage_end: date | None = None
+    special_day: bool = False  # provider flags exceptional hours on the visit date
+    unknown_reason: HoursUnknownReason | None = None
 
 
 class StopItem(BaseModel):
@@ -92,6 +102,9 @@ class Warning(BaseModel):
     severity: WarningSeverity
     message: str
     affects_stop_index: int | None = None
+    # v2: stable stop-instance identity (positions change on reorder).
+    affects_instance_id: str | None = None
+    code: str | None = None
 
 
 class Plan(BaseModel):
@@ -178,6 +191,7 @@ PlanFailureReason: TypeAlias = Literal[
     "no_route",
     "provider_temporary",
     "quota_exceeded",
+    "provider_capacity",
     "place_invalid",
     "place_temporary",
     "deadline_exceeded",
@@ -275,7 +289,7 @@ class CompletePlan(BaseModel):
     mode: Literal["transit", "walking", "driving"]
     timezone: str = Field(
         ...,
-        description="IANA timezone derived from the first stop's coordinates.",
+        description="IANA timezone resolved offline from the verified city coordinates.",
     )
     timeline: list[PlanTimelineItem]
     overview_map_url: str
@@ -360,7 +374,7 @@ OperationOutcome: TypeAlias = Annotated[
 
 
 # ---------------------------------------------------------------------------
-# Streaming event shapes (D6-D8, D22-D23)
+# Streaming event shapes (D6-D7, D22-D23)
 # ---------------------------------------------------------------------------
 
 

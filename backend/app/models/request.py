@@ -16,7 +16,8 @@ TransportMode = Literal["transit", "walking", "driving"]
 # Maximum how far into the future a start_time may be.
 # A day trip cannot be planned years ahead; reject implausibly far future dates
 # (likely clock skew or a bug) without a useful error at runtime.
-_MAX_FUTURE_DAYS = 100
+MAX_FUTURE_DAYS = 100
+_MAX_FUTURE_DAYS = MAX_FUTURE_DAYS
 
 
 class StopInput(BaseModel):
@@ -149,11 +150,13 @@ class PlanRequest(BaseModel):
 
 
 class PlaceSelection(BaseModel):
-    """A resolved place identified by its Google place_id and coordinates.
+    """A selected place identified by its Google place_id.
 
-    The client resolves the place (via autocomplete or a previous plan
-    response) before submitting. The engine verifies coordinates server-side
-    before routing — it never trusts the client-supplied lat/lng directly.
+    The client selects the place (via suggestions or a previous plan response)
+    before submitting. Only ``place_id`` is authoritative: the server fetches
+    Place Details for it and routes with the provider-confirmed name and
+    coordinates. ``name``/``lat``/``lng`` are client display hints and are
+    never used for routing, timezone resolution or hours (D13, D45).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -175,7 +178,7 @@ class PlaceSelection(BaseModel):
 
 
 class CitySelection(PlaceSelection):
-    """A resolved city with an optional map viewport (D25, D44).
+    """A resolved city with an optional map viewport (D26, D44).
 
     The viewport (north-east / south-west corners) is used by the map to
     fit the initial camera to the trip city. All four corners must be
@@ -229,7 +232,10 @@ class DepartureInput(BaseModel):
     When clocks fall back, the 01:00–02:00 hour occurs twice; occurrence
     disambiguates which instance the user intends (1 = first / standard,
     2 = second / summer). It is required if and only if the departure lands
-    in a fold; the router validates this after resolving the actual datetime.
+    in a fold; the server rejects it for times that occur only once.
+
+    ``timezone`` must equal the zone the server resolves offline from the
+    verified city; a mismatch is rejected rather than trusted (D40, D41).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -250,7 +256,10 @@ class DepartureInput(BaseModel):
     )
     occurrence: Literal[1, 2] | None = Field(
         default=None,
-        description="DST fold disambiguation. Supply only during a fall-back hour.",
+        description=(
+            "Repeated-time choice in chronological order: 1 = earlier instant, "
+            "2 = later instant. Required only when the local time occurs twice."
+        ),
     )
 
     @field_validator("timezone")
@@ -303,6 +312,11 @@ class ItineraryRequest(BaseModel):
             raise ValueError("Too many stops")
         if sum(s.stay_minutes or 0 for s in self.stops) > 12 * 60:
             raise ValueError("Total explicit visits must not exceed 12 hours")
+        # Durations are keyed by instance_id (D11); repeated provider place IDs
+        # are allowed (distinct visits), repeated instance IDs are not.
+        ids = [s.instance_id for s in self.stops]
+        if len(set(ids)) != len(ids):
+            raise ValueError("Stop instance_id values must be unique")
         return self
 
 

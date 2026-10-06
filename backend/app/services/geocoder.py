@@ -8,9 +8,12 @@ Calls Text Search (New), not the legacy Places API. Key facts:
     - primaryType may be absent for generic places — always handle None
     - types array is ordered most-specific-first per Google's schema
 
-Billing tier: Pro (~5K free requests/month as of March 2025). The Pro tier
-is unavoidable because we request primaryType; dropping it would save cost
-but break stay_defaults lookup accuracy.
+Billing tier: Text Search **Enterprise** (verified against the Text Search
+(New) field/SKU table, 2026-10-06). displayName/location/primaryType/types
+are Pro fields, but places.regularOpeningHours triggers the Enterprise SKU,
+and a request bills at its highest field tier. An earlier version of this
+comment claimed the request stayed in Pro; that was incorrect. Enterprise
+has a smaller free tier (1K events/month vs 5K for Pro).
 
 Opening hours:
     regularOpeningHours.periods is requested and parsed into OpeningPeriod
@@ -45,9 +48,8 @@ PLACES_ENDPOINT = "https://places.googleapis.com/v1/places:searchText"
 #   location              — lat/lng for Routes API calls
 #   primaryType           — primary lookup key for stay_defaults
 #   types                 — fallback array for stay_defaults when primaryType misses
-#   regularOpeningHours   — weekly open/close periods for hours-status display
-#                           Adds regularOpeningHours to the Pro-tier billing SKU
-#                           (already required for primaryType) — no tier change.
+#   regularOpeningHours   — weekly open/close periods for hours-status display.
+#                           Raises the request to the Text Search Enterprise SKU.
 _FIELD_MASK = (
     "places.id,places.displayName,places.location,"
     "places.primaryType,places.types,places.regularOpeningHours"

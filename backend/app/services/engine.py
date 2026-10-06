@@ -4,8 +4,9 @@ All I/O is injected through Protocol interfaces (PlacesAdapter, RoutesAdapter,
 ProgressEmitter) so planning logic can be tested with deterministic fakes that
 never touch the network.
 
-plan_sequential is implemented in Step 3.
-compare_orders and refresh_suffix remain stubs until Steps 7 and 6.
+plan_sequential implements ordinary sequential planning, including opening-
+hours assessment of each known stop. compare_orders and refresh_suffix remain
+stubs until the comparison and refresh stages.
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ from app.core.deadline import DeadlineExceededError, DeadlineScope
 from app.models.request import TransportMode
 from app.models.response import (
     FailedLeg,
-    HoursStatus,
     KnownStop,
     LegProgressEvent,
     LegReadyEvent,
@@ -30,7 +30,16 @@ from app.models.response import (
     StopReadyEvent,
     UnknownStop,
 )
-from app.services.errors import NoRouteError, ProviderTemporaryError, QuotaExceededError
+from app.services.errors import (
+    NoRouteError,
+    PlaceRole,
+    ProviderCapacityError,
+    ProviderTemporaryError,
+    QuotaExceededError,
+)
+from app.services.place_details import PlaceDetails
+from app.services.stay_defaults import lookup_stay_minutes
+from app.services.venue_hours import VenueHours, assess_hours
 
 # ---------------------------------------------------------------------------
 # Engine-layer exceptions
@@ -72,10 +81,11 @@ class RoutingResult:
 
 @runtime_checkable
 class PlacesAdapter(Protocol):
-    """Verifies a place_id and returns confirmed coordinates."""
+    """Fetches provider-confirmed details for one selected place ID."""
 
-    async def verify_place(self, place_id: str, name: str) -> tuple[float, float]:
-        """Return (lat, lng) or raise PlaceVerificationError."""
+    async def fetch_details(self, place_id: str, *, role: PlaceRole) -> PlaceDetails:
+        """Return details or raise PlaceVerificationError / ProviderTemporaryError /
+        QuotaExceededError / ProviderCapacityError."""
         ...  # pragma: no cover
 
 
@@ -113,7 +123,11 @@ class ProgressEmitter(Protocol):
 
 @dataclass(frozen=True)
 class VerifiedStop:
-    """A stop whose coordinates have been confirmed by the Places adapter."""
+    """A stop whose identity and coordinates the Places provider confirmed.
+
+    name/lat/lng come from the provider, never from the submitted selection.
+    hours is request-scoped provider data (None = no hours returned).
+    """
 
     instance_id: str
     place_id: str
@@ -121,7 +135,9 @@ class VerifiedStop:
     address: str | None
     lat: float
     lng: float
-    hours_status: HoursStatus = "unknown"
+    hours: VenueHours | None = None
+    primary_type: str | None = None
+    types: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -189,24 +205,42 @@ class OperationContext:
 # ---------------------------------------------------------------------------
 
 
+class DuplicateInstanceIdError(ValueError):
+    """Two stops share an instance_id; durations could not be keyed safely."""
+
+
+def place_type_defaults(stops: list[VerifiedStop]) -> dict[str, int]:
+    """Place-type default stay per instance_id from provider-verified types.
+
+    Uses the existing stay_defaults table (primaryType first, then the types
+    array). Repeated visits to one place get the same default but remain
+    separate entries keyed by their own instance_id.
+    """
+    return {s.instance_id: lookup_stay_minutes(s.primary_type, list(s.types))[0] for s in stops}
+
+
 def resolve_durations(
     stops: list[tuple[str, int | None]],
     defaults: dict[str, int],
 ) -> ResolvedDurations:
-    """Apply D11 stay-duration rules for an ordered list of stops.
+    """Resolve fixed stay durations once, from the ORIGINAL input order (D11).
 
-    Rules (in precedence order):
-    1. First stop: 0 minutes always (departure point -- no visit counted).
-    2. Last stop: 0 minutes always (arrival point -- no visit counted).
-    3. Explicit user value wins over the place-type default.
-    4. Otherwise: place-type default from ``defaults``, falling back to 60 min.
+    Rules:
+    1. An explicit user value wins at every position, including the first and
+       last stops and an explicit zero.
+    2. Otherwise the original first and last stops default to 0 minutes.
+    3. Otherwise middle stops use the place-type default from ``defaults``
+       (stay_defaults table); 60 min only if a default is absent.
+
+    The result is keyed by stop-instance ID so it can be carried unchanged
+    through later reordering/comparison without re-applying positional rules.
 
     Args:
-        stops: Ordered list of ``(instance_id, explicit_stay_minutes_or_None)``.
+        stops: Ordered ``(instance_id, explicit_stay_minutes_or_None)``.
         defaults: Place-type default minutes per ``instance_id``.
 
-    Returns:
-        ``ResolvedDurations`` with every ``instance_id`` in ``stops`` present.
+    Raises:
+        DuplicateInstanceIdError: an instance_id appears more than once.
     """
     if not stops:
         return ResolvedDurations(durations={})
@@ -216,12 +250,14 @@ def resolve_durations(
     n = len(stops)
 
     for i, (instance_id, explicit) in enumerate(stops):
-        if i == 0 or i == n - 1:
-            result[instance_id] = 0
-            source_map[instance_id] = "default"
-        elif explicit is not None:
+        if instance_id in result:
+            raise DuplicateInstanceIdError(f"duplicate instance_id {instance_id!r}")
+        if explicit is not None:
             result[instance_id] = explicit
             source_map[instance_id] = "user"
+        elif i == 0 or i == n - 1:
+            result[instance_id] = 0
+            source_map[instance_id] = "default"
         else:
             result[instance_id] = defaults.get(instance_id, 60)
             source_map[instance_id] = "default"
@@ -252,8 +288,9 @@ async def plan_sequential(
     emitter: ProgressEmitter,
     ctx: OperationContext,
     deadline: DeadlineScope,
+    trip_timezone: str,
 ) -> list[KnownStop | PlannedLeg | FailedLeg | UnknownStop]:
-    """Sequential leg planner (D1, D2).
+    """Sequential leg planner (D1, D2) with opening-hours assessment (D42, D43).
 
     Computes each leg using the actual preceding arrival time. On routing
     failure produces a valid prefix + FailedLeg + UnknownStop items.
@@ -267,7 +304,9 @@ async def plan_sequential(
         routes: Routing adapter (injected -- real or fake).
         emitter: Progress emitter (injected -- streaming or no-op).
         ctx: Operation context carrying identity and call counters.
-        deadline: Active 60-second deadline scope.
+        deadline: Active 60-second deadline scope. Each routing await is
+            bounded by its remaining time, not just checked between calls.
+        trip_timezone: Verified IANA zone; hours are assessed in it.
 
     Returns:
         Flat timeline of KnownStop / PlannedLeg / FailedLeg / UnknownStop.
@@ -291,6 +330,8 @@ async def plan_sequential(
         stay_min = durations.get(stop.instance_id)
         arrive_at = cursor
         depart_at = cursor + timedelta(minutes=stay_min)
+        # Assessed against this stop's actual computed arrival/departure.
+        hours_status, hours_detail = assess_hours(stop.hours, arrive_at, depart_at, trip_timezone)
 
         known_stop = KnownStop(
             instance_id=stop.instance_id,
@@ -304,7 +345,8 @@ async def plan_sequential(
             stay_minutes=stay_min,
             stay_source=durations.get_source(stop.instance_id),
             map_url=_maps_search_url(stop.lat, stop.lng),
-            hours_status=stop.hours_status,
+            hours_status=hours_status,
+            hours_detail=hours_detail,
         )
         timeline.append(known_stop)
 
@@ -342,13 +384,15 @@ async def plan_sequential(
             if ctx.is_cancelled():
                 raise OperationCancelledError("Operation was cancelled")
             ctx.record_routing_call()
-            result = await routes.fetch_leg(
-                origin_lat=stop.lat,
-                origin_lng=stop.lng,
-                dest_lat=next_stop.lat,
-                dest_lng=next_stop.lng,
-                mode=mode,
-                depart_at=depart_at,
+            result = await deadline.bound(
+                routes.fetch_leg(
+                    origin_lat=stop.lat,
+                    origin_lng=stop.lng,
+                    dest_lat=next_stop.lat,
+                    dest_lng=next_stop.lng,
+                    mode=mode,
+                    depart_at=depart_at,
+                )
             )
         except NoRouteError:
             failure_reason = "no_route"
@@ -358,7 +402,10 @@ async def plan_sequential(
             failure_message = "Routing service temporarily unavailable."
         except QuotaExceededError:
             failure_reason = "quota_exceeded"
-            failure_message = "API quota reached for this operation."
+            failure_message = "The daily routing allowance has been reached."
+        except ProviderCapacityError:
+            failure_reason = "provider_capacity"
+            failure_message = "The routing service is busy. Try again shortly."
         except DeadlineExceededError:
             failure_reason = "deadline_exceeded"
             failure_message = "Operation deadline exceeded during routing."

@@ -1,17 +1,40 @@
 """Production adapter implementations for the planning engine.
 
-GoogleRoutesAdapter wraps directions.fetch_leg() under the RoutesAdapter
-Protocol so the engine can be tested with deterministic fakes.
+GoogleRoutesAdapter wraps directions.fetch_leg() and GooglePlacesAdapter wraps
+place_details.fetch_place_details() under the engine's Protocols so planning
+can be tested with deterministic fakes.
+
+Both go through the same bounded provider admission (semaphore) and the
+shared fail-closed daily provider budget. The budget is consumed before each
+request is sent and is not refunded if the call fails or is cancelled.
+Admission/budget rejections are translated into typed engine errors so a
+mid-plan rejection becomes a FailedLeg rather than an unstructured HTTP error.
 """
 
 from datetime import datetime
 from urllib.parse import quote_plus
 
-from app.core.provider_semaphore import get_provider_semaphore
+from fastapi import HTTPException
+
+from app.core.provider_semaphore import consume_provider_budget, get_provider_semaphore
 from app.models.request import TransportMode
 from app.services import directions
 from app.services.engine import RoutingResult
-from app.services.errors import NoRouteError, ProviderTemporaryError
+from app.services.errors import (
+    NoRouteError,
+    PlaceRole,
+    ProviderCapacityError,
+    ProviderTemporaryError,
+    QuotaExceededError,
+)
+from app.services.place_details import PlaceDetails, fetch_place_details, validate_place_id
+
+
+def _admission_error(exc: HTTPException) -> Exception:
+    """Map provider_semaphore's HTTP rejections onto engine error types."""
+    if exc.status_code == 429:
+        return QuotaExceededError("Daily provider budget exhausted")
+    return ProviderCapacityError("Provider capacity busy or usage control unavailable")
 
 
 def _dir_url_coords(
@@ -54,6 +77,8 @@ class GoogleRoutesAdapter:
                     depart_at=depart_at,
                     mode=mode,
                 )
+        except HTTPException as exc:
+            raise _admission_error(exc) from exc
         except directions.DirectionsError as exc:
             msg = str(exc).lower()
             if "no route" in msg:
@@ -67,3 +92,21 @@ class GoogleRoutesAdapter:
             summary=result.summary,
             map_url=_dir_url_coords(origin_lat, origin_lng, dest_lat, dest_lng, mode),
         )
+
+
+class GooglePlacesAdapter:
+    """Wraps Place Details (New) as a PlacesAdapter for the verifier.
+
+    No automatic retries (D8). One call per invocation; the verifier is
+    responsible for sharing lookups across duplicate place IDs (D37).
+    """
+
+    async def fetch_details(self, place_id: str, *, role: PlaceRole) -> PlaceDetails:
+        # Reject malformed IDs before admission so they cost no budget.
+        validate_place_id(place_id, role)
+        try:
+            async with get_provider_semaphore():
+                await consume_provider_budget()
+                return await fetch_place_details(place_id, role=role)
+        except HTTPException as exc:
+            raise _admission_error(exc) from exc

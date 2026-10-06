@@ -51,7 +51,7 @@
           "type": "string"
         },
         "timezone": {
-          "description": "IANA timezone derived from the first stop's coordinates.",
+          "description": "IANA timezone resolved offline from the verified city coordinates.",
           "title": "Timezone",
           "type": "string"
         },
@@ -204,6 +204,7 @@
             "no_route",
             "provider_temporary",
             "quota_exceeded",
+            "provider_capacity",
             "place_invalid",
             "place_temporary",
             "deadline_exceeded",
@@ -278,6 +279,64 @@
           ],
           "default": null,
           "title": "Hours Source"
+        },
+        "always_open": {
+          "default": false,
+          "title": "Always Open",
+          "type": "boolean"
+        },
+        "exceptions_unconfirmed": {
+          "default": false,
+          "title": "Exceptions Unconfirmed",
+          "type": "boolean"
+        },
+        "coverage_start": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Coverage Start"
+        },
+        "coverage_end": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Coverage End"
+        },
+        "special_day": {
+          "default": false,
+          "title": "Special Day",
+          "type": "boolean"
+        },
+        "unknown_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "missing",
+                "malformed",
+                "outside_coverage"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unknown Reason"
         }
       },
       "title": "HoursDetail",
@@ -756,6 +815,7 @@
             "no_route",
             "provider_temporary",
             "quota_exceeded",
+            "provider_capacity",
             "place_invalid",
             "place_temporary",
             "deadline_exceeded",
@@ -1310,6 +1370,30 @@
           ],
           "default": null,
           "title": "Affects Stop Index"
+        },
+        "affects_instance_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Affects Instance Id"
+        },
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Code"
         }
       },
       "required": [

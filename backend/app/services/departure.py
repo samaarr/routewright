@@ -1,64 +1,132 @@
-"""Departure time resolver: DepartureInput -> UTC-aware datetime.
+"""Departure time resolver: DepartureInput -> UTC-aware datetime (D14, D29, D40).
 
-Handles the two DST edge cases:
-- Spring-forward gap: the requested local time does not exist (e.g. clocks
-  skip from 01:00 directly to 02:00). Rejected with a clear message.
-- Fall-back fold: the same local time occurs twice. Requires occurrence=1
-  (first/standard) or occurrence=2 (second/summer) to disambiguate.
+Clock-change handling:
+- Skipped local time (clocks jump forward): rejected; never shifted.
+- Repeated local time (clocks fall back): ``occurrence`` is required and means
+  chronological order — 1 = the earlier instant, 2 = the later instant.
+  Standard/summer labels are deliberately not used: which occurrence is
+  "summer time" differs by location (e.g. Europe/Dublin's legal standard time
+  is the summer offset).
+- ``occurrence`` supplied for an ordinary, unambiguous time is rejected as a
+  stale or invalid client claim rather than silently ignored.
+
+Range: the same window as v1 /api/plan — not more than 7 days in the past or
+100 days in the future; walking/driving must start in the future (the Routes
+API rejects past departure times for those modes).
+
+All failures raise DepartureError subclasses, mapped by the router to 422.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from app.models.request import DepartureInput
+from app.models.request import MAX_FUTURE_DAYS, DepartureInput, TransportMode
+
+_MAX_PAST_DAYS = 7
 
 
-class NonExistentDepartureError(ValueError):
+class DepartureError(ValueError):
+    """Base class: the departure input cannot be converted safely."""
+
+    code = "departure_invalid"
+
+
+class InvalidDepartureDateError(DepartureError):
+    """The local date/time is not a real calendar date/time."""
+
+    code = "departure_invalid_date"
+
+
+class NonExistentDepartureError(DepartureError):
     """The requested local time falls in a spring-forward gap."""
 
-
-class AmbiguousDepartureError(ValueError):
-    """The requested local time is ambiguous during a fall-back clock change."""
+    code = "departure_nonexistent"
 
 
-def resolve_departure(dep: DepartureInput) -> datetime:
-    """Convert a DepartureInput to a UTC-aware datetime.
+class AmbiguousDepartureError(DepartureError):
+    """The local time occurs twice and no occurrence was chosen."""
 
-    Raises:
-        NonExistentDepartureError: If the time is in a spring-forward gap.
-        AmbiguousDepartureError: If the time is in a fall-back fold and
-            ``occurrence`` was not supplied.
-    """
-    year, month, day = (int(p) for p in dep.local_date.split("-"))
-    hour, minute = (int(p) for p in dep.local_time.split(":"))
+    code = "departure_ambiguous"
+
+
+class OccurrenceNotApplicableError(DepartureError):
+    """An occurrence was supplied for a time that occurs only once."""
+
+    code = "departure_occurrence_not_applicable"
+
+
+class DepartureOutOfRangeError(DepartureError):
+    """The departure is outside the supported planning window."""
+
+    code = "departure_out_of_range"
+
+
+def resolve_departure(
+    dep: DepartureInput,
+    *,
+    mode: TransportMode = "transit",
+    now: datetime | None = None,
+) -> datetime:
+    """Convert a destination-local DepartureInput to a UTC-aware datetime."""
+    try:
+        year, month, day = (int(p) for p in dep.local_date.split("-"))
+        hour, minute = (int(p) for p in dep.local_time.split(":"))
+        dt_naive = datetime(year, month, day, hour, minute)
+    except ValueError as exc:
+        raise InvalidDepartureDateError(
+            f"{dep.local_date} {dep.local_time} is not a valid date and time."
+        ) from exc
     tz = ZoneInfo(dep.timezone)
-    dt_naive = datetime(year, month, day, hour, minute)
 
-    # Detect spring-forward gap first: convert fold=0 to UTC and back.
-    # If the round-trip gives a different local time, the original time is in
-    # the skipped hour and does not exist.
+    # Skipped time: a fold=0 round trip through UTC lands on a different wall time.
     dt0 = dt_naive.replace(tzinfo=tz, fold=0)
-    dt_utc0 = dt0.astimezone(timezone.utc)
-    dt_roundtrip = dt_utc0.astimezone(tz).replace(tzinfo=None)
-    if dt_roundtrip != dt_naive:
+    if dt0.astimezone(timezone.utc).astimezone(tz).replace(tzinfo=None) != dt_naive:
         raise NonExistentDepartureError(
-            f"The time {dep.local_date} {dep.local_time} does not exist in "
-            f"{dep.timezone} (spring-forward clock change)."
+            f"{dep.local_date} {dep.local_time} does not exist in {dep.timezone}: "
+            "the clocks skip that time. Choose another time."
         )
 
-    # Detect fall-back ambiguity: fold=0 and fold=1 have different UTC offsets,
-    # meaning the same wall-clock time occurs twice.
+    # Repeated time: fold=0 and fold=1 give different UTC offsets.
     dt1 = dt_naive.replace(tzinfo=tz, fold=1)
-    is_fold = dt0.utcoffset() != dt1.utcoffset()
-
-    if is_fold and dep.occurrence is None:
+    repeated = dt0.utcoffset() != dt1.utcoffset()
+    if repeated and dep.occurrence is None:
         raise AmbiguousDepartureError(
-            f"The time {dep.local_date} {dep.local_time} is ambiguous in "
-            f"{dep.timezone} (fall-back clock change). "
-            "Supply occurrence=1 (first/standard) or occurrence=2 (second/summer)."
+            f"{dep.local_date} {dep.local_time} occurs twice in {dep.timezone}. "
+            "Choose the first (earlier) or second (later) occurrence."
+        )
+    if not repeated and dep.occurrence is not None:
+        raise OccurrenceNotApplicableError(
+            f"{dep.local_date} {dep.local_time} occurs only once in {dep.timezone}; "
+            "remove the occurrence choice."
         )
 
-    # Build the local datetime with the correct fold value.
-    fold = 1 if dep.occurrence == 2 else 0
-    dt_local = dt_naive.replace(tzinfo=tz, fold=fold)
-    return dt_local.astimezone(timezone.utc)
+    # Python's fold=0 is the chronologically earlier instant, fold=1 the later.
+    local = dt1 if dep.occurrence == 2 else dt0
+    utc = local.astimezone(timezone.utc)
+
+    current = now or datetime.now(timezone.utc)
+    if utc < current - timedelta(days=_MAX_PAST_DAYS):
+        raise DepartureOutOfRangeError(
+            f"The departure must not be more than {_MAX_PAST_DAYS} days in the past."
+        )
+    if utc > current + timedelta(days=MAX_FUTURE_DAYS):
+        raise DepartureOutOfRangeError(
+            f"The departure must not be more than {MAX_FUTURE_DAYS} days in the future."
+        )
+    if mode != "transit" and utc < current:
+        raise DepartureOutOfRangeError("Walking and driving plans must start in the future.")
+    return utc
+
+
+class DepartureTimezoneMismatchError(DepartureError):
+    """The submitted departure zone differs from the verified city's zone."""
+
+    code = "departure_timezone_mismatch"
+
+    def __init__(self, submitted: str, resolved: str) -> None:
+        super().__init__(
+            f"The departure was entered for {submitted}, but the selected city is in "
+            f"{resolved}. Re-enter the departure time for the selected city."
+        )
+        self.submitted = submitted
+        self.resolved = resolved

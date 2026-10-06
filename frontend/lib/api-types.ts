@@ -5,7 +5,7 @@ export type InputRevision = number;
 export type City = string;
 export type Mode = "transit" | "walking" | "driving";
 /**
- * IANA timezone derived from the first stop's coordinates.
+ * IANA timezone resolved offline from the verified city coordinates.
  */
 export type Timezone = string;
 export type ItemType = "stop";
@@ -27,6 +27,12 @@ export type HoursStatus = "open" | "closed_on_arrival" | "closes_during_visit" |
 export type ClosesAt = string | null;
 export type OpensAt = string | null;
 export type HoursSource = ("date_specific" | "weekly") | null;
+export type AlwaysOpen = boolean;
+export type ExceptionsUnconfirmed = boolean;
+export type CoverageStart = string | null;
+export type CoverageEnd = string | null;
+export type SpecialDay = boolean;
+export type UnknownReason = ("missing" | "malformed" | "outside_coverage") | null;
 export type ItemType1 = "leg";
 /**
  * instance_id of the origin stop.
@@ -54,6 +60,7 @@ export type FailureReason =
   | "no_route"
   | "provider_temporary"
   | "quota_exceeded"
+  | "provider_capacity"
   | "place_invalid"
   | "place_temporary"
   | "deadline_exceeded"
@@ -71,6 +78,8 @@ export type OverviewMapUrl = string;
 export type Severity = "info" | "warning" | "error";
 export type Message = string;
 export type AffectsStopIndex = number | null;
+export type AffectsInstanceId = string | null;
+export type Code = string | null;
 export type Warnings = Warning[];
 export type ResultType1 = "partial";
 export type OperationId1 = string;
@@ -87,6 +96,7 @@ export type FailureReason1 =
   | "no_route"
   | "provider_temporary"
   | "quota_exceeded"
+  | "provider_capacity"
   | "place_invalid"
   | "place_temporary"
   | "deadline_exceeded"
@@ -129,7 +139,7 @@ export type SubsequentStops = (KnownStop | UnknownStop)[];
 export type OutcomeType2 = "cancelled";
 export type Reason = string;
 export type OutcomeType3 = "error";
-export type Code = string;
+export type Code1 = string;
 export type Message1 = string;
 export type OperationOutcome = (PlanOutcome | RefreshOutcome | CancelledOutcome | ErrorOutcome) | null;
 export type GeneratedAt = string;
@@ -299,6 +309,12 @@ export interface HoursDetail {
   closes_at?: ClosesAt;
   opens_at?: OpensAt;
   hours_source?: HoursSource;
+  always_open?: AlwaysOpen;
+  exceptions_unconfirmed?: ExceptionsUnconfirmed;
+  coverage_start?: CoverageStart;
+  coverage_end?: CoverageEnd;
+  special_day?: SpecialDay;
+  unknown_reason?: UnknownReason;
   [k: string]: unknown;
 }
 /**
@@ -367,6 +383,8 @@ export interface Warning {
   severity: Severity;
   message: Message;
   affects_stop_index?: AffectsStopIndex;
+  affects_instance_id?: AffectsInstanceId;
+  code?: Code;
   [k: string]: unknown;
 }
 /**
@@ -519,7 +537,7 @@ export interface CancelledOutcome {
  */
 export interface ErrorOutcome {
   outcome_type?: OutcomeType3;
-  code: Code;
+  code: Code1;
   message: Message1;
   [k: string]: unknown;
 }
