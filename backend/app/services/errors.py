@@ -58,6 +58,10 @@ class NoRouteError(Exception):
         self.to_name = to_name
 
 
+class ArrivalUnknownError(Exception):
+    """The routing response lacked the documented timing needed for an arrival."""
+
+
 class QuotaExceededError(Exception):
     """A provider quota or the shared daily provider budget was exhausted."""
 

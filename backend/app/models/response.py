@@ -190,6 +190,7 @@ class ErrorResponse(BaseModel):
 
 PlanFailureReason: TypeAlias = Literal[
     "no_route",
+    "arrival_unknown",
     "provider_temporary",
     "quota_exceeded",
     "provider_capacity",

@@ -8,6 +8,7 @@ import type { VFailedLeg, VKnownStop, VPlanResult, VPlannedLeg, VTimelineItem } 
 
 const FAILURE_TEXT: Record<string, string> = {
   no_route: "No route was found for this journey at that time.",
+  arrival_unknown: "Google's answer didn't say when you'd arrive (for example, the final walk had no time), so later times are unknown.",
   provider_temporary: "The routing service didn't respond for this journey.",
   quota_exceeded: "Today's routing allowance ran out before this journey.",
   provider_capacity: "The routing service was busy for this journey.",

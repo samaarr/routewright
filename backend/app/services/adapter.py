@@ -27,6 +27,7 @@ from app.services.area import Viewport
 from app.services.autocomplete import Suggestion, SuggestionKind, fetch_suggestions
 from app.services.engine import RoutingResult
 from app.services.errors import (
+    ArrivalUnknownError,
     NoRouteError,
     PlaceRole,
     ProviderCapacityError,
@@ -96,6 +97,8 @@ class GoogleRoutesAdapter:
                 )
         except HTTPException as exc:
             raise _admission_error(exc) from exc
+        except directions.ArrivalUnknownError as exc:
+            raise ArrivalUnknownError(str(exc)) from exc
         except directions.DirectionsError as exc:
             msg = str(exc).lower()
             if "no route" in msg:

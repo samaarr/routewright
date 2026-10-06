@@ -15,9 +15,10 @@ independently testable:
   D10). Calls are counted when issued; failed/cancelled calls stay counted.
 - ``journey_seconds``: total journey time = sum over legs of (arrival -
   planned departure), so waiting for the first vehicle and transfers are
-  included (transit arrivals come from scheduled stop times). The final walk
-  after the last transit step is not represented by the provider parsing;
-  the same limitation applies to both orders.
+  included. A transit arrival is the last ride's scheduled arrival plus the
+  documented staticDuration of the final walk to the destination
+  (directions._extract_scheduled_times); if that is undocumented the leg
+  fails as arrival_unknown, so no comparison is made on invented times.
 - ``decide``: recommend only when both runs are complete, the candidate has
   no hours-disqualifying visit (known closure on arrival with a positive
   stay), pins and durations are intact, and the exact saving is >= 300 s.

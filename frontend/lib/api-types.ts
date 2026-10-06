@@ -59,6 +59,7 @@ export type FromName1 = string;
 export type ToName1 = string;
 export type FailureReason =
   | "no_route"
+  | "arrival_unknown"
   | "provider_temporary"
   | "quota_exceeded"
   | "provider_capacity"
@@ -95,6 +96,7 @@ export type Timeline1 = (KnownStop | PlannedLeg | FailedLeg | UnknownStop)[];
 export type FailedAtLegIndex = number;
 export type FailureReason1 =
   | "no_route"
+  | "arrival_unknown"
   | "provider_temporary"
   | "quota_exceeded"
   | "provider_capacity"
@@ -127,6 +129,7 @@ export type ResultType3 = "refresh_partial";
 export type FailedAtLegIndex1 = number;
 export type FailureReason2 =
   | "no_route"
+  | "arrival_unknown"
   | "provider_temporary"
   | "quota_exceeded"
   | "provider_capacity"

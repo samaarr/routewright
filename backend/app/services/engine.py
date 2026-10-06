@@ -32,6 +32,7 @@ from app.models.response import (
     UnknownStop,
 )
 from app.services.errors import (
+    ArrivalUnknownError,
     NoRouteError,
     PlaceRole,
     ProviderCapacityError,
@@ -383,6 +384,11 @@ async def _route_sequence(
         except NoRouteError:
             failure_reason = "no_route"
             failure_message = f"No {mode} route found from {stop.name!r} to {next_stop.name!r}."
+        except ArrivalUnknownError:
+            failure_reason = "arrival_unknown"
+            failure_message = (
+                "The routing response didn't include enough timing to know when you'd arrive."
+            )
         except ProviderTemporaryError:
             failure_reason = "provider_temporary"
             failure_message = "Routing service temporarily unavailable."

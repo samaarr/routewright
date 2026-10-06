@@ -135,10 +135,14 @@ async def test_fetch_leg_transit_with_bus_line() -> None:
                             {
                                 "travelMode": "TRANSIT",
                                 "transitDetails": {
-                                    "transitLine": {"name": "Phibsborough", "nameShort": "47"}
+                                    "transitLine": {"name": "Phibsborough", "nameShort": "47"},
+                                    "stopDetails": {
+                                        "departureTime": "2026-06-01T10:35:00Z",
+                                        "arrivalTime": "2026-06-01T10:45:00Z",
+                                    },
                                 },
                             },
-                            {"travelMode": "WALK"},
+                            {"travelMode": "WALK", "staticDuration": "180s"},
                         ]
                     }
                 ],
@@ -247,14 +251,15 @@ def test_extract_scheduled_times_uses_transit_step_times() -> None:
                             }
                         },
                     },
-                    {"travelMode": "WALK"},
+                    {"travelMode": "WALK", "staticDuration": "240s"},
                 ]
             }
         ]
     }
     actual_depart, actual_arrive = _extract_scheduled_times(route, depart_at, 1260)
     assert actual_depart == datetime(2026, 5, 18, 12, 14, tzinfo=timezone.utc)
-    assert actual_arrive == datetime(2026, 5, 18, 12, 35, tzinfo=timezone.utc)
+    # Alight 12:35 + documented 240 s walk to the destination.
+    assert actual_arrive == datetime(2026, 5, 18, 12, 39, tzinfo=timezone.utc)
 
 
 def test_extract_scheduled_times_falls_back_without_transit_steps() -> None:
@@ -287,7 +292,7 @@ async def test_fetch_leg_transit_uses_scheduled_times() -> None:
                                     },
                                 },
                             },
-                            {"travelMode": "WALK"},
+                            {"travelMode": "WALK", "staticDuration": "300s"},
                         ]
                     }
                 ],
@@ -307,5 +312,75 @@ async def test_fetch_leg_transit_uses_scheduled_times() -> None:
         )
 
     assert result.depart_at == datetime(2026, 5, 18, 12, 14, tzinfo=timezone.utc)
-    assert result.arrive_at == datetime(2026, 5, 18, 12, 35, tzinfo=timezone.utc)
+    assert result.arrive_at == datetime(2026, 5, 18, 12, 40, tzinfo=timezone.utc)  # + 5 min walk
     assert result.transit_line == "23"
+
+
+# ---------------------------------------------------------------------------
+# Destination arrival includes the documented final walk (no invented time)
+# ---------------------------------------------------------------------------
+
+_T = datetime(2026, 5, 18, 12, 0, tzinfo=timezone.utc)
+
+
+def _ride(dep: str, arr: str | None) -> dict:
+    stop: dict = {"departureTime": f"2026-05-18T{dep}:00Z"}
+    if arr is not None:
+        stop["arrivalTime"] = f"2026-05-18T{arr}:00Z"
+    return {"travelMode": "TRANSIT", "transitDetails": {"stopDetails": stop}}
+
+
+def _walk(seconds: int | None) -> dict:
+    return {"travelMode": "WALK"} | (
+        {"staticDuration": f"{seconds}s"} if seconds is not None else {}
+    )
+
+
+def test_final_walk_after_last_ride_is_added_once() -> None:
+    """Walks before/between rides are already inside the scheduled times; only
+    steps after the LAST ride are added."""
+    route = {
+        "legs": [
+            {
+                "steps": [
+                    _walk(300),
+                    _ride("12:10", "12:20"),
+                    _walk(240),
+                    _ride("12:30", "12:45"),
+                    _walk(120),
+                    _walk(60),
+                ]
+            }
+        ]
+    }
+    _, arrive = _extract_scheduled_times(route, _T, 9999)
+    assert arrive == datetime(2026, 5, 18, 12, 48, tzinfo=timezone.utc)  # 12:45 + 120 s + 60 s
+
+
+def test_no_final_walk_arrives_at_alighting() -> None:
+    route = {"legs": [{"steps": [_walk(300), _ride("12:10", "12:20")]}]}
+    assert _extract_scheduled_times(route, _T, 9999)[1] == datetime(
+        2026, 5, 18, 12, 20, tzinfo=timezone.utc
+    )
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [
+        [_ride("12:10", "12:20"), _walk(None)],  # final walk without a documented duration
+        [_ride("12:10", None), _walk(60)],  # last ride without an arrival time
+        [_ride("12:10", "12:20"), _ride("12:25", None)],  # earlier ride's time must not be reused
+        [_ride("11:40", "11:50")],  # arrival before the requested departure
+    ],
+)
+def test_undocumented_arrival_is_unknown_not_invented(steps: list[dict]) -> None:
+    from app.services.directions import ArrivalUnknownError
+
+    with pytest.raises(ArrivalUnknownError):
+        _extract_scheduled_times({"legs": [{"steps": steps}]}, _T, 600)
+
+
+def test_transit_field_mask_requests_step_durations() -> None:
+    from app.services.directions import _FIELD_MASK_TRANSIT
+
+    assert "routes.legs.steps.staticDuration" in _FIELD_MASK_TRANSIT

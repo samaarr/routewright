@@ -47,6 +47,8 @@ _FIELD_MASK_TRANSIT = (
     + ",routes.legs.steps.transitDetails.transitLine.nameShort"
     + ",routes.legs.steps.transitDetails.transitLine.vehicle.type"
     + ",routes.legs.steps.travelMode"
+    # Needed for the walk from the last transit stop to the destination.
+    + ",routes.legs.steps.staticDuration"
 )
 
 
@@ -69,6 +71,14 @@ class LegResult:
 
 class DirectionsError(Exception):
     """Raised when the Routes API call fails or returns no usable route."""
+
+
+class ArrivalUnknownError(DirectionsError):
+    """The response does not document enough timing to know the arrival.
+
+    E.g. the final transit step has no arrivalTime, or a step after it (the
+    walk to the destination) has no staticDuration. No duration is invented.
+    """
 
 
 async def fetch_leg(
@@ -216,35 +226,61 @@ def _format_duration(seconds: int) -> str:
     return f"{hours} hr {mins} min"
 
 
+def _parse_timestamp(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise ArrivalUnknownError("Provider response has no usable timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ArrivalUnknownError("Provider returned an invalid timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ArrivalUnknownError("Provider returned a timestamp without an offset")
+    return parsed
+
+
 def _extract_scheduled_times(
     route: dict[str, Any], depart_at: datetime, duration_seconds: int
 ) -> tuple[datetime, datetime]:
-    """Return (depart_at, arrive_at) from scheduled transit stop times.
+    """Return (first boarding, arrival at the destination) for a transit route.
 
-    Scans all TRANSIT steps: the first boarding step's departureTime becomes
-    leg.depart_at; the last alighting step's arrivalTime becomes leg.arrive_at.
-    Falls back to (depart_at, depart_at + duration_seconds) when the response
-    has no transitDetails — this covers pure-walking transit legs and any API
-    response where scheduled times are absent.
+    Documented response semantics (computeRoutes reference / transit-route
+    guide, verified 2026-10-06): a transit route's legs contain steps; walking
+    to, from and between stations appears as steps with travelMode WALK, each
+    with ``staticDuration`` ("duration of travel through this step"; it
+    "might not have a value"). TRANSIT steps carry
+    ``transitDetails.stopDetails.departureTime`` / ``arrivalTime``.
+
+    Arrival at the destination = the LAST transit step's arrivalTime plus the
+    staticDuration of every step after it (the final walk). Walks before or
+    between rides are already reflected in the scheduled times. If the last
+    ride has no arrivalTime, or any later step has no staticDuration, the
+    arrival is unknown: ArrivalUnknownError, never an invented duration.
+    A route with no transit step (walk-only) arrives at depart_at + the
+    route's documented duration.
     """
-    first_depart: datetime | None = None
-    last_arrive: datetime | None = None
+    steps = [s for leg in route.get("legs") or [] for s in (leg.get("steps") or [])]
+    transit = [i for i, s in enumerate(steps) if s.get("travelMode") == "TRANSIT"]
+    if not transit:
+        return depart_at, depart_at + timedelta(seconds=duration_seconds)
 
-    for leg in route.get("legs", []):
-        for step in leg.get("steps", []):
-            if step.get("travelMode") != "TRANSIT":
-                continue
-            stop_details = (step.get("transitDetails") or {}).get("stopDetails") or {}
-            dep_str = stop_details.get("departureTime")
-            arr_str = stop_details.get("arrivalTime")
-            if dep_str and first_depart is None:
-                first_depart = datetime.fromisoformat(dep_str.replace("Z", "+00:00"))
-            if arr_str:
-                last_arrive = datetime.fromisoformat(arr_str.replace("Z", "+00:00"))
+    def stop_details(step: dict[str, Any]) -> dict[str, Any]:
+        details: dict[str, Any] = (step.get("transitDetails") or {}).get("stopDetails") or {}
+        return details
 
-    if first_depart is not None and last_arrive is not None:
-        return first_depart, last_arrive
-    return depart_at, depart_at + timedelta(seconds=duration_seconds)
+    first_dep_raw = stop_details(steps[transit[0]]).get("departureTime")
+    first_depart = _parse_timestamp(first_dep_raw) if first_dep_raw else depart_at
+    arrival = _parse_timestamp(stop_details(steps[transit[-1]]).get("arrivalTime"))
+    for step in steps[transit[-1] + 1 :]:
+        raw = step.get("staticDuration")
+        if raw is None:
+            raise ArrivalUnknownError("Final walking step has no documented duration")
+        try:
+            arrival += timedelta(seconds=_parse_duration(raw))
+        except DirectionsError as exc:
+            raise ArrivalUnknownError("Final walking step has an invalid duration") from exc
+    if arrival < depart_at:
+        raise ArrivalUnknownError("Provider arrival precedes the requested departure")
+    return first_depart, arrival
 
 
 def _extract_transit_line_name(route: dict[str, Any]) -> str | None:
