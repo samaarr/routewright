@@ -24,7 +24,7 @@ from app.services.geocoder import (
     opening_hours_from_json_list,
     opening_hours_to_json_list,
 )
-from app.services.hours import compute_hours_status
+from app.services.hours import compute_hours_status, is_disqualifying_for_optimisation
 
 # Trip timezone — UTC+1 (Dublin IST used in tests for concreteness).
 _IST = timezone(timedelta(hours=1))
@@ -307,6 +307,114 @@ def test_status_closed_on_arrival_utc_arrival_bst_city() -> None:
     assert status == "closed_on_arrival"
     assert detail is not None
     assert detail.opens_at == "10:00"
+
+
+# ---------------------------------------------------------------------------
+# Arrival exactly at closing time (D42 boundary)
+# ---------------------------------------------------------------------------
+
+
+def test_status_arrival_exactly_at_closing() -> None:
+    """Arriving at precisely the close time is treated as closed_on_arrival.
+
+    The active-period condition is p_open <= arrive_abs < p_close (strict less-than),
+    so the place is no longer open at the close minute itself.
+    """
+    hours = [_period(1, 9, 0, 1, 17)]  # Mon 09:00-17:00
+    # Arrive exactly at 17:00
+    status, detail = compute_hours_status(hours, _monday(17), _monday(17, 30), _TZ)
+    assert status == "closed_on_arrival"
+    # Next opening is Monday 09:00 (next week — only Monday hours available)
+    assert detail is not None
+    assert detail.opens_at == "09:00"
+
+
+# ---------------------------------------------------------------------------
+# hours_source propagation (D43)
+# ---------------------------------------------------------------------------
+
+
+def test_hours_source_none_by_default() -> None:
+    """hours_source defaults to None when not supplied."""
+    hours = [_period(1, 9, 0, 1, 17)]
+    _, detail = compute_hours_status(hours, _monday(10), _monday(11), _TZ)
+    assert detail is not None
+    assert detail.hours_source is None
+
+
+def test_hours_source_weekly_propagated_open() -> None:
+    """hours_source='weekly' propagates to HoursDetail for an open stop."""
+    hours = [_period(1, 9, 0, 1, 17)]
+    _, detail = compute_hours_status(hours, _monday(10), _monday(11), _TZ, hours_source="weekly")
+    assert detail is not None
+    assert detail.hours_source == "weekly"
+
+
+def test_hours_source_weekly_propagated_closed_on_arrival() -> None:
+    """hours_source='weekly' propagates to HoursDetail for closed_on_arrival."""
+    hours = [_period(1, 9, 0, 1, 17)]
+    _, detail = compute_hours_status(hours, _monday(8), _monday(9), _TZ, hours_source="weekly")
+    assert detail is not None
+    assert detail.hours_source == "weekly"
+
+
+def test_hours_source_weekly_propagated_closes_during_visit() -> None:
+    """hours_source='weekly' propagates to HoursDetail for closes_during_visit."""
+    hours = [_period(1, 9, 0, 1, 17)]
+    _, detail = compute_hours_status(hours, _monday(16), _monday(18), _TZ, hours_source="weekly")
+    assert detail is not None
+    assert detail.hours_source == "weekly"
+
+
+def test_hours_source_date_specific_propagated() -> None:
+    """hours_source='date_specific' propagates (reserved for currentOpeningHours)."""
+    hours = [_period(1, 9, 0, 1, 17)]
+    _, detail = compute_hours_status(
+        hours, _monday(10), _monday(11), _TZ, hours_source="date_specific"
+    )
+    assert detail is not None
+    assert detail.hours_source == "date_specific"
+
+
+def test_hours_source_not_in_detail_for_24h_place() -> None:
+    """24-hour place returns (open, None) — no HoursDetail even with hours_source."""
+    hours = [OpeningPeriod(open_day=0, open_minutes=0, close_day=None, close_minutes=None)]
+    status, detail = compute_hours_status(hours, _monday(3), _monday(4), _TZ, hours_source="weekly")
+    assert status == "open"
+    assert detail is None  # 24h places never carry detail
+
+
+# ---------------------------------------------------------------------------
+# is_disqualifying_for_optimisation (D42, D24)
+# ---------------------------------------------------------------------------
+
+
+def test_disqualifying_closed_on_arrival_positive_stay() -> None:
+    """closed_on_arrival + positive stay → disqualifying (D42)."""
+    assert is_disqualifying_for_optimisation("closed_on_arrival", stay_minutes=60) is True
+
+
+def test_not_disqualifying_closed_on_arrival_zero_stay() -> None:
+    """closed_on_arrival + zero stay → warning only (D24 — zero-minute anchor stop)."""
+    assert is_disqualifying_for_optimisation("closed_on_arrival", stay_minutes=0) is False
+
+
+def test_not_disqualifying_closes_during_visit() -> None:
+    """closes_during_visit → warning only, not disqualifying (D42)."""
+    assert is_disqualifying_for_optimisation("closes_during_visit", stay_minutes=90) is False
+
+
+def test_not_disqualifying_closes_soon() -> None:
+    assert is_disqualifying_for_optimisation("closes_soon", stay_minutes=60) is False
+
+
+def test_not_disqualifying_open() -> None:
+    assert is_disqualifying_for_optimisation("open", stay_minutes=60) is False
+
+
+def test_not_disqualifying_unknown() -> None:
+    """Unknown hours never block optimisation — absence of data is not a conflict."""
+    assert is_disqualifying_for_optimisation("unknown", stay_minutes=60) is False
 
 
 # ---------------------------------------------------------------------------

@@ -262,6 +262,22 @@
           ],
           "default": null,
           "title": "Opens At"
+        },
+        "hours_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "date_specific",
+                "weekly"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hours Source"
         }
       },
       "title": "HoursDetail",

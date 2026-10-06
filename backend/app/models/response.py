@@ -13,6 +13,7 @@ from typing import Annotated, Literal, TypeAlias
 from pydantic import BaseModel, Field
 
 WarningSeverity = Literal["info", "warning", "error"]
+HoursSource: TypeAlias = Literal["date_specific", "weekly"]
 
 # Status of a stop's opening hours relative to its planned arrival/departure.
 # "unknown" means no hours data was available — never implies closed.
@@ -35,6 +36,9 @@ class HoursDetail(BaseModel):
 
     closes_at: str | None = None  # e.g. "17:00" — for open/closes_during_visit/closes_soon
     opens_at: str | None = None  # e.g. "14:00" — for closed_on_arrival
+    hours_source: HoursSource | None = (
+        None  # "weekly" for regularOpeningHours; "date_specific" for currentOpeningHours
+    )
 
 
 class StopItem(BaseModel):

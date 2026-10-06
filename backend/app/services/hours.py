@@ -21,7 +21,7 @@ Conversion: google_day = (python_weekday + 1) % 7
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.models.response import HoursDetail, HoursStatus
+from app.models.response import HoursDetail, HoursSource, HoursStatus
 from app.services.geocoder import OpeningPeriod
 
 # Minutes in a full week — used to normalise across the Sunday/Saturday boundary.
@@ -63,6 +63,7 @@ def compute_hours_status(
     arrive_at: datetime,
     depart_at: datetime,
     city_timezone: str = "UTC",
+    hours_source: HoursSource | None = None,
 ) -> tuple[HoursStatus, HoursDetail | None]:
     """Compute the hours status for a stop at its planned arrival time.
 
@@ -80,6 +81,10 @@ def compute_hours_status(
     Google opening hours are stored in venue-local time; arrive_at/depart_at may
     be UTC. city_timezone (IANA name) converts them to local before comparison.
     All times in HoursDetail are HH:MM in the trip-city's local timezone.
+
+    hours_source: "weekly" when derived from regularOpeningHours (typical schedule);
+        "date_specific" when derived from currentOpeningHours (date-specific overrides).
+        Passed through to HoursDetail so callers can qualify display text (D43).
     """
     if not opening_hours:
         return "unknown", None
@@ -139,17 +144,35 @@ def compute_hours_status(
                 next_open_abs = p_open
 
         opens_at = _fmt_hm(next_open_abs) if next_open_abs is not None else None
-        return "closed_on_arrival", HoursDetail(opens_at=opens_at)
+        return "closed_on_arrival", HoursDetail(opens_at=opens_at, hours_source=hours_source)
 
     # Place is open on arrival.
     close_str = _fmt_hm(active_close)
 
     if depart_abs > active_close:
         # Stay crosses the closing time.
-        return "closes_during_visit", HoursDetail(closes_at=close_str)
+        return "closes_during_visit", HoursDetail(closes_at=close_str, hours_source=hours_source)
 
     if active_close - arrive_abs <= CLOSES_SOON_THRESHOLD:
         # Closes within the threshold after arrival, but stay ends before close.
-        return "closes_soon", HoursDetail(closes_at=close_str)
+        return "closes_soon", HoursDetail(closes_at=close_str, hours_source=hours_source)
 
-    return "open", HoursDetail(closes_at=close_str)
+    return "open", HoursDetail(closes_at=close_str, hours_source=hours_source)
+
+
+def is_disqualifying_for_optimisation(
+    status: HoursStatus,
+    stay_minutes: int,
+) -> bool:
+    """Return True if an hours conflict disqualifies a stop as an optimisation candidate.
+
+    Rules (D42, D24):
+    - closed_on_arrival + positive stay duration → disqualifying (D42).
+      The stop is genuinely closed when you arrive; a non-zero visit would be wasted.
+    - closes_during_visit → warning only, not disqualifying (D42).
+      The visit starts open; the user accepted the duration.
+    - Zero-minute stop (first/last anchor) → any conflict is warning-only (D24).
+      First/last stops are departure/arrival points; their hours don't constrain ordering.
+    - open / closes_soon / unknown → not disqualifying.
+    """
+    return status == "closed_on_arrival" and stay_minutes > 0

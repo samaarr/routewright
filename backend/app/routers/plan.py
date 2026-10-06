@@ -179,7 +179,7 @@ async def plan(request: Request, req: PlanRequest) -> Plan:
         depart_at = cursor + timedelta(minutes=stays[i])
 
         h_status, h_detail = compute_hours_status(
-            place.opening_hours, arrive_at, depart_at, trip_timezone
+            place.opening_hours, arrive_at, depart_at, trip_timezone, hours_source="weekly"
         )
         timeline.append(
             StopItem(

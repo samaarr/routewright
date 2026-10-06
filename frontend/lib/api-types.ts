@@ -26,6 +26,7 @@ export type MapUrl = string;
 export type HoursStatus = "open" | "closed_on_arrival" | "closes_during_visit" | "closes_soon" | "unknown";
 export type ClosesAt = string | null;
 export type OpensAt = string | null;
+export type HoursSource = ("date_specific" | "weekly") | null;
 export type ItemType1 = "leg";
 /**
  * instance_id of the origin stop.
@@ -297,6 +298,7 @@ export interface KnownStop {
 export interface HoursDetail {
   closes_at?: ClosesAt;
   opens_at?: OpensAt;
+  hours_source?: HoursSource;
   [k: string]: unknown;
 }
 /**
