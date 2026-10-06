@@ -94,7 +94,10 @@ export default function PlannerPage() {
     );
   }
 
+  // One operation at a time: starting a new one aborts the previous request
+  // (the server treats it as a disconnect and stops further provider calls).
   function begin(): { operationId: string; signal: AbortSignal } {
+    active.current?.controller.abort();
     const operationId = uid();
     const controller = new AbortController();
     active.current = { id: operationId, controller };
@@ -103,7 +106,7 @@ export default function PlannerPage() {
 
   function startPlan() {
     const r = readiness(state);
-    if (!r.ready || state.operation.kind === "running") return;
+    if (!r.ready) return;
     const { operationId, signal } = begin();
     dispatch({ type: "planStarted", operationId });
     focusTimeline();

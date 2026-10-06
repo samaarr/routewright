@@ -559,6 +559,19 @@ describe("v2 planner (browser)", () => {
     assert.match(await stale.getAttribute("title"), /Press Plan first/);
   });
 
+  test("starting a plan while a refresh runs cancels the refresh", async () => {
+    await planThreeStops();
+    refreshMode = "hang";
+    const aborted = page.waitForEvent("requestfailed", (r) => r.url().endsWith("/api/v2/refresh/stream"));
+    await refreshButton(1).click();
+    await page.getByTestId("previous-timings").waitFor();
+    await planButton().click();
+    await aborted; // the superseded refresh request was aborted
+    await page.getByTestId("current-result").waitFor();
+    assert.equal(count("/api/v2/plan/stream"), 2);
+    assert.equal(await page.getByTestId("previous-timings").count(), 0);
+  });
+
   test("optimisation stays unavailable; legacy endpoints unused; desktop tabs preserved", async () => {
     await planThreeStops();
     await page.getByRole("button", { name: "Map", exact: true }).filter({ visible: true }).click();

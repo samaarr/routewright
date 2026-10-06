@@ -71,9 +71,9 @@ test("Plan only starts with a fully selected, valid draft", () => {
   const notReady = reducer(initialState(["a", "b"]), { type: "planStarted", operationId: OP });
   assert.equal(notReady.operation.kind, "idle");
   assert.equal(started().operation.kind, "running");
-  // A second Plan while running does not start another operation.
+  // A second Plan while running supersedes the first (Step 8 #9).
   const twice = reducer(started(), { type: "planStarted", operationId: "op-2" });
-  assert.ok(twice.operation.kind === "running" && twice.operation.operationId === OP);
+  assert.ok(twice.operation.kind === "running" && twice.operation.operationId === "op-2");
 });
 
 test("events for other operations or revisions are ignored", () => {

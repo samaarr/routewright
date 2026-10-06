@@ -208,7 +208,7 @@ export default function PlanFormV2({ state, dispatch, onPlan, onCancel }: Props)
       className="space-y-5"
       onSubmit={(e) => {
         e.preventDefault();
-        if (!running) onPlan();
+        onPlan();
       }}
       noValidate
     >
@@ -355,7 +355,7 @@ export default function PlanFormV2({ state, dispatch, onPlan, onCancel }: Props)
       </fieldset>
 
       <div className="space-y-2">
-        {running ? (
+        {running && (
           <div className="flex items-center gap-2">
             <p role="status" aria-live="polite" className="flex-1 text-sm text-text-secondary" data-testid="plan-progress">
               {progress}
@@ -368,11 +368,15 @@ export default function PlanFormV2({ state, dispatch, onPlan, onCancel }: Props)
               Cancel
             </button>
           </div>
-        ) : (
-          <button type="submit" disabled={!ready.ready} className="btn-primary disabled:cursor-not-allowed disabled:opacity-50">
-            Plan ↗
-          </button>
         )}
+        <button
+          type="submit"
+          disabled={!ready.ready}
+          title={running ? "Starts a new plan and stops the current update" : undefined}
+          className="btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Plan ↗
+        </button>
         {!running && !ready.ready && ready.reasons.length > 0 && (
           <ul className="space-y-0.5 text-xs text-text-muted" data-testid="plan-blockers">
             {ready.reasons.map((r) => (

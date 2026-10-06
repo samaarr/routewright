@@ -103,6 +103,7 @@ export type Action =
   | { type: "occurrenceChanged"; occurrence: 1 | 2 | null }
   | { type: "modeChanged"; mode: Mode }
   | { type: "pinToggled"; end: "first" | "last" }
+  // planStarted / refreshStarted replace any running operation (Step 8 #9).
   | { type: "planStarted"; operationId: string }
   | { type: "refreshStarted"; operationId: string; legIndex: number }
   | { type: "streamEvent"; operationId: string; event: VStreamEvent }
@@ -234,7 +235,9 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
       };
 
     case "planStarted":
-      if (state.operation.kind === "running" || !readiness(state).ready) return state;
+      // Starting any operation supersedes a running one (its events are then
+      // rejected by operation ID; the page aborts its request).
+      if (!readiness(state).ready) return state;
       return {
         ...state,
         notice: null,
@@ -418,9 +421,10 @@ function endRefresh(
   }
 }
 
-/** A refresh target, only for a current (not stale) plan while nothing runs. */
+/** A refresh target, only for a current (not stale) plan. Starting a refresh
+ *  supersedes any running operation. */
 export function refreshableTarget(state: PlannerState, legIndex: number): RefreshTarget | null {
-  if (state.operation.kind !== "idle" || !state.result || resultIsStale(state)) return null;
+  if (!state.result || resultIsStale(state)) return null;
   if (!readiness(state).ready) return null;
   return refreshTarget(state.result.plan, legIndex);
 }

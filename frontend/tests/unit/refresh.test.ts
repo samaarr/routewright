@@ -202,3 +202,23 @@ test("plan and refresh outcomes cannot cross streams", async () => {
   const asRefresh = await readPlanStream(ndjsonStream([start, refreshTerminal]), { ...id, kind: "refresh" }, () => {});
   assert.equal(asRefresh.kind, "terminal");
 });
+
+test("starting a plan supersedes a running refresh; its late result is ignored", () => {
+  const refreshing = reducer(planned(), { type: "refreshStarted", operationId: "op-r", legIndex: 1 });
+  const planning = reducer(refreshing, { type: "planStarted", operationId: "op-p" });
+  assert.ok(planning.operation.kind === "running" && planning.operation.purpose === "plan" && planning.operation.operationId === "op-p");
+  const late = reducer(planning, { type: "streamEnded", operationId: "op-r", end: refreshEnd(refreshing, { outcome_type: "refresh", result: { ...REFRESH_OK, input_revision: refreshing.revision } }) });
+  assert.equal(late, planning);
+});
+
+test("starting a refresh supersedes a running plan", () => {
+  const planning = reducer(planned(), { type: "planStarted", operationId: "op-p" });
+  const refreshing = reducer(planning, { type: "refreshStarted", operationId: "op-r", legIndex: 1 });
+  assert.ok(refreshing.operation.kind === "running" && refreshing.operation.purpose === "refresh");
+  const lateEvent = reducer(refreshing, {
+    type: "streamEvent",
+    operationId: "op-p",
+    event: streamEvent({ operation_id: "op-p", input_revision: refreshing.revision, type: "phase_start", phase: "routing" }),
+  });
+  assert.equal(lateEvent, refreshing);
+});
