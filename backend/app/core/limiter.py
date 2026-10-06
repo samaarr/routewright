@@ -1,5 +1,6 @@
 """Client identity is derived only through explicitly trusted proxy networks."""
 
+import logging
 from ipaddress import ip_address, ip_network
 from typing import Any, cast
 
@@ -35,6 +36,40 @@ def request_cost(request: Request) -> int:
     whitelist = {v.strip() for v in settings.rate_limit_whitelist_ips.split(",") if v.strip()}
     return 0 if _client_ip(request) in whitelist else 1
 
+
+_EXCEEDED = "ratelimit %s (%s) exceeded at endpoint: %s"
+
+
+def _redact_addresses(text: str) -> str:
+    def scrub(token: str) -> str:
+        try:
+            ip_address(token.strip("()[],;'\""))
+        except ValueError:
+            return token
+        return "[redacted]"
+
+    return " ".join(scrub(token) for token in text.split(" "))
+
+
+class _ClientKeyFilter(logging.Filter):
+    """Keep client identities out of slowapi's log records (D-9).
+
+    slowapi logs the limiter key (the client IP) when a limit is exceeded;
+    that argument is dropped. Any other slowapi record is rendered and has
+    IP-address tokens redacted, in case a future version logs the key elsewhere.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.msg == _EXCEEDED and isinstance(record.args, tuple) and len(record.args) == 3:
+            record.msg = "ratelimit %s exceeded at endpoint: %s"
+            record.args = (record.args[0], record.args[2])
+        else:
+            record.msg = _redact_addresses(record.getMessage())
+            record.args = None
+        return True
+
+
+logging.getLogger("slowapi").addFilter(_ClientKeyFilter())
 
 limiter = Limiter(
     key_func=_client_ip,

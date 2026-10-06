@@ -148,7 +148,7 @@ Recommended per Google's API security best practices (VERIFIED docs):
 | D-5 | Map ID | `DEMO_MAP_ID` vs a project Map ID (same project as the browser key) | create a project Map ID |
 | D-6 | Push and CI | push the 27 local commits and require green CI before deploy | required; needs explicit push approval |
 | D-7 | Legacy endpoints (`/api/plan`, `/api/optimise`, `/api/refresh-leg`) | still served; the frontend no longer calls them; they share the limits and budget | retirement still awaits approval; either approve retirement or accept exposure for the test |
-| D-9 | **Client IP in 429 log line** (found 2026-10-06) | slowapi logs `WARNING:slowapi:ratelimit 10 per 1 minute (<client key>) exceeded at endpoint: plan-v2` — the key is the client IP in production. Fix: raise the `slowapi` logger level / filter in the app (small change + test) vs accept (Railway HTTP logs already hold `@srcIp`) | fix before deployment, as a separate approved change; the local container check did not exercise a 429 |
+| D-9 | **Client IP in 429 log line** (found 2026-10-06) | slowapi logs `WARNING:slowapi:ratelimit 10 per 1 minute (<client key>) exceeded at endpoint: plan-v2` — the key is the client IP in production. Fix: raise the `slowapi` logger level / filter in the app (small change + test) vs accept (Railway HTTP logs already hold `@srcIp`) | **FIXED** (separate commit): a filter on the `slowapi` logger drops the key from that message and redacts IP tokens in any other slowapi record; `tests/test_ratelimit_logging.py` drives the real limiter with IPv4/IPv6 clients |
 | D-8 | Frontend domain | `<project>.vercel.app` vs custom domain | decide first — needed for `ALLOWED_ORIGINS` and the browser-key referrer |
 
 Monthly free-tier enforcement stays deferred: **the deployment may be used for
@@ -349,7 +349,7 @@ live CSP map, actual HTTPS/HSTS headers, client identity behaviour, Redis
 eviction/persistence, live walking-step durations, billing SKU mapping,
 actual log retention.
 
-**Defect found:** 429 log line contains the client key/IP (D-9).
+**Defect found and fixed locally:** 429 log line contained the client key/IP (D-9).
 
 **Deferred:** monthly free-tier enforcement (blocks a free-tier-safe public
 release); legacy endpoint retirement; D36 selection limits; D46 permitted use

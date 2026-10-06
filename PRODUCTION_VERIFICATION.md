@@ -142,4 +142,6 @@ logs contained no client IP (the spoofed `X-Forwarded-For` and the Docker
 peer `172.17.0.1` were absent; only uvicorn's `0.0.0.0` bind address).
 Scope: health and rejected-plan requests only. A rate-limited request
 (429) logs slowapi's warning with the client key — the client IP in
-production (found 2026-10-06; DEPLOYMENT_PLAN.md D-9).
+production (found 2026-10-06; DEPLOYMENT_PLAN.md D-9). Fixed: the slowapi
+logger filter removes it; regression test `tests/test_ratelimit_logging.py`.
+Re-check the 429 log line on Railway.

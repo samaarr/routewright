@@ -926,8 +926,10 @@ Nothing deployed, pushed or changed. Key findings:
 - **D-1 (blocker for public use):** Railway documents `X-Real-IP` for the
   client IP and publishes no proxy range; with `TRUSTED_PROXY_IPS` empty
   every visitor shares one rate-limit identity.
-- **D-9 (defect):** slowapi's 429 warning logs the client key (the client IP
-  in production); reproduced locally. Not fixed (planning-only task).
+- **D-9 (defect, FIXED):** slowapi's 429 warning logged the client key (the
+  client IP in production). A `slowapi` logger filter drops it and redacts IP
+  tokens in other slowapi records; regression test drives the real limiter
+  (IPv4 + IPv6) and failed before the fix. Backend 426 passed, 4 skipped.
 - D-2: Railway volumes need root (`RAILWAY_RUN_UID=0`) for a non-root image
   → proposal: ephemeral cache, no volume.
 - D-4: server-key IP restriction needs Railway Pro static IPs.
