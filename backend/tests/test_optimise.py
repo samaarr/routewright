@@ -4,10 +4,7 @@ Stage 1: pure distance via OR-Tools TSP.
 Stage 2: opening-hours soft constraints via OR-Tools time dimension.
 """
 
-from datetime import datetime, timedelta, timezone
-
-import pytest
-from fastapi.testclient import TestClient
+from datetime import datetime, timezone
 
 from app.services.geocoder import GeocodedPlace, OpeningPeriod
 from app.services.optimise import (
@@ -63,24 +60,6 @@ _LONDON = [
     _place("Richmond", 51.4613, -0.3068),  # southwest
     _place("Hackney", 51.5450, -0.0553),  # northeast
 ]
-
-# Geocode mock data for the endpoint integration test
-_MOCK_PLACES: dict[str, GeocodedPlace] = {
-    "trinity college": _place("Trinity College Dublin", 53.3440, -6.2546),
-    "temple bar": _place("Temple Bar", 53.3454, -6.2672),
-    "guinness storehouse": _place("Guinness Storehouse", 53.3418, -6.2867),
-}
-_FALLBACK = _place("Unknown", 53.3440, -6.2546)
-
-
-async def _fake_geocode(
-    query: str,
-    city: str,
-    db_path: str,
-    ttl_days: int,
-    client: object = None,
-) -> GeocodedPlace:
-    return _MOCK_PLACES.get(query.strip().lower(), _FALLBACK)
 
 
 # ---------------------------------------------------------------------------
@@ -168,63 +147,6 @@ def test_london_11_stop_optimised_path_shorter() -> None:
 
 def test_optimise_max_stops_constant() -> None:
     assert 8 <= OPTIMISE_MAX_STOPS <= 12
-
-
-# ---------------------------------------------------------------------------
-# /api/optimise endpoint
-# ---------------------------------------------------------------------------
-
-
-def test_optimise_endpoint_returns_reordered_stops(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Endpoint returns stops in optimised order with before/after km stats."""
-    monkeypatch.setattr("app.routers.optimise.geocode_cached", _fake_geocode)
-
-    payload = {
-        "city": "Dublin, Ireland",
-        "stops": [
-            {"query": "Trinity College"},
-            {"query": "Temple Bar"},
-            {"query": "Guinness Storehouse"},
-        ],
-        "start_time": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
-        "mode": "transit",
-    }
-    resp = client.post("/api/optimise", json=payload)
-    assert resp.status_code == 200
-
-    data = resp.json()
-    stops = data["stops"]
-    assert len(stops) == 3
-    assert all("query" in s and "name" in s for s in stops)
-    assert "original_km" in data
-    assert "optimised_km" in data
-    assert data["optimised_km"] <= data["original_km"] + 1e-3
-
-
-def test_optimise_endpoint_two_stops_unchanged(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Two stops: order unchanged (nothing to optimise)."""
-    monkeypatch.setattr("app.routers.optimise.geocode_cached", _fake_geocode)
-
-    payload = {
-        "city": "Dublin, Ireland",
-        "stops": [
-            {"query": "Trinity College"},
-            {"query": "Temple Bar"},
-        ],
-        "start_time": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
-        "mode": "transit",
-    }
-    resp = client.post("/api/optimise", json=payload)
-    assert resp.status_code == 200
-
-    data = resp.json()
-    assert len(data["stops"]) == 2
-    assert data["stops"][0]["query"] == "Trinity College"
-    assert data["stops"][1]["query"] == "Temple Bar"
 
 
 # ---------------------------------------------------------------------------

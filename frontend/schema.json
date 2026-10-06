@@ -441,47 +441,6 @@
       "title": "ErrorOutcome",
       "type": "object"
     },
-    "ErrorResponse": {
-      "properties": {
-        "error": {
-          "title": "Error",
-          "type": "string"
-        },
-        "detail": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Detail"
-        },
-        "errors": {
-          "anyOf": [
-            {
-              "items": {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Errors"
-        }
-      },
-      "required": [
-        "error"
-      ],
-      "title": "ErrorResponse",
-      "type": "object"
-    },
     "FailedLeg": {
       "description": "A leg that could not be routed \u2014 terminates the valid timeline prefix.\n\nStops that follow a FailedLeg have unknown arrival/departure times and\nare represented as UnknownStop. There is no invented fallback duration.",
       "properties": {
@@ -664,39 +623,6 @@
       "title": "HoursDetail",
       "type": "object"
     },
-    "InfeasibilityFlag": {
-      "description": "A stop that remains hours-violated in the chosen order.\n\nReported when the solver could not schedule the stop within its opening\nhours even as a soft constraint (e.g. the stop is closed all day).\nThe frontend uses this to display a warning inline \u2014 it never blocks the\nresponse.",
-      "properties": {
-        "stop_index": {
-          "description": "Index of the stop in the output order (0-based).",
-          "title": "Stop Index",
-          "type": "integer"
-        },
-        "stop_name": {
-          "title": "Stop Name",
-          "type": "string"
-        },
-        "issue": {
-          "description": "'closed_on_arrival' or 'closes_during_visit'.",
-          "enum": [
-            "open",
-            "closed_on_arrival",
-            "closes_during_visit",
-            "closes_soon",
-            "unknown"
-          ],
-          "title": "Issue",
-          "type": "string"
-        }
-      },
-      "required": [
-        "stop_index",
-        "stop_name",
-        "issue"
-      ],
-      "title": "InfeasibilityFlag",
-      "type": "object"
-    },
     "KnownStop": {
       "description": "A stop with fully resolved coordinates and a complete schedule.",
       "properties": {
@@ -802,82 +728,6 @@
         "map_url"
       ],
       "title": "KnownStop",
-      "type": "object"
-    },
-    "LegItem": {
-      "description": "A single travel segment between two stops.",
-      "properties": {
-        "item_type": {
-          "const": "leg",
-          "default": "leg",
-          "title": "Item Type",
-          "type": "string"
-        },
-        "from_name": {
-          "title": "From Name",
-          "type": "string"
-        },
-        "to_name": {
-          "title": "To Name",
-          "type": "string"
-        },
-        "mode": {
-          "enum": [
-            "transit",
-            "walking",
-            "driving"
-          ],
-          "title": "Mode",
-          "type": "string"
-        },
-        "duration_seconds": {
-          "title": "Duration Seconds",
-          "type": "integer"
-        },
-        "distance_meters": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Distance Meters"
-        },
-        "depart_at": {
-          "format": "date-time",
-          "title": "Depart At",
-          "type": "string"
-        },
-        "arrive_at": {
-          "format": "date-time",
-          "title": "Arrive At",
-          "type": "string"
-        },
-        "summary": {
-          "description": "Human-readable summary, e.g. 'Take the 47 bus, 18 min'.",
-          "title": "Summary",
-          "type": "string"
-        },
-        "map_url": {
-          "description": "Google Maps directions deeplink.",
-          "title": "Map Url",
-          "type": "string"
-        }
-      },
-      "required": [
-        "from_name",
-        "to_name",
-        "mode",
-        "duration_seconds",
-        "depart_at",
-        "arrive_at",
-        "summary",
-        "map_url"
-      ],
-      "title": "LegItem",
       "type": "object"
     },
     "LegProgressEvent": {
@@ -1012,74 +862,6 @@
         "input_revision"
       ],
       "title": "OperationStartEvent",
-      "type": "object"
-    },
-    "OptimiseResponse": {
-      "description": "Result of POST /api/optimise \u2014 reordered stops plus path-length stats.",
-      "properties": {
-        "stops": {
-          "items": {
-            "$ref": "#/$defs/OptimisedStop"
-          },
-          "title": "Stops",
-          "type": "array"
-        },
-        "original_km": {
-          "description": "Haversine path length of the input order (km).",
-          "title": "Original Km",
-          "type": "number"
-        },
-        "optimised_km": {
-          "description": "Haversine path length after optimisation (km).",
-          "title": "Optimised Km",
-          "type": "number"
-        },
-        "infeasibility_flags": {
-          "description": "Stops that remain hours-violated in the chosen order.",
-          "items": {
-            "$ref": "#/$defs/InfeasibilityFlag"
-          },
-          "title": "Infeasibility Flags",
-          "type": "array"
-        }
-      },
-      "required": [
-        "stops",
-        "original_km",
-        "optimised_km"
-      ],
-      "title": "OptimiseResponse",
-      "type": "object"
-    },
-    "OptimisedStop": {
-      "description": "One stop in an optimised route, preserving the original query and stay override.",
-      "properties": {
-        "query": {
-          "title": "Query",
-          "type": "string"
-        },
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
-        "stay_minutes": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Stay Minutes"
-        }
-      },
-      "required": [
-        "query",
-        "name"
-      ],
-      "title": "OptimisedStop",
       "type": "object"
     },
     "PartialPlan": {
@@ -1263,71 +1045,6 @@
         "phase"
       ],
       "title": "PhaseStartEvent",
-      "type": "object"
-    },
-    "Plan": {
-      "description": "Full timeline response.",
-      "properties": {
-        "generated_at": {
-          "format": "date-time",
-          "title": "Generated At",
-          "type": "string"
-        },
-        "city": {
-          "title": "City",
-          "type": "string"
-        },
-        "mode": {
-          "enum": [
-            "transit",
-            "walking",
-            "driving"
-          ],
-          "title": "Mode",
-          "type": "string"
-        },
-        "timezone": {
-          "description": "IANA timezone for the trip city, e.g. 'Europe/London'. Derived from the first stop's coordinates. Used by the frontend to display arrival times in destination time regardless of the user's browser timezone.",
-          "title": "Timezone",
-          "type": "string"
-        },
-        "timeline": {
-          "description": "Alternating stop/leg/stop/leg/... in chronological order.",
-          "items": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/StopItem"
-              },
-              {
-                "$ref": "#/$defs/LegItem"
-              }
-            ]
-          },
-          "title": "Timeline",
-          "type": "array"
-        },
-        "overview_map_url": {
-          "description": "Google Maps URL showing all stops as a driving-mode overview.",
-          "title": "Overview Map Url",
-          "type": "string"
-        },
-        "warnings": {
-          "items": {
-            "$ref": "#/$defs/Warning"
-          },
-          "title": "Warnings",
-          "type": "array"
-        }
-      },
-      "required": [
-        "generated_at",
-        "city",
-        "mode",
-        "timezone",
-        "timeline",
-        "overview_map_url"
-      ],
-      "title": "Plan",
       "type": "object"
     },
     "PlanOutcome": {
@@ -1785,113 +1502,6 @@
         "source"
       ],
       "title": "SelectedPlace",
-      "type": "object"
-    },
-    "StopItem": {
-      "description": "A scheduled stop on the timeline.",
-      "properties": {
-        "item_type": {
-          "const": "stop",
-          "default": "stop",
-          "title": "Item Type",
-          "type": "string"
-        },
-        "query": {
-          "description": "What the user typed.",
-          "title": "Query",
-          "type": "string"
-        },
-        "name": {
-          "description": "Resolved place name from geocoder.",
-          "title": "Name",
-          "type": "string"
-        },
-        "address": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Address"
-        },
-        "lat": {
-          "title": "Lat",
-          "type": "number"
-        },
-        "lng": {
-          "title": "Lng",
-          "type": "number"
-        },
-        "arrive_at": {
-          "format": "date-time",
-          "title": "Arrive At",
-          "type": "string"
-        },
-        "depart_at": {
-          "format": "date-time",
-          "title": "Depart At",
-          "type": "string"
-        },
-        "stay_minutes": {
-          "title": "Stay Minutes",
-          "type": "integer"
-        },
-        "stay_source": {
-          "description": "Whether stay_minutes came from the user or our default table.",
-          "enum": [
-            "user",
-            "default"
-          ],
-          "title": "Stay Source",
-          "type": "string"
-        },
-        "map_url": {
-          "description": "Google Maps search URL for the place itself.",
-          "title": "Map Url",
-          "type": "string"
-        },
-        "hours_status": {
-          "default": "unknown",
-          "description": "Open/closed status of this stop at planned arrival time.",
-          "enum": [
-            "open",
-            "closed_on_arrival",
-            "closes_during_visit",
-            "closes_soon",
-            "unknown"
-          ],
-          "title": "Hours Status",
-          "type": "string"
-        },
-        "hours_detail": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/HoursDetail"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Machine-readable time facts (closes_at / opens_at as HH:MM)."
-        }
-      },
-      "required": [
-        "query",
-        "name",
-        "lat",
-        "lng",
-        "arrive_at",
-        "depart_at",
-        "stay_minutes",
-        "stay_source",
-        "map_url"
-      ],
-      "title": "StopItem",
       "type": "object"
     },
     "StopReadyEvent": {
@@ -2456,39 +2066,6 @@
       "anyOf": [
         {
           "$ref": "#/$defs/ErrorDetails"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "plan": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/Plan"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "optimise_response": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/OptimiseResponse"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "error_response": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ErrorResponse"
         },
         {
           "type": "null"

@@ -1,10 +1,7 @@
-"""Response models for the public API.
+"""Response models for the v2 API (/api/v2/*).
 
-v1 returns a flat timeline: an ordered list of items, each either a Stop
-or a Leg. The frontend renders them in order. No nested place lookups
-needed — Stop carries its display info inline.
-
-New streaming/engine types are appended at the bottom of the file.
+The legacy v1 response models (Plan, StopItem, LegItem, OptimiseResponse,
+ErrorResponse) were retired with their endpoints on 2026-10-06.
 """
 
 from datetime import date, datetime
@@ -52,51 +49,6 @@ class HoursDetail(BaseModel):
     unknown_reason: HoursUnknownReason | None = None
 
 
-class StopItem(BaseModel):
-    """A scheduled stop on the timeline."""
-
-    item_type: Literal["stop"] = "stop"
-    query: str = Field(..., description="What the user typed.")
-    name: str = Field(..., description="Resolved place name from geocoder.")
-    address: str | None = None
-    lat: float
-    lng: float
-    arrive_at: datetime
-    depart_at: datetime
-    stay_minutes: int
-    stay_source: Literal["user", "default"] = Field(
-        ...,
-        description="Whether stay_minutes came from the user or our default table.",
-    )
-    map_url: str = Field(..., description="Google Maps search URL for the place itself.")
-    hours_status: HoursStatus = Field(
-        default="unknown",
-        description="Open/closed status of this stop at planned arrival time.",
-    )
-    hours_detail: HoursDetail | None = Field(
-        default=None,
-        description="Machine-readable time facts (closes_at / opens_at as HH:MM).",
-    )
-
-
-class LegItem(BaseModel):
-    """A single travel segment between two stops."""
-
-    item_type: Literal["leg"] = "leg"
-    from_name: str
-    to_name: str
-    mode: Literal["transit", "walking", "driving"]
-    duration_seconds: int
-    distance_meters: int | None = None
-    depart_at: datetime
-    arrive_at: datetime
-    summary: str = Field(
-        ...,
-        description="Human-readable summary, e.g. 'Take the 47 bus, 18 min'.",
-    )
-    map_url: str = Field(..., description="Google Maps directions deeplink.")
-
-
 class Warning(BaseModel):
     """A timing/closure issue surfaced inline in the timeline."""
 
@@ -106,38 +58,6 @@ class Warning(BaseModel):
     # v2: stable stop-instance identity (positions change on reorder).
     affects_instance_id: str | None = None
     code: str | None = None
-
-
-class Plan(BaseModel):
-    """Full timeline response."""
-
-    generated_at: datetime
-    city: str
-    mode: Literal["transit", "walking", "driving"]
-    timezone: str = Field(
-        ...,
-        description="IANA timezone for the trip city, e.g. 'Europe/London'. "
-        "Derived from the first stop's coordinates. Used by the frontend "
-        "to display arrival times in destination time regardless of the "
-        "user's browser timezone.",
-    )
-    timeline: list[StopItem | LegItem] = Field(
-        ...,
-        description="Alternating stop/leg/stop/leg/... in chronological order.",
-    )
-    overview_map_url: str = Field(
-        ...,
-        description="Google Maps URL showing all stops as a driving-mode overview.",
-    )
-    warnings: list[Warning] = Field(default_factory=list)
-
-
-class OptimisedStop(BaseModel):
-    """One stop in an optimised route, preserving the original query and stay override."""
-
-    query: str
-    name: str
-    stay_minutes: int | None = None
 
 
 class InfeasibilityFlag(BaseModel):
@@ -160,28 +80,9 @@ class InfeasibilityFlag(BaseModel):
     )
 
 
-class OptimiseResponse(BaseModel):
-    """Result of POST /api/optimise — reordered stops plus path-length stats."""
-
-    stops: list[OptimisedStop]
-    original_km: float = Field(..., description="Haversine path length of the input order (km).")
-    optimised_km: float = Field(..., description="Haversine path length after optimisation (km).")
-    infeasibility_flags: list[InfeasibilityFlag] = Field(
-        default_factory=list,
-        description="Stops that remain hours-violated in the chosen order.",
-    )
-
-
 class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
     version: str
-
-
-class ErrorResponse(BaseModel):
-    error: str
-    detail: str | None = None
-    # Structured field-level validation errors; omitted on non-validation errors.
-    errors: list[dict[str, object]] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -690,7 +591,3 @@ class ContractRoot(BaseModel):
     selected_city: SelectedCity | None = None
     selected_place: SelectedPlace | None = None
     error_details: ErrorDetails | None = None
-    # Legacy v1 types (preserved for the existing /api/plan endpoint)
-    plan: Plan | None = None
-    optimise_response: OptimiseResponse | None = None
-    error_response: ErrorResponse | None = None

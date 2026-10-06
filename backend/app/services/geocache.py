@@ -26,8 +26,11 @@ query text + city, storing names/types/hours):
     the process running; on startup the purge runs immediately.
 
 All SQL is parameterised. The DB file is created 0600 in a 0700 directory.
-v1 callers of ``geocode_cached`` still receive full rich details — fetched
-fresh from the provider on every call instead of from the cache.
+
+Deployment (decision D-2, 2026-10-06): the file lives in the container's
+ephemeral filesystem; every redeploy clears it. The cache is an optimisation
+for place selection only — planning re-verifies places with Place Details —
+and any missing, unreadable or failing cache is treated as a miss.
 """
 
 import contextlib
@@ -39,10 +42,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import aiosqlite
-import httpx
 
 from app.core.config import settings
-from app.services.geocoder import GeocodedPlace, geocode
 
 log = logging.getLogger(__name__)
 
@@ -213,24 +214,3 @@ async def purge_expired(db_path: str, ttl_days: int) -> int:
     except Exception as exc:
         log.warning("geocache_purge_failed exception_type=%s", type(exc).__name__)
         return 0
-
-
-async def geocode_cached(
-    query: str,
-    city: str,
-    db_path: str,
-    ttl_days: int,
-    client: httpx.AsyncClient | None = None,
-) -> GeocodedPlace:
-    """Legacy v1 geocode. Rich details are always fetched; only coordinates persist.
-
-    Kept for /api/plan and /api/optimise compatibility: callers still receive a
-    complete GeocodedPlace (name, types, hours), now from a fresh Text Search
-    (Enterprise SKU) on every call rather than from the removed rich cache.
-    """
-    place = await geocode(query, city, client=client)
-    try:
-        await put_coordinates(place.place_id, place.lat, place.lng, db_path, ttl_days)
-    except Exception as exc:
-        log.warning("cache_write_failed exception_type=%s", type(exc).__name__)
-    return place

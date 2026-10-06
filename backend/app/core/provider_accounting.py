@@ -14,7 +14,6 @@ Kinds map to the SKU each request bills at, by its highest-tier field
 (verified against the Places/Routes docs, 2026-10-06):
 
 - ``routes_compute``           Routes: Compute Routes (transit/walk/drive)
-- ``text_search_enterprise``   v1 Text Search with regularOpeningHours
 - ``place_details_enterprise`` v2 stop verification (opening hours)
 - ``place_details_pro``        v2 city verification / city selection (displayName)
 - ``place_details_essentials`` stop selection (id, location, formattedAddress)
@@ -32,7 +31,6 @@ from typing import Literal, Protocol
 
 ProviderCallKind = Literal[
     "routes_compute",
-    "text_search_enterprise",
     "place_details_enterprise",
     "place_details_pro",
     "place_details_essentials",

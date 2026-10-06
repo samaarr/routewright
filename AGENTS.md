@@ -8,7 +8,7 @@ Validated against the TravelPlanner ICLR 2024 benchmark which shows pure-LLM pla
 
 ## What v1 does (locked scope)
 
-- One endpoint: `POST /api/plan`
+- One endpoint: `POST /api/plan` (v1 history — retired 2026-10-06; the app now uses `/api/v2/*`)
 - Input: city, ordered stops, start time, transport mode
 - Output: flat timeline of alternating Stop and Leg items
 - User supplies stop order (no auto-optimisation in v1)
@@ -265,7 +265,7 @@ In Vercel dashboard:
 ### 3. Smoke test on live
 - Submit: Dublin, Ireland / Trinity College / Temple Bar / now+1h / transit
 - Confirm 200, timeline shows 2 stops + 1 leg, map links open correctly
-- Hit /api/plan 21 times from same IP — confirm 429 on the 21st
+- Superseded: the v1 routes are retired. Follow DEPLOYMENT_PLAN.md §8 (rate-limit check uses rejected `/api/v2/plan` requests, zero Google calls)
 
 ### 4. Announce
 - r/Dublin: "I built a multi-stop transit planner for Dublin..."

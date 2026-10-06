@@ -9,13 +9,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-import httpx
 import pytest
 
 from app.services import geocache
 from app.services.geocache import (
     expiry_seconds,
-    geocode_cached,
     get_coordinates,
     migrate_legacy,
     purge_expired,
@@ -158,32 +156,6 @@ async def test_startup_purge_migrates_legacy_db(db_path: str) -> None:
             db.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='geocache'").fetchone()[0]
             == 0
         )
-
-
-async def test_v1_geocode_returns_rich_details_but_persists_only_coordinates(
-    db_path: str,
-) -> None:
-    calls = 0
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        return httpx.Response(200, json=_TEXT_SEARCH)
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        first = await geocode_cached("Guinness Storehouse", "Dublin", db_path, TTL, client=client)
-        second = await geocode_cached("Guinness Storehouse", "Dublin", db_path, TTL, client=client)
-
-    # The v1 contract is intact: callers still get name/types/hours ...
-    assert first.name == "Guinness Storehouse" and first.primary_type == "brewery"
-    assert first.opening_hours is not None
-    # ... fetched fresh each time (rich details are request-scoped now) ...
-    assert calls == 2 and second.place_id == first.place_id
-    # ... and only the place ID and coordinates were written.
-    raw = _all_text(db_path)
-    assert b"ChIJABC123" in raw
-    for rich in (b"Guinness", b"brewery", b"Dublin"):
-        assert rich not in raw
 
 
 async def test_failed_query_is_a_cache_miss(db_path: str, monkeypatch: pytest.MonkeyPatch) -> None:

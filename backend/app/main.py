@@ -19,7 +19,7 @@ from app.core.config import settings
 from app.core.limiter import limiter
 from app.core.provider_semaphore import reset_gates
 from app.core.security import SecurityMiddleware
-from app.routers import health, optimise, plan, plan_v2, refresh_leg, selection
+from app.routers import health, plan_v2, selection
 from app.services.geocache import purge_expired
 
 logging.basicConfig(level=settings.log_level)
@@ -101,11 +101,8 @@ app.add_middleware(
 app.add_middleware(SecurityMiddleware)
 for router in (
     health.router,
-    plan.router,
     plan_v2.router,
     selection.router,
-    refresh_leg.router,
-    optimise.router,
 ):
     app.include_router(router)
 

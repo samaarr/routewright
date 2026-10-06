@@ -93,7 +93,6 @@ FAILURES = frozenset(
 CALL_KINDS = frozenset(
     {
         "routes_compute",
-        "text_search_enterprise",
         "place_details_enterprise",
         "place_details_pro",
         "place_details_essentials",

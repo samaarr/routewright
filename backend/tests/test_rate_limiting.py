@@ -1,7 +1,7 @@
 """Rate limiting tests.
 
 Each test builds its own isolated FastAPI app with a fresh Limiter instance
-so tests never share counters or exhaust the production 20/day limit.
+so tests never share counters or exhaust the shared app limits.
 """
 
 from fastapi import FastAPI, Request
@@ -29,12 +29,12 @@ def _make_app(plan_limit: str, refresh_limit: str) -> FastAPI:
 
     app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
-    @app.post("/api/plan")
+    @app.post("/limited/plan")
     @lim.limit(plan_limit)
     async def plan_route(request: Request) -> dict:
         return {"ok": True}
 
-    @app.post("/api/refresh-leg")
+    @app.post("/limited/refresh")
     @lim.limit(refresh_limit)
     async def refresh_route(request: Request) -> dict:
         return {"ok": True}
@@ -45,7 +45,7 @@ def _make_app(plan_limit: str, refresh_limit: str) -> FastAPI:
 def test_plan_under_limit_succeeds():
     app = _make_app(plan_limit="2/minute", refresh_limit="60/day")
     client = TestClient(app, raise_server_exceptions=False)
-    r = client.post("/api/plan")
+    r = client.post("/limited/plan")
     assert r.status_code == 200
     assert r.json() == {"ok": True}
 
@@ -53,8 +53,8 @@ def test_plan_under_limit_succeeds():
 def test_plan_over_limit_returns_429_with_json_body():
     app = _make_app(plan_limit="1/minute", refresh_limit="60/day")
     client = TestClient(app, raise_server_exceptions=False)
-    client.post("/api/plan")  # consume the one allowed request
-    r = client.post("/api/plan")
+    client.post("/limited/plan")  # consume the one allowed request
+    r = client.post("/limited/plan")
     assert r.status_code == 429
     body = r.json()
     assert body["error"] == "rate_limit_exceeded"
@@ -67,10 +67,10 @@ def test_plan_and_refresh_limits_are_independent():
     client = TestClient(app, raise_server_exceptions=False)
 
     # exhaust plan
-    client.post("/api/plan")
-    r_plan = client.post("/api/plan")
+    client.post("/limited/plan")
+    r_plan = client.post("/limited/plan")
     assert r_plan.status_code == 429
 
     # refresh-leg still has capacity
-    r_refresh = client.post("/api/refresh-leg")
+    r_refresh = client.post("/limited/refresh")
     assert r_refresh.status_code == 200

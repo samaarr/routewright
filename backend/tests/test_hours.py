@@ -10,15 +10,9 @@ compute_hours_status uses local hour/minute, not UTC.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from app.models.response import HoursDetail
-from app.services.geocoder import (
-    OpeningPeriod,
-    _parse_opening_hours,
-    opening_hours_from_json_list,
-    opening_hours_to_json_list,
-)
+from app.services.geocoder import OpeningPeriod
 from app.services.hours import compute_hours_status, is_disqualifying_for_optimisation
 
 # Trip timezone — UTC+1 (Dublin IST used in tests for concreteness).
@@ -51,108 +45,6 @@ def _period(
         close_day=cd,
         close_minutes=(ch * 60 + cm) if ch is not None else None,
     )
-
-
-def _raw_period(
-    od: int, oh: int, om: int = 0, cd: int | None = None, ch: int | None = None, cm: int = 0
-) -> dict[str, Any]:
-    """Raw API period dict for _parse_opening_hours tests."""
-    p: dict[str, Any] = {"open": {"day": od, "hour": oh, "minute": om}}
-    if cd is not None and ch is not None:
-        p["close"] = {"day": cd, "hour": ch, "minute": cm}
-    return p
-
-
-# ---------------------------------------------------------------------------
-# Opening-hours parsing
-# ---------------------------------------------------------------------------
-
-
-def test_parse_normal_periods() -> None:
-    """Mon-Fri 09:00-17:00 → five periods."""
-    raw = {
-        "periods": [
-            _raw_period(1, 9, 0, 1, 17),  # Mon
-            _raw_period(2, 9, 0, 2, 17),  # Tue
-            _raw_period(3, 9, 0, 3, 17),  # Wed
-            _raw_period(4, 9, 0, 4, 17),  # Thu
-            _raw_period(5, 9, 0, 5, 17),  # Fri
-        ]
-    }
-    result = _parse_opening_hours(raw)
-    assert result is not None
-    assert len(result) == 5
-    assert result[0].open_day == 1  # Monday
-    assert result[0].open_minutes == 9 * 60
-    assert result[0].close_day == 1
-    assert result[0].close_minutes == 17 * 60
-
-
-def test_parse_missing_hours_returns_none() -> None:
-    assert _parse_opening_hours(None) is None
-    assert _parse_opening_hours({}) is None
-    assert _parse_opening_hours({"periods": []}) is None
-
-
-def test_parse_24h_place() -> None:
-    """24-hour place: single period with open but no close."""
-    raw = {"periods": [{"open": {"day": 0, "hour": 0, "minute": 0}}]}
-    result = _parse_opening_hours(raw)
-    assert result is not None
-    assert len(result) == 1
-    assert result[0].close_day is None
-    assert result[0].close_minutes is None
-
-
-def test_parse_multi_interval_day() -> None:
-    """Two periods on the same day (e.g. lunch + dinner split)."""
-    raw = {
-        "periods": [
-            _raw_period(1, 12, 0, 1, 15),  # Mon 12:00-15:00
-            _raw_period(1, 18, 0, 1, 23),  # Mon 18:00-23:00
-        ]
-    }
-    result = _parse_opening_hours(raw)
-    assert result is not None
-    assert len(result) == 2
-    assert result[0].open_minutes == 12 * 60
-    assert result[0].close_minutes == 15 * 60
-    assert result[1].open_minutes == 18 * 60
-    assert result[1].close_minutes == 23 * 60
-
-
-def test_parse_midnight_spanning_period() -> None:
-    """Fri 22:00 → Sat 02:00: close_day > open_day."""
-    raw = {"periods": [_raw_period(5, 22, 0, 6, 2)]}  # Fri 22:00 -Sat 02:00
-    result = _parse_opening_hours(raw)
-    assert result is not None
-    assert result[0].open_day == 5  # Friday
-    assert result[0].close_day == 6  # Saturday
-    assert result[0].open_minutes == 22 * 60
-    assert result[0].close_minutes == 2 * 60
-
-
-def test_parse_malformed_data_returns_none() -> None:
-    assert _parse_opening_hours({"periods": [{"no_open_key": True}]}) is None or True
-    # Must not raise regardless of input shape.
-    _parse_opening_hours({"periods": "not a list"})
-    _parse_opening_hours(42)  # type: ignore[arg-type]
-
-
-# ---------------------------------------------------------------------------
-# Hours serialisation round-trip (used by cache)
-# ---------------------------------------------------------------------------
-
-
-def test_opening_hours_json_roundtrip() -> None:
-    periods = [
-        _period(1, 9, 0, 1, 17),  # Mon 09:00-17:00
-        _period(5, 22, 0, 6, 2),  # Fri 22:00 - Sat 02:00
-        OpeningPeriod(open_day=0, open_minutes=0, close_day=None, close_minutes=None),
-    ]
-    data = opening_hours_to_json_list(periods)
-    restored = opening_hours_from_json_list(data)
-    assert restored == periods
 
 
 # ---------------------------------------------------------------------------
