@@ -190,7 +190,7 @@ claimed beyond what the code and tests show.
 | 5 | Opening-hours rules | DONE FOR v2 PLANNING (V2-VH; DST fix in SSV) — instant-based comparison across clock changes, next-opening date. Comparison/acceptance retention is Step 8. v1 `/api/plan` keeps its weekly-only logic |
 | 6 | Frontend state + streaming | COMPLETE (SSV): items 1-7; frontend now plans only via `/api/v2/plan/stream`. Item 6 pins: default on, visible, preserved through edits; their effect on optimisation arrives with Step 8 |
 | 7 | Suffix refresh via shared engine | COMPLETE — backend e4f5f27 (`/api/v2/refresh[/stream]`, planned departure never now, unchanged prefix, ≤ N−1−k calls, failure → unknown downstream); refresh UI committed with this record ("Refresh from here" / "Try again", previous timings labelled while refreshing, atomic suffix replacement, cancel/incomplete keep the previous plan). Step 8 hook (refresh cancels optimisation) applies once optimisation exists |
-| 8 | Compare one local candidate with fresh original | PENDING |
+| 8 | Compare one local candidate with fresh original | IN PROGRESS — backend complete and committed (6329b9d): `/api/v2/compare[/stream]`, one distance candidate with pins, no routing when unchanged, fresh original + candidate ≤ 2(N−1) calls, 300 s exact threshold, hours eligibility, 60 s deadline incl. solver. Operation coordination (any start supersedes the running operation) implemented in the frontend. Comparison UI awaits approval of the proposal below |
 | 9 | Metrics, security regression, deployment verification | PENDING (B2, B4) |
 | 10 | Review, release readiness, completion report | PENDING |
 
@@ -747,9 +747,86 @@ earlier unexplained failure in the progressive test; its progress assertion
 now waits for the label update); security smoke passed; security audit
 FAILED (pre-existing B3, dev-only postcss-selector-parser via tailwindcss).
 
+## Step 8 — comparison (backend done 2026-10-06; UI awaiting approval)
+
+### Backend — commit 6329b9d
+- `ComparisonRequest` (= itinerary + current `fixed_first`/`fixed_last`).
+  One verification of city + stops, shared by both orders; durations resolved
+  once from the original order and carried by instance (D11, D37).
+- Candidate: the existing distance-only `optimise_order` (haversine, OR-Tools)
+  run once; pins apply to the stops currently at the ends; integrity check
+  (permutation, pins). Solver limit min(2 s, remaining deadline) in the
+  solver slot, released when the thread ends (cancellation returns at once).
+- Unchanged order by instance identity → `no_different_order`, "No different
+  order found by the current search.", zero routing calls.
+- Otherwise original (`original_route`) then candidate (`alternative_route`)
+  via the shared sequential engine; `RoutingBudget` caps calls at 2(N−1);
+  no retries, no further candidates, no stored baseline.
+- Statuses: `recommended` (both complete, no closure-on-arrival for a
+  positive stay, durations/pins intact, saving ≥ 300 s exact),
+  `not_faster`, `hours_ineligible` (with instance IDs), `original_incomplete`
+  (stop; client keeps previous plan), `candidate_incomplete` (complete fresh
+  original kept). Journey seconds = Σ(arrival − planned departure) per leg,
+  so waiting/transfers count; the final walk after the last transit step is
+  not represented (existing parser limitation, same for both orders).
+  Distances are reported as the heuristic only.
+- `recommended` carries the complete candidate plan for zero-call acceptance.
+- Endpoints share planning's stream/deadline/disconnect handling; own
+  allowance on the existing optimise limits (scope `compare-v2`). Legacy
+  `/api/optimise` untouched.
+- Tests: `tests/test_compare_v2.py` (23). Mutation checks: `>` instead of
+  `>=`, ignoring hours ineligibility, never detecting unchanged order and a
+  3(N−1) budget each fail tests.
+
+### Frontend coordination (requirement 9, implemented)
+- Starting Plan or Refresh supersedes any running operation: the reducer
+  replaces it, the page aborts its request (server stops on disconnect), and
+  its late events/outcomes are rejected by operation ID and revision. Plan
+  stays available while another operation runs. Comparison will join the
+  same rule. Tests: unit (plan↔refresh supersession, late events) and a
+  browser test (Plan during a refresh aborts the refresh request).
+
+### Comparison UI proposal (needs approval before implementation)
+1. **Entry:** on a current, complete plan with ≥ 3 stops, the Map/Plan view
+   offers "Compare with another order" (replacing the "coming later" note),
+   with a line explaining it checks ONE alternative suggested by
+   straight-line distance and may use up to 2(N−1) journey lookups. Pin
+   controls (on by default) are shown next to the first/last stops.
+2. **Progress:** the current plan stays visible; a status panel shows real
+   phases — "Checking places…", "Finding another order…", "Recalculating your
+   order: journey 2 of 5", "Checking the alternative: journey 3 of 5" — with
+   Cancel. No percentages or countdowns.
+3. **Results:**
+   - No different order: "No different order found by the current search."
+   - Recommended: "Another order could save about N min (estimate for this
+     departure, not a guarantee)", both totals, the proposed order, any
+     warnings (closing during a visit, unknown hours), and "Use this order" /
+     "Keep my order".
+   - Not ≥ 5 min faster / opening-hours conflict: explain, show both totals
+     (or the closed stop), keep the order.
+   - Original could not be recalculated: previous plan unchanged and
+     labelled; candidate incomplete: show the freshly recalculated original.
+   - Cancel / timeout / error / interrupted stream: "Comparison didn't finish
+     — your plan is unchanged."
+4. **Accept:** only for `recommended` with a matching input revision; one
+   atomic update with no network calls: the form's stop order becomes the
+   candidate order, each stop's stay is fixed to the compared duration (so a
+   later Plan reproduces the same durations, D11/D18), and the displayed plan
+   becomes the compared candidate timeline, labelled as calculated at
+   comparison time. Any edit, Plan or Refresh before accepting invalidates the
+   suggestion ("Trip details changed — compare again").
+5. **Coordination:** starting a comparison supersedes plan/refresh and vice
+   versa; a refresh cancels a running comparison and clears its suggestion.
+
+**Decisions needed:** (a) should a complete freshly recalculated original
+replace the displayed plan after a non-recommended comparison? (proposed:
+yes, labelled "recalculated during comparison"); (b) on acceptance, fix
+defaulted durations as explicit values in the form (proposed) or add a
+separate "fixed from comparison" marker; (c) final wording above.
+
 ## Next action
 
 1. Decide selection-lookup limits (D36) and the B3 audit fix.
 2. Monthly free-tier enforcement remains deferred; existing limits retained.
-3. **Step 8:** compare one local candidate with a fresh original; acceptance;
-   starting a refresh must cancel optimisation and invalidate its suggestion.
+3. **Step 8:** approve the comparison UI proposal (and decisions a–c), then
+   build the UI, acceptance and tests; then Step 9 (metrics/security).
