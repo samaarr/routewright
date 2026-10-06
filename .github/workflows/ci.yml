@@ -67,7 +67,14 @@ jobs:
       - name: Check generated TypeScript types are not stale
         run: npm run check:types-drift
       - run: npm run security:audit
-      - run: npm run build
+      - name: Build with a fake server key present (must not be bundled)
+        run: npm run build
+        env:
+          GOOGLE_MAPS_API_KEY: AIzaPROBEserverKEYmustNOTbeBUNDLED12345678
+      - name: Bundle key-exposure check
+        run: npm run security:bundle
+        env:
+          SECURITY_BUNDLE_PROBE: AIzaPROBEserverKEYmustNOTbeBUNDLED12345678
       - run: npx playwright install --with-deps chromium
       - run: npm run security:smoke
       - name: Browser integration tests (mocked API, no Google calls)

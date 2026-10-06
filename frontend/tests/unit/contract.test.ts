@@ -22,7 +22,8 @@ const proc = spawnSync(python, ["-m", "tests.sample_streams"], {
   maxBuffer: 10 * 1024 * 1024,
 });
 if (proc.status !== 0) throw new Error(`backend sample generation failed: ${proc.stderr}`);
-const samples = JSON.parse(proc.stdout) as Record<string, string> & Record<"suggestions" | "select_city" | "select_place", unknown>;
+// stdout also carries per-operation metrics lines; the samples are the last line.
+const samples = JSON.parse(proc.stdout.trim().split("\n").at(-1) ?? "") as Record<string, string> & Record<"suggestions" | "select_city" | "select_place", unknown>;
 
 async function parse(name: string) {
   const text = samples[name];

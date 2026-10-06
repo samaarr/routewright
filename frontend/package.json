@@ -14,7 +14,8 @@
     "gen:types": "cd ../backend && APP_ENV=test python scripts/export_schema.py ../frontend/schema.json && cd ../frontend && json2ts --input schema.json --output lib/api-types.ts --bannerComment '' --unreachableDefinitions",
     "check:types-drift": "cd ../backend && APP_ENV=test python scripts/export_schema.py /tmp/schema-check.json && cd ../frontend && json2ts --input /tmp/schema-check.json --output /tmp/api-types-check.ts --bannerComment '' --unreachableDefinitions && diff lib/api-types.ts /tmp/api-types-check.ts",
     "test:unit": "node --experimental-strip-types --test \"tests/unit/**/*.test.ts\"",
-    "test:e2e": "node --test --test-concurrency=1 tests/e2e/planner.e2e.mjs"
+    "test:e2e": "node --test --test-concurrency=1 tests/e2e/planner.e2e.mjs",
+    "security:bundle": "node scripts/security-bundle.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
