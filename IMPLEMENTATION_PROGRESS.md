@@ -917,7 +917,26 @@ containers, the test image and the pulled base tag were removed afterwards
   live walking-step `staticDuration`, key restrictions, live map CSP,
   HTTPS/HSTS/proxy, actual log retention, Railway Redis, storage encryption.
 
+## Deployment plan (2026-10-06) — awaiting approval
+
+DEPLOYMENT_PLAN.md prepared from the repo config and official Railway,
+Vercel and Google docs; hosting dashboards and the Google project could not
+be inspected (no CLIs or credentials here) and are recorded as unknown.
+Nothing deployed, pushed or changed. Key findings:
+- **D-1 (blocker for public use):** Railway documents `X-Real-IP` for the
+  client IP and publishes no proxy range; with `TRUSTED_PROXY_IPS` empty
+  every visitor shares one rate-limit identity.
+- **D-9 (defect):** slowapi's 429 warning logs the client key (the client IP
+  in production); reproduced locally. Not fixed (planning-only task).
+- D-2: Railway volumes need root (`RAILWAY_RUN_UID=0`) for a non-root image
+  → proposal: ephemeral cache, no volume.
+- D-4: server-key IP restriction needs Railway Pro static IPs.
+- 27 local commits unpushed; CI has not run on them.
+- Live test estimate ≈ 65 billable events (≤17 Place Details Enterprise,
+  ≤18 Compute Routes); current monthly usage unknown — no zero-charge claim.
+
 ## Next action
 
-1. **Step 10:** final review and release blockers (see TODO.md).
-2. Monthly free-tier enforcement remains deferred; existing limits retained.
+1. **Approve DEPLOYMENT_PLAN.md decisions (D-1…D-9)**, then push and deploy.
+2. **Step 10:** final review and release blockers (see TODO.md).
+3. Monthly free-tier enforcement remains deferred; existing limits retained.

@@ -1,6 +1,7 @@
 # Production verification checklist
 
-Prepared 2026-10-06 (Step 9). Nothing in this file has been verified: every
+Prepared 2026-10-06 (Step 9). Execution order, commands and the live test
+plan: [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md). Nothing in this file has been verified: every
 item needs the real deployment (Railway backend, Vercel frontend) or live
 Google calls, and neither was authorised during development. Local tests use
 mocked providers and cannot prove these settings. Record the date, operator
@@ -139,3 +140,6 @@ zero provider calls) produced its metrics line in that container's log and
 the port refused connections once the container was removed; application
 logs contained no client IP (the spoofed `X-Forwarded-For` and the Docker
 peer `172.17.0.1` were absent; only uvicorn's `0.0.0.0` bind address).
+Scope: health and rejected-plan requests only. A rate-limited request
+(429) logs slowapi's warning with the client key — the client IP in
+production (found 2026-10-06; DEPLOYMENT_PLAN.md D-9).
