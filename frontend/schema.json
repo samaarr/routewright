@@ -1,7 +1,7 @@
 {
   "$defs": {
     "CancelledOutcome": {
-      "description": "Terminal outcome when the operation was cancelled (client disconnect).",
+      "description": "Terminal outcome when the operation was cancelled.\n\nA client that cancels by disconnecting cannot receive this; the server\nsimply stops work. It is delivered when cancellation is observed while\nthe connection can still carry a final event.",
       "properties": {
         "outcome_type": {
           "const": "cancelled",
@@ -195,7 +195,7 @@
       "type": "object"
     },
     "ErrorOutcome": {
-      "description": "Terminal outcome for an unrecoverable error.\n\nNever exposes raw provider error text \u2014 only a structured code and a\nsafe user-facing message.",
+      "description": "Terminal outcome for an unrecoverable error.\n\nNever exposes raw provider error text \u2014 only a structured code, a safe\nuser-facing message and optional structured details.",
       "properties": {
         "outcome_type": {
           "const": "error",
@@ -210,6 +210,17 @@
         "message": {
           "title": "Message",
           "type": "string"
+        },
+        "details": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorDetails"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -658,7 +669,7 @@
       "type": "object"
     },
     "LegProgressEvent": {
-      "description": "Emitted when a leg routing call starts.",
+      "description": "Emitted when a leg routing call starts (not a completion count).",
       "properties": {
         "operation_id": {
           "title": "Operation Id",
@@ -730,13 +741,24 @@
             }
           ],
           "title": "Leg"
+        },
+        "completed_legs": {
+          "description": "Legs successfully routed so far.",
+          "title": "Completed Legs",
+          "type": "integer"
+        },
+        "total_legs": {
+          "title": "Total Legs",
+          "type": "integer"
         }
       },
       "required": [
         "operation_id",
         "input_revision",
         "leg_index",
-        "leg"
+        "leg",
+        "completed_legs",
+        "total_legs"
       ],
       "title": "LegReadyEvent",
       "type": "object"
@@ -760,6 +782,10 @@
         },
         "phases": {
           "items": {
+            "enum": [
+              "verification",
+              "routing"
+            ],
             "type": "string"
           },
           "title": "Phases",
@@ -967,6 +993,10 @@
           "type": "string"
         },
         "phase": {
+          "enum": [
+            "verification",
+            "routing"
+          ],
           "title": "Phase",
           "type": "string"
         }
@@ -977,6 +1007,40 @@
         "phase"
       ],
       "title": "PhaseCompleteEvent",
+      "type": "object"
+    },
+    "PhaseStartEvent": {
+      "description": "Emitted when a named phase begins.",
+      "properties": {
+        "operation_id": {
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "input_revision": {
+          "title": "Input Revision",
+          "type": "integer"
+        },
+        "type": {
+          "const": "phase_start",
+          "default": "phase_start",
+          "title": "Type",
+          "type": "string"
+        },
+        "phase": {
+          "enum": [
+            "verification",
+            "routing"
+          ],
+          "title": "Phase",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "input_revision",
+        "phase"
+      ],
+      "title": "PhaseStartEvent",
       "type": "object"
     },
     "Plan": {
@@ -1556,7 +1620,8 @@
               "cancelled": "#/$defs/CancelledOutcome",
               "error": "#/$defs/ErrorOutcome",
               "plan": "#/$defs/PlanOutcome",
-              "refresh": "#/$defs/RefreshOutcome"
+              "refresh": "#/$defs/RefreshOutcome",
+              "timeout": "#/$defs/TimeoutOutcome"
             },
             "propertyName": "outcome_type"
           },
@@ -1571,6 +1636,9 @@
               "$ref": "#/$defs/CancelledOutcome"
             },
             {
+              "$ref": "#/$defs/TimeoutOutcome"
+            },
+            {
               "$ref": "#/$defs/ErrorOutcome"
             }
           ],
@@ -1583,6 +1651,46 @@
         "outcome"
       ],
       "title": "TerminalEvent",
+      "type": "object"
+    },
+    "TimeoutOutcome": {
+      "description": "Terminal outcome when the 60-second operation deadline expired.\n\n``partial`` carries the valid prefix when the deadline expired during\nrouting; it is null when it expired during verification (no routing).",
+      "properties": {
+        "outcome_type": {
+          "const": "timeout",
+          "default": "timeout",
+          "title": "Outcome Type",
+          "type": "string"
+        },
+        "phase": {
+          "enum": [
+            "verification",
+            "routing"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "partial": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PartialPlan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "phase",
+        "message"
+      ],
+      "title": "TimeoutOutcome",
       "type": "object"
     },
     "UnknownStop": {
@@ -1742,6 +1850,7 @@
               "leg_ready": "#/$defs/LegReadyEvent",
               "operation_start": "#/$defs/OperationStartEvent",
               "phase_complete": "#/$defs/PhaseCompleteEvent",
+              "phase_start": "#/$defs/PhaseStartEvent",
               "stop_ready": "#/$defs/StopReadyEvent",
               "terminal": "#/$defs/TerminalEvent"
             },
@@ -1750,6 +1859,9 @@
           "oneOf": [
             {
               "$ref": "#/$defs/OperationStartEvent"
+            },
+            {
+              "$ref": "#/$defs/PhaseStartEvent"
             },
             {
               "$ref": "#/$defs/LegProgressEvent"
@@ -1783,7 +1895,8 @@
               "cancelled": "#/$defs/CancelledOutcome",
               "error": "#/$defs/ErrorOutcome",
               "plan": "#/$defs/PlanOutcome",
-              "refresh": "#/$defs/RefreshOutcome"
+              "refresh": "#/$defs/RefreshOutcome",
+              "timeout": "#/$defs/TimeoutOutcome"
             },
             "propertyName": "outcome_type"
           },
@@ -1796,6 +1909,9 @@
             },
             {
               "$ref": "#/$defs/CancelledOutcome"
+            },
+            {
+              "$ref": "#/$defs/TimeoutOutcome"
             },
             {
               "$ref": "#/$defs/ErrorOutcome"

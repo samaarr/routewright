@@ -23,8 +23,8 @@ from app.models.response import (
     KnownStop,
     LegProgressEvent,
     LegReadyEvent,
-    OperationStartEvent,
     PhaseCompleteEvent,
+    PhaseStartEvent,
     PlanFailureReason,
     PlannedLeg,
     StopReadyEvent,
@@ -318,11 +318,12 @@ async def plan_sequential(
     timeline: list[KnownStop | PlannedLeg | FailedLeg | UnknownStop] = []
     cursor = departure  # Threads actual arrival forward after each leg.
 
+    completed_legs = 0
     await emitter.emit(
-        OperationStartEvent(
+        PhaseStartEvent(
             operation_id=ctx.operation_id,
             input_revision=ctx.input_revision,
-            phases=["routing"],
+            phase="routing",
         )
     )
 
@@ -430,6 +431,8 @@ async def plan_sequential(
                     input_revision=ctx.input_revision,
                     leg_index=i,
                     leg=failed_leg,
+                    completed_legs=completed_legs,
+                    total_legs=n_legs,
                 )
             )
 
@@ -460,6 +463,7 @@ async def plan_sequential(
         )
         timeline.append(planned_leg)
         cursor = result.arrive_at  # Key: use actual arrival for next leg departure.
+        completed_legs += 1
 
         await emitter.emit(
             LegReadyEvent(
@@ -467,6 +471,8 @@ async def plan_sequential(
                 input_revision=ctx.input_revision,
                 leg_index=i,
                 leg=planned_leg,
+                completed_legs=completed_legs,
+                total_legs=n_legs,
             )
         )
 

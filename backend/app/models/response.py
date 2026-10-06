@@ -349,11 +349,32 @@ class RefreshOutcome(BaseModel):
     )
 
 
+PhaseName: TypeAlias = Literal["verification", "routing"]
+
+
 class CancelledOutcome(BaseModel):
-    """Terminal outcome when the operation was cancelled (client disconnect)."""
+    """Terminal outcome when the operation was cancelled.
+
+    A client that cancels by disconnecting cannot receive this; the server
+    simply stops work. It is delivered when cancellation is observed while
+    the connection can still carry a final event.
+    """
 
     outcome_type: Literal["cancelled"] = "cancelled"
     reason: str
+
+
+class TimeoutOutcome(BaseModel):
+    """Terminal outcome when the 60-second operation deadline expired.
+
+    ``partial`` carries the valid prefix when the deadline expired during
+    routing; it is null when it expired during verification (no routing).
+    """
+
+    outcome_type: Literal["timeout"] = "timeout"
+    phase: PhaseName
+    message: str
+    partial: PartialPlan | None = None
 
 
 class ErrorDetails(BaseModel):
@@ -370,17 +391,18 @@ class ErrorDetails(BaseModel):
 class ErrorOutcome(BaseModel):
     """Terminal outcome for an unrecoverable error.
 
-    Never exposes raw provider error text — only a structured code and a
-    safe user-facing message.
+    Never exposes raw provider error text — only a structured code, a safe
+    user-facing message and optional structured details.
     """
 
     outcome_type: Literal["error"] = "error"
     code: str
     message: str
+    details: ErrorDetails | None = None
 
 
 OperationOutcome: TypeAlias = Annotated[
-    PlanOutcome | RefreshOutcome | CancelledOutcome | ErrorOutcome,
+    PlanOutcome | RefreshOutcome | CancelledOutcome | TimeoutOutcome | ErrorOutcome,
     Field(discriminator="outcome_type"),
 ]
 
@@ -401,11 +423,18 @@ class OperationStartEvent(_BaseEvent):
     """First event in a stream — announces phases and operation identity."""
 
     type: Literal["operation_start"] = "operation_start"
-    phases: list[str] = Field(default_factory=list)
+    phases: list[PhaseName] = Field(default_factory=list)
+
+
+class PhaseStartEvent(_BaseEvent):
+    """Emitted when a named phase begins."""
+
+    type: Literal["phase_start"] = "phase_start"
+    phase: PhaseName
 
 
 class LegProgressEvent(_BaseEvent):
-    """Emitted when a leg routing call starts."""
+    """Emitted when a leg routing call starts (not a completion count)."""
 
     type: Literal["leg_progress"] = "leg_progress"
     leg_index: int
@@ -426,13 +455,15 @@ class LegReadyEvent(_BaseEvent):
     type: Literal["leg_ready"] = "leg_ready"
     leg_index: int
     leg: Annotated[PlannedLeg | FailedLeg, Field(discriminator="item_type")]
+    completed_legs: int = Field(..., description="Legs successfully routed so far.")
+    total_legs: int
 
 
 class PhaseCompleteEvent(_BaseEvent):
     """Emitted when a named phase finishes (e.g. 'geocoding', 'routing')."""
 
     type: Literal["phase_complete"] = "phase_complete"
-    phase: str
+    phase: PhaseName
 
 
 class TerminalEvent(_BaseEvent):
@@ -444,6 +475,7 @@ class TerminalEvent(_BaseEvent):
 
 StreamEvent: TypeAlias = Annotated[
     OperationStartEvent
+    | PhaseStartEvent
     | LegProgressEvent
     | StopReadyEvent
     | LegReadyEvent

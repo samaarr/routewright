@@ -347,7 +347,7 @@ def test_stream_event_operation_start() -> None:
     event = OperationStartEvent(
         operation_id="op1",
         input_revision=0,
-        phases=["geocoding", "routing"],
+        phases=["verification", "routing"],
     )
     assert event.type == "operation_start"
     assert "routing" in event.phases
@@ -359,6 +359,8 @@ def test_stream_event_leg_ready_planned() -> None:
         input_revision=0,
         leg_index=0,
         leg=_planned_leg(),
+        completed_legs=1,
+        total_legs=2,
     )
     assert event.type == "leg_ready"
     assert event.leg.item_type == "leg"
@@ -370,6 +372,8 @@ def test_stream_event_leg_ready_failed() -> None:
         input_revision=0,
         leg_index=0,
         leg=_failed_leg(),
+        completed_legs=0,
+        total_legs=2,
     )
     assert event.leg.item_type == "failed_leg"
 
@@ -388,7 +392,7 @@ def test_stream_event_phase_complete() -> None:
     event = PhaseCompleteEvent(
         operation_id="op1",
         input_revision=0,
-        phase="geocoding",
+        phase="verification",
     )
     assert event.type == "phase_complete"
 

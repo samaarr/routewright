@@ -1,31 +1,50 @@
-"""POST /api/v2/plan -- verified sequential planning.
+"""POST /api/v2/plan and /api/v2/plan/stream -- verified sequential planning.
 
-``execute_plan`` orchestrates:
+Both endpoints run the same orchestration (``execute_plan``):
 
 1. Departure syntax, calendar validity, clock-change handling and supported
-   range — no provider calls (D14, D29). Failures are HTTP 422.
-2. Verification: Place Details for the city, departure-zone match, then stops
-   (D13, D37, D40, D41, D45). Any failure makes ZERO routing calls.
+   range — no provider calls (D14, D29). Failures are HTTP 422 before any
+   response body or stream starts.
+2. Verification phase: Place Details for the city, departure-zone match, then
+   stops (D13, D37, D40, D41, D45). Any failure makes ZERO routing calls.
 3. Fixed stay durations from the original order and verified place types (D11).
-4. Routing: each leg departs at the previous stop's actual arrival plus its
-   fixed stay; a failed leg keeps the valid prefix and leaves the rest
+4. Routing phase: each leg departs at the previous stop's actual arrival plus
+   its fixed stay; a failed leg keeps the valid prefix and leaves the rest
    unknown (D1, D2). Known stops get opening-hours assessment (D24, D42, D43);
    every verified stop gets an outside-area check against the city viewport
    (D25, D44).
 
-One 60-second DeadlineScope bounds verification, admission waits and every
-in-flight provider await (D19, D23). Provider calls per plan: 1 city lookup +
-1 per distinct stop place, then at most N-1 routing calls; all through the
-shared budget and accounting seam. The legacy /api/plan endpoint is unchanged.
+One 60-second DeadlineScope starts when the request handler starts and bounds
+verification, admission waits and every in-flight provider await (D19, D23).
+
+Streaming transport (/plan/stream): newline-delimited JSON (one StreamEvent
+per line, ``application/x-ndjson``) over the same POST — no jobs, polling or
+retries. Events: operation_start → phase_start/phase_complete (verification,
+routing) → stop_ready / leg_progress / leg_ready → exactly one terminal event
+(complete or partial plan, timeout, error). A client cancels by aborting the
+request; the server detects the disconnect, cancels the producer task (which
+cancels in-flight provider calls and releases admission slots) and makes no
+further calls. Calls already sent remain counted. Errors before the response
+starts are ordinary HTTP errors; after headers are sent they are typed
+terminal events.
+
+Provider calls per plan: 1 city lookup + 1 per distinct stop place, then at
+most N-1 routing calls; all through the shared budget and accounting seam.
+The legacy /api/plan endpoint is unchanged and stays available for callers.
 """
 
+import asyncio
+import contextlib
 import logging
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, NoReturn
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from starlette.types import Message
 
 from app.core.deadline import DeadlineExceededError, DeadlineScope
 from app.core.limiter import PLAN_LIMITS, limiter, request_cost
@@ -33,11 +52,20 @@ from app.models.request import ItineraryRequest
 from app.models.response import (
     CompletePlan,
     ErrorDetails,
+    ErrorOutcome,
     FailedLeg,
     KnownStop,
+    OperationOutcome,
+    OperationStartEvent,
     PartialPlan,
+    PhaseCompleteEvent,
+    PhaseName,
+    PhaseStartEvent,
     PlannedLeg,
+    PlanOutcome,
     PlanResult,
+    TerminalEvent,
+    TimeoutOutcome,
     Warning,
     WarningSeverity,
 )
@@ -75,7 +103,14 @@ log = logging.getLogger("routewright.plan_v2")
 
 router = APIRouter(prefix="/api/v2", tags=["plan_v2"])
 
-# v2 planning endpoints share one per-IP counter (existing plan limits).
+NDJSON_MEDIA_TYPE = "application/x-ndjson"
+# A full 12-stop plan emits ~45 events; the bound only matters if the client
+# stops reading, in which case the producer blocks instead of growing memory.
+MAX_QUEUED_EVENTS = 64
+# Extra time the stream waits for the producer's own terminal event after the
+# operation deadline before synthesising a timeout terminal itself.
+TERMINAL_GRACE_SECONDS = 2.0
+# Both v2 planning endpoints share one per-IP counter (existing plan limits).
 _PLAN_V2_SCOPE = "plan-v2"
 
 
@@ -311,7 +346,15 @@ async def execute_plan(
     deadline: DeadlineScope,
 ) -> PlanResult:
     """Verify, resolve durations and route. Raises domain errors before routing."""
+    op, rev = ctx.operation_id, ctx.input_revision
+    await emitter.emit(
+        OperationStartEvent(operation_id=op, input_revision=rev, phases=["verification", "routing"])
+    )
+    await emitter.emit(PhaseStartEvent(operation_id=op, input_revision=rev, phase="verification"))
     itinerary = await verify_itinerary(req, places, ctx, deadline)
+    await emitter.emit(
+        PhaseCompleteEvent(operation_id=op, input_revision=rev, phase="verification")
+    )
 
     durations = resolve_durations(
         [(s.instance_id, s.stay_minutes) for s in req.stops],
@@ -397,3 +440,169 @@ async def plan_v2(request: Request, req: ItineraryRequest) -> PlanResult:
         if failure is None:
             raise
         _raise_http(_with_instance_ids(failure, req))
+
+
+# ---------------------------------------------------------------------------
+# Streaming endpoint
+# ---------------------------------------------------------------------------
+
+
+class _QueueEmitter:
+    """Forwards engine events into the bounded stream queue; tracks the phase."""
+
+    def __init__(self, queue: "asyncio.Queue[Any]") -> None:
+        self.queue = queue
+        self.phase: PhaseName = "verification"
+
+    async def emit(self, event: object) -> None:
+        if isinstance(event, PhaseStartEvent):
+            self.phase = event.phase
+        await self.queue.put(event)
+
+
+Receive = Callable[[], Awaitable[Message]]
+
+# Queued by the disconnect watcher so a consumer blocked on an empty queue
+# wakes immediately instead of sleeping until the deadline.
+_DISCONNECTED = object()
+
+
+class PlanStream:
+    """One streamed planning operation: a producer task feeding a bounded queue.
+
+    ``events()`` is the response body iterator. Whatever ends it — terminal
+    event, client disconnect, generator close — its ``finally`` cancels and
+    awaits the producer and watcher tasks, so nothing outlives the response.
+    """
+
+    def __init__(
+        self,
+        req: ItineraryRequest,
+        *,
+        departure_utc: datetime,
+        places: PlacesAdapter,
+        routes: RoutesAdapter,
+        ctx: OperationContext,
+        deadline: DeadlineScope,
+        receive: Receive | None,
+    ) -> None:
+        self.req = req
+        self.departure_utc = departure_utc
+        self.places = places
+        self.routes = routes
+        self.ctx = ctx
+        self.deadline = deadline
+        self.receive = receive
+        self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=MAX_QUEUED_EVENTS)
+        self.emitter = _QueueEmitter(self.queue)
+        self.disconnected = False
+
+    def _terminal(self, outcome: OperationOutcome) -> TerminalEvent:
+        return TerminalEvent(
+            operation_id=self.ctx.operation_id,
+            input_revision=self.ctx.input_revision,
+            outcome=outcome,
+        )
+
+    def _timeout(self, partial: PartialPlan | None = None) -> TimeoutOutcome:
+        return TimeoutOutcome(
+            phase=self.emitter.phase,
+            message=(
+                "Routing took too long; the timetable stops at the last confirmed leg."
+                if partial is not None
+                else "This took too long and was stopped. Try again."
+            ),
+            partial=partial,
+        )
+
+    async def _produce(self) -> None:
+        outcome: OperationOutcome
+        try:
+            result = await execute_plan(
+                self.req,
+                departure_utc=self.departure_utc,
+                places=self.places,
+                routes=self.routes,
+                emitter=self.emitter,
+                ctx=self.ctx,
+                deadline=self.deadline,
+            )
+            if isinstance(result, PartialPlan) and result.failure_reason == "deadline_exceeded":
+                outcome = self._timeout(result)
+            else:
+                outcome = PlanOutcome(result=result)
+        except asyncio.CancelledError:
+            raise
+        except DeadlineExceededError:
+            outcome = self._timeout()
+        except Exception as exc:
+            failure = describe_failure(exc)
+            if failure is None:
+                log.error("plan_stream_failed exception_type=%s", type(exc).__name__)
+                outcome = ErrorOutcome(
+                    code="internal_error", message="Planning failed unexpectedly. Try again."
+                )
+            else:
+                failure = _with_instance_ids(failure, self.req)
+                outcome = ErrorOutcome(
+                    code=failure.code, message=failure.message, details=failure.details
+                )
+        await self.queue.put(self._terminal(outcome))
+
+    async def _watch_disconnect(self, producer: "asyncio.Task[None]") -> None:
+        assert self.receive is not None
+        while True:
+            message = await self.receive()
+            if message["type"] == "http.disconnect":
+                self.disconnected = True
+                producer.cancel()
+                with contextlib.suppress(asyncio.QueueFull):
+                    # A full queue already has events that will wake the consumer.
+                    self.queue.put_nowait(_DISCONNECTED)
+                return
+
+    async def events(self) -> AsyncIterator[bytes]:
+        producer = asyncio.create_task(self._produce())
+        watcher = asyncio.create_task(self._watch_disconnect(producer)) if self.receive else None
+        try:
+            while True:
+                timeout = self.deadline.remaining_seconds() + TERMINAL_GRACE_SECONDS
+                try:
+                    event = await asyncio.wait_for(self.queue.get(), timeout=timeout)
+                except TimeoutError:
+                    producer.cancel()
+                    event = self._terminal(self._timeout())
+                if event is _DISCONNECTED or self.disconnected:
+                    return
+                yield (event.model_dump_json() + "\n").encode()
+                if isinstance(event, TerminalEvent):
+                    return
+        finally:
+            producer.cancel()
+            if watcher is not None:
+                watcher.cancel()
+            await asyncio.gather(producer, *([watcher] if watcher else []), return_exceptions=True)
+
+
+@router.post("/plan/stream")
+@limiter.shared_limit(PLAN_LIMITS, scope=_PLAN_V2_SCOPE, cost=request_cost)
+async def plan_v2_stream(request: Request, req: ItineraryRequest) -> StreamingResponse:
+    """Streamed planning. Validation/rate-limit errors are HTTP errors; everything
+    after the response starts is reported as stream events."""
+    deadline = DeadlineScope()
+    ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
+    departure_utc = _validated_departure(req)
+    stream = PlanStream(
+        req,
+        departure_utc=departure_utc,
+        places=places_adapter(),
+        routes=routes_adapter(),
+        ctx=ctx,
+        deadline=deadline,
+        receive=request.receive,
+    )
+    return StreamingResponse(
+        stream.events(),
+        media_type=NDJSON_MEDIA_TYPE,
+        headers={"X-Accel-Buffering": "no"},
+    )

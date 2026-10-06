@@ -485,12 +485,15 @@ async def test_cancelled_context_produces_failed_leg() -> None:
 
 @pytest.mark.asyncio
 async def test_emitter_receives_expected_event_types() -> None:
-    """Emitter sees: operation_start, stop_ready, leg_progress, leg_ready, phase_complete."""
+    """Emitter sees: phase_start, stop_ready, leg_progress, leg_ready, phase_complete.
+
+    operation_start (with both phases) is emitted by the plan orchestrator.
+    """
     from app.models.response import (
         LegProgressEvent,
         LegReadyEvent,
-        OperationStartEvent,
         PhaseCompleteEvent,
+        PhaseStartEvent,
         StopReadyEvent,
     )
 
@@ -513,7 +516,9 @@ async def test_emitter_receives_expected_event_types() -> None:
     )
 
     types = [type(e) for e in emitter.events]
-    assert OperationStartEvent in types
+    ready = [e for e in emitter.events if isinstance(e, LegReadyEvent)]
+    assert [(e.completed_legs, e.total_legs) for e in ready] == [(1, 1)]
+    assert PhaseStartEvent in types
     assert StopReadyEvent in types
     assert LegProgressEvent in types
     assert LegReadyEvent in types

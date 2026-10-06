@@ -105,33 +105,51 @@ export type FailureReason1 =
 export type OverviewMapUrl1 = string;
 export type Warnings1 = Warning[];
 export type StreamEvent =
-  (OperationStartEvent | LegProgressEvent | StopReadyEvent | LegReadyEvent | PhaseCompleteEvent | TerminalEvent) | null;
+  | (
+      | OperationStartEvent
+      | PhaseStartEvent
+      | LegProgressEvent
+      | StopReadyEvent
+      | LegReadyEvent
+      | PhaseCompleteEvent
+      | TerminalEvent
+    )
+  | null;
 export type OperationId2 = string;
 export type InputRevision2 = number;
 export type Type = "operation_start";
-export type Phases = string[];
+export type Phases = ("verification" | "routing")[];
 export type OperationId3 = string;
 export type InputRevision3 = number;
-export type Type1 = "leg_progress";
-export type LegIndex = number;
-export type TotalLegs = number;
+export type Type1 = "phase_start";
+export type Phase = "verification" | "routing";
 export type OperationId4 = string;
 export type InputRevision4 = number;
-export type Type2 = "stop_ready";
-export type StopIndex = number;
+export type Type2 = "leg_progress";
+export type LegIndex = number;
+export type TotalLegs = number;
 export type OperationId5 = string;
 export type InputRevision5 = number;
-export type Type3 = "leg_ready";
-export type LegIndex1 = number;
-export type Leg = PlannedLeg | FailedLeg;
+export type Type3 = "stop_ready";
+export type StopIndex = number;
 export type OperationId6 = string;
 export type InputRevision6 = number;
-export type Type4 = "phase_complete";
-export type Phase = string;
+export type Type4 = "leg_ready";
+export type LegIndex1 = number;
+export type Leg = PlannedLeg | FailedLeg;
+/**
+ * Legs successfully routed so far.
+ */
+export type CompletedLegs = number;
+export type TotalLegs1 = number;
 export type OperationId7 = string;
 export type InputRevision7 = number;
-export type Type5 = "terminal";
-export type Outcome = PlanOutcome | RefreshOutcome | CancelledOutcome | ErrorOutcome;
+export type Type5 = "phase_complete";
+export type Phase1 = "verification" | "routing";
+export type OperationId8 = string;
+export type InputRevision8 = number;
+export type Type6 = "terminal";
+export type Outcome = PlanOutcome | RefreshOutcome | CancelledOutcome | TimeoutOutcome | ErrorOutcome;
 export type OutcomeType = "plan";
 export type Result = CompletePlan | PartialPlan;
 export type OutcomeType1 = "refresh";
@@ -139,16 +157,25 @@ export type Leg1 = PlannedLeg | FailedLeg;
 export type SubsequentStops = (KnownStop | UnknownStop)[];
 export type OutcomeType2 = "cancelled";
 export type Reason = string;
-export type OutcomeType3 = "error";
-export type Code1 = string;
+export type OutcomeType3 = "timeout";
+export type Phase2 = "verification" | "routing";
 export type Message1 = string;
-export type OperationOutcome = (PlanOutcome | RefreshOutcome | CancelledOutcome | ErrorOutcome) | null;
+export type OutcomeType4 = "error";
+export type Code1 = string;
+export type Message2 = string;
+export type Role = ("city" | "stop") | null;
+export type Reason1 = string | null;
+export type PlaceId2 = string | null;
+export type InstanceIds = string[] | null;
+export type MovedPlaceId = string | null;
+export type RetryAfterSeconds = number | null;
+export type OperationOutcome = (PlanOutcome | RefreshOutcome | CancelledOutcome | TimeoutOutcome | ErrorOutcome) | null;
 export type Status = "ok" | "no_matches";
-export type PlaceId2 = string;
+export type PlaceId3 = string;
 export type PrimaryText = string;
 export type SecondaryText = string | null;
 export type Suggestions = SuggestionItem[];
-export type PlaceId3 = string;
+export type PlaceId4 = string;
 export type Name2 = string;
 export type SecondaryText1 = string | null;
 export type Lat1 = number;
@@ -161,7 +188,7 @@ export type LowLat = number;
 export type LowLng = number;
 export type HighLat = number;
 export type HighLng = number;
-export type PlaceId4 = string;
+export type PlaceId5 = string;
 export type Lat2 = number;
 export type Lng2 = number;
 export type SecondaryText2 = string | null;
@@ -170,12 +197,6 @@ export type SecondaryText2 = string | null;
  */
 export type Timezone3 = string | null;
 export type Source = "provider" | "cache";
-export type Role = ("city" | "stop") | null;
-export type Reason1 = string | null;
-export type PlaceId5 = string | null;
-export type InstanceIds = string[] | null;
-export type MovedPlaceId = string | null;
-export type RetryAfterSeconds = number | null;
 export type GeneratedAt = string;
 export type City2 = string;
 export type Mode3 = "transit" | "walking" | "driving";
@@ -464,15 +485,28 @@ export interface OperationStartEvent {
   [k: string]: unknown;
 }
 /**
- * Emitted when a leg routing call starts.
+ * Emitted when a named phase begins.
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "PhaseStartEvent".
+ */
+export interface PhaseStartEvent {
+  operation_id: OperationId3;
+  input_revision: InputRevision3;
+  type?: Type1;
+  phase: Phase;
+  [k: string]: unknown;
+}
+/**
+ * Emitted when a leg routing call starts (not a completion count).
  *
  * This interface was referenced by `ContractRoot`'s JSON-Schema
  * via the `definition` "LegProgressEvent".
  */
 export interface LegProgressEvent {
-  operation_id: OperationId3;
-  input_revision: InputRevision3;
-  type?: Type1;
+  operation_id: OperationId4;
+  input_revision: InputRevision4;
+  type?: Type2;
   leg_index: LegIndex;
   total_legs: TotalLegs;
   [k: string]: unknown;
@@ -484,9 +518,9 @@ export interface LegProgressEvent {
  * via the `definition` "StopReadyEvent".
  */
 export interface StopReadyEvent {
-  operation_id: OperationId4;
-  input_revision: InputRevision4;
-  type?: Type2;
+  operation_id: OperationId5;
+  input_revision: InputRevision5;
+  type?: Type3;
   stop_index: StopIndex;
   stop: KnownStop;
   [k: string]: unknown;
@@ -498,11 +532,13 @@ export interface StopReadyEvent {
  * via the `definition` "LegReadyEvent".
  */
 export interface LegReadyEvent {
-  operation_id: OperationId5;
-  input_revision: InputRevision5;
-  type?: Type3;
+  operation_id: OperationId6;
+  input_revision: InputRevision6;
+  type?: Type4;
   leg_index: LegIndex1;
   leg: Leg;
+  completed_legs: CompletedLegs;
+  total_legs: TotalLegs1;
   [k: string]: unknown;
 }
 /**
@@ -512,10 +548,10 @@ export interface LegReadyEvent {
  * via the `definition` "PhaseCompleteEvent".
  */
 export interface PhaseCompleteEvent {
-  operation_id: OperationId6;
-  input_revision: InputRevision6;
-  type?: Type4;
-  phase: Phase;
+  operation_id: OperationId7;
+  input_revision: InputRevision7;
+  type?: Type5;
+  phase: Phase1;
   [k: string]: unknown;
 }
 /**
@@ -525,9 +561,9 @@ export interface PhaseCompleteEvent {
  * via the `definition` "TerminalEvent".
  */
 export interface TerminalEvent {
-  operation_id: OperationId7;
-  input_revision: InputRevision7;
-  type?: Type5;
+  operation_id: OperationId8;
+  input_revision: InputRevision8;
+  type?: Type6;
   outcome: Outcome;
   [k: string]: unknown;
 }
@@ -555,7 +591,11 @@ export interface RefreshOutcome {
   [k: string]: unknown;
 }
 /**
- * Terminal outcome when the operation was cancelled (client disconnect).
+ * Terminal outcome when the operation was cancelled.
+ *
+ * A client that cancels by disconnecting cannot receive this; the server
+ * simply stops work. It is delivered when cancellation is observed while
+ * the connection can still carry a final event.
  *
  * This interface was referenced by `ContractRoot`'s JSON-Schema
  * via the `definition` "CancelledOutcome".
@@ -566,18 +606,50 @@ export interface CancelledOutcome {
   [k: string]: unknown;
 }
 /**
+ * Terminal outcome when the 60-second operation deadline expired.
+ *
+ * ``partial`` carries the valid prefix when the deadline expired during
+ * routing; it is null when it expired during verification (no routing).
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "TimeoutOutcome".
+ */
+export interface TimeoutOutcome {
+  outcome_type?: OutcomeType3;
+  phase: Phase2;
+  message: Message1;
+  partial?: PartialPlan | null;
+  [k: string]: unknown;
+}
+/**
  * Terminal outcome for an unrecoverable error.
  *
- * Never exposes raw provider error text — only a structured code and a
- * safe user-facing message.
+ * Never exposes raw provider error text — only a structured code, a safe
+ * user-facing message and optional structured details.
  *
  * This interface was referenced by `ContractRoot`'s JSON-Schema
  * via the `definition` "ErrorOutcome".
  */
 export interface ErrorOutcome {
-  outcome_type?: OutcomeType3;
+  outcome_type?: OutcomeType4;
   code: Code1;
-  message: Message1;
+  message: Message2;
+  details?: ErrorDetails | null;
+  [k: string]: unknown;
+}
+/**
+ * Structured context for an error outcome. Never raw provider text.
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "ErrorDetails".
+ */
+export interface ErrorDetails {
+  role?: Role;
+  reason?: Reason1;
+  place_id?: PlaceId2;
+  instance_ids?: InstanceIds;
+  moved_place_id?: MovedPlaceId;
+  retry_after_seconds?: RetryAfterSeconds;
   [k: string]: unknown;
 }
 /**
@@ -598,7 +670,7 @@ export interface SuggestionsResponse {
  * via the `definition` "SuggestionItem".
  */
 export interface SuggestionItem {
-  place_id: PlaceId2;
+  place_id: PlaceId3;
   primary_text: PrimaryText;
   secondary_text?: SecondaryText;
   [k: string]: unknown;
@@ -610,7 +682,7 @@ export interface SuggestionItem {
  * via the `definition` "SelectedCity".
  */
 export interface SelectedCity {
-  place_id: PlaceId3;
+  place_id: PlaceId4;
   name: Name2;
   secondary_text?: SecondaryText1;
   lat: Lat1;
@@ -642,27 +714,12 @@ export interface ViewportOut {
  * via the `definition` "SelectedPlace".
  */
 export interface SelectedPlace {
-  place_id: PlaceId4;
+  place_id: PlaceId5;
   lat: Lat2;
   lng: Lng2;
   secondary_text?: SecondaryText2;
   timezone?: Timezone3;
   source: Source;
-  [k: string]: unknown;
-}
-/**
- * Structured context for an error outcome. Never raw provider text.
- *
- * This interface was referenced by `ContractRoot`'s JSON-Schema
- * via the `definition` "ErrorDetails".
- */
-export interface ErrorDetails {
-  role?: Role;
-  reason?: Reason1;
-  place_id?: PlaceId5;
-  instance_ids?: InstanceIds;
-  moved_place_id?: MovedPlaceId;
-  retry_after_seconds?: RetryAfterSeconds;
   [k: string]: unknown;
 }
 /**
