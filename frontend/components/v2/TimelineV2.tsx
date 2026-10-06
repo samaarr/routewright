@@ -2,8 +2,9 @@
 
 import type { Warning } from "@/lib/api-types";
 import { fmtDuration, fmtTime } from "@/lib/utils";
-import { resultIsStale, type PlannerState } from "@/lib/v2/state.ts";
-import type { VFailedLeg, VKnownStop, VPlannedLeg, VPlanResult, VTimelineItem } from "@/lib/v2/validate.ts";
+import { legPosition } from "@/lib/v2/refresh.ts";
+import { progressLabel, refreshableTarget, resultIsStale, type PlannerState } from "@/lib/v2/state.ts";
+import type { VFailedLeg, VKnownStop, VPlanResult, VPlannedLeg, VTimelineItem } from "@/lib/v2/validate.ts";
 
 const FAILURE_TEXT: Record<string, string> = {
   no_route: "No route was found for this journey at that time.",
@@ -14,8 +15,15 @@ const FAILURE_TEXT: Record<string, string> = {
   cancelled: "Planning was stopped before this journey.",
 };
 
-export const REFRESH_UNAVAILABLE =
-  "Refreshing a single journey from its planned departure is coming in a later update. Press Plan to recalculate the whole day.";
+const STALE_REASON = "Press Plan first — these times are for earlier trip details.";
+const BUSY_REASON = "Wait for the current update to finish.";
+
+interface Actions {
+  /** Global leg index -> enabled? (null = no actions shown, e.g. live/previous items) */
+  canRefresh: ((legIndex: number) => boolean) | null;
+  disabledReason: string;
+  onRefresh: (legIndex: number) => void;
+}
 
 function hoursText(stop: VKnownStop, tz: string): { text: string; tone: "ok" | "warn" | "muted" } | null {
   const d = stop.hours_detail;
@@ -75,9 +83,33 @@ function StopRow({ stop, tz, warnings }: { stop: VKnownStop; tz: string; warning
   );
 }
 
-function LegRow({ leg, first }: { leg: VPlannedLeg; first: boolean }) {
+function ActionButton({
+  legIndex,
+  actions,
+  label,
+}: {
+  legIndex: number;
+  actions: Actions;
+  label: "Refresh from here" | "Try again";
+}) {
+  if (!actions.canRefresh) return null;
+  const enabled = actions.canRefresh(legIndex);
   return (
-    <li className="py-1 pl-20">
+    <button
+      type="button"
+      onClick={() => actions.onRefresh(legIndex)}
+      disabled={!enabled}
+      title={enabled ? "Recalculate this journey and everything after it, from its planned departure" : actions.disabledReason}
+      className="rounded px-1.5 py-0.5 text-xs text-accent underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:text-text-ghost disabled:no-underline"
+    >
+      ↻ {label}
+    </button>
+  );
+}
+
+function LegRow({ leg, first, legIndex, actions }: { leg: VPlannedLeg; first: boolean; legIndex: number; actions: Actions }) {
+  return (
+    <li className="py-1 pl-20" data-testid={`tl-leg-${legIndex}`}>
       <div className="flex flex-wrap items-baseline gap-x-1.5">
         <span className="text-text-muted">↓</span>
         <span className="text-body text-text-secondary">{leg.summary}</span>
@@ -90,16 +122,7 @@ function LegRow({ leg, first }: { leg: VPlannedLeg; first: boolean }) {
         >
           Get directions ↗
         </a>
-        <button
-          type="button"
-          disabled
-          aria-disabled="true"
-          title={REFRESH_UNAVAILABLE}
-          aria-label="Refresh this journey (not available yet)"
-          className="cursor-not-allowed p-1 text-xs text-text-ghost"
-        >
-          ↻
-        </button>
+        <ActionButton legIndex={legIndex} actions={actions} label="Refresh from here" />
       </div>
       {first && (
         <p className="mt-0.5 text-caption text-text-muted">
@@ -110,16 +133,33 @@ function LegRow({ leg, first }: { leg: VPlannedLeg; first: boolean }) {
   );
 }
 
-function FailedRow({ leg }: { leg: VFailedLeg }) {
+function FailedRow({ leg, legIndex, actions }: { leg: VFailedLeg; legIndex: number; actions: Actions }) {
   return (
     <li className="py-2 pl-20" data-testid="tl-failed-leg">
-      <p className="text-body text-error-text">⚠ {FAILURE_TEXT[leg.failure_reason] ?? "This journey couldn't be planned."}</p>
+      <p className="text-body text-error-text">
+        ⚠ {FAILURE_TEXT[leg.failure_reason] ?? "This journey couldn't be planned."}{" "}
+        <ActionButton legIndex={legIndex} actions={actions} label="Try again" />
+      </p>
       <p className="text-caption text-text-muted">Times after this point are unknown.</p>
     </li>
   );
 }
 
-function Items({ items, plan, warnings }: { items: VTimelineItem[]; plan: { timezone: string }; warnings: Warning[] }) {
+const NO_ACTIONS: Actions = { canRefresh: null, disabledReason: "", onRefresh: () => {} };
+
+function Items({
+  items,
+  tz,
+  warnings,
+  legOffset = 0,
+  actions = NO_ACTIONS,
+}: {
+  items: VTimelineItem[];
+  tz: string;
+  warnings: Warning[];
+  legOffset?: number;
+  actions?: Actions;
+}) {
   let legCount = 0;
   // Hours warnings repeat what each stop's hours line already shows, so only
   // other stop warnings (e.g. outside-area) are listed under the stop.
@@ -130,12 +170,17 @@ function Items({ items, plan, warnings }: { items: VTimelineItem[]; plan: { time
       {items.map((item, i) => {
         switch (item.item_type) {
           case "stop":
-            return <StopRow key={`s-${item.instance_id}-${i}`} stop={item} tz={plan.timezone} warnings={byStop(item.instance_id)} />;
-          case "leg":
+            return <StopRow key={`s-${item.instance_id}-${i}`} stop={item} tz={tz} warnings={byStop(item.instance_id)} />;
+          case "leg": {
+            const legIndex = legOffset + legCount;
             legCount += 1;
-            return <LegRow key={`l-${i}`} leg={item} first={legCount === 1} />;
-          case "failed_leg":
-            return <FailedRow key={`f-${i}`} leg={item} />;
+            return <LegRow key={`l-${i}`} leg={item} first={legIndex === 0} legIndex={legIndex} actions={actions} />;
+          }
+          case "failed_leg": {
+            const legIndex = legOffset + legCount;
+            legCount += 1;
+            return <FailedRow key={`f-${i}`} leg={item} legIndex={legIndex} actions={actions} />;
+          }
           case "unknown_stop":
             return (
               <li key={`u-${item.instance_id}-${i}`} className="flex items-start py-3 opacity-70" data-testid={`tl-unknown-${item.instance_id}`}>
@@ -160,7 +205,7 @@ function Items({ items, plan, warnings }: { items: VTimelineItem[]; plan: { time
   );
 }
 
-function ResultView({ plan, dimmed }: { plan: VPlanResult; dimmed: boolean }) {
+function ResultView({ plan, dimmed, actions }: { plan: VPlanResult; dimmed: boolean; actions: Actions }) {
   const general = plan.warnings.filter((w) => !w.affects_instance_id);
   return (
     <div className={dimmed ? "opacity-50" : undefined} data-testid={dimmed ? "previous-result" : "current-result"}>
@@ -174,19 +219,84 @@ function ResultView({ plan, dimmed }: { plan: VPlanResult; dimmed: boolean }) {
           {w.message}
         </p>
       ))}
-      <Items items={plan.timeline} plan={plan} warnings={plan.warnings} />
+      <Items items={plan.timeline} tz={plan.timezone} warnings={plan.warnings} actions={actions} />
     </div>
   );
 }
 
-export default function TimelineV2({ state }: { state: PlannerState }) {
+/** Live view while a refresh runs: prefix unchanged, new journeys separate,
+ *  previous suffix visible but explicitly labelled. */
+function RefreshingView({ state, plan, onCancel }: { state: PlannerState; plan: VPlanResult; onCancel: () => void }) {
+  const op = state.operation;
+  if (op.kind !== "running" || !op.refresh) return null;
+  const pos = legPosition(plan.timeline, op.refresh.legIndex);
+  const prefix = plan.timeline.slice(0, pos);
+  const previous = plan.timeline.slice(pos);
+  const live: VTimelineItem[] = [];
+  op.legs.forEach((leg, i) => {
+    live.push(leg);
+    const stop = op.stops[i];
+    if (stop) live.push(stop);
+  });
+  const prefixIds = new Set(prefix.flatMap((i) => (i.item_type === "stop" ? [i.instance_id] : [])));
+  return (
+    <div data-testid="refreshing-view">
+      <Items items={prefix} tz={plan.timezone} warnings={plan.warnings.filter((w) => prefixIds.has(w.affects_instance_id ?? ""))} />
+      <section aria-label="Refreshed journeys" className="my-4 rounded-md border border-accent-faint bg-accent-soft/40 px-3 py-3">
+        <div className="flex items-center gap-2">
+          <p role="status" aria-live="polite" className="flex-1 text-sm text-text-secondary" data-testid="refresh-progress">
+            Refreshing from {op.refresh.fromName} → {op.refresh.toName} (planned{" "}
+            {fmtTime(op.refresh.plannedDeparture, plan.timezone)}). {progressLabel(op)}
+          </p>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-md border border-border-default px-3 py-1.5 text-sm font-medium text-text-primary hover:border-border-strong"
+          >
+            Cancel
+          </button>
+        </div>
+        {live.length > 0 && (
+          <div className="mt-2" data-testid="refreshed-items">
+            <p className="text-xs font-medium uppercase tracking-wide text-accent">Refreshed journeys</p>
+            <Items items={live} tz={plan.timezone} warnings={[]} legOffset={op.refresh.legIndex} />
+          </div>
+        )}
+      </section>
+      <section aria-label="Previous timings — refreshing" data-testid="previous-timings">
+        <p className="mb-1 text-xs font-medium text-text-muted">Previous timings — refreshing.</p>
+        <div className="opacity-50">
+          <Items items={previous} tz={plan.timezone} warnings={[]} legOffset={op.refresh.legIndex} />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export default function TimelineV2({
+  state,
+  onRefresh,
+  onCancel,
+}: {
+  state: PlannerState;
+  onRefresh: (legIndex: number) => void;
+  onCancel: () => void;
+}) {
   const { operation, result, notice } = state;
   const stale = resultIsStale(state);
   const running = operation.kind === "running";
+  const refreshing = running && operation.purpose === "refresh";
+  const planning = running && operation.purpose === "plan";
   const plan = result?.plan ?? null;
 
+  const actions: Actions = {
+    canRefresh: (legIndex) => refreshableTarget(state, legIndex) !== null,
+    disabledReason: stale ? STALE_REASON : BUSY_REASON,
+    onRefresh,
+  };
+
   const liveItems: VTimelineItem[] = [];
-  if (running) {
+  if (planning) {
     operation.stops.forEach((s, i) => {
       liveItems.push(s);
       const leg = operation.legs[i];
@@ -217,27 +327,29 @@ export default function TimelineV2({ state }: { state: PlannerState }) {
         </div>
       )}
 
-      {running && (
+      {planning && (
         <section aria-label="New timetable in progress" className="mb-6">
           <p className="mb-2 text-xs font-medium uppercase tracking-wide text-accent">New timetable — in progress</p>
           {liveItems.length > 0 ? (
-            <Items items={liveItems} plan={{ timezone: state.draft.city?.timezone ?? "UTC" }} warnings={[]} />
+            <Items items={liveItems} tz={state.draft.city?.timezone ?? "UTC"} warnings={[]} />
           ) : (
             <p className="text-sm text-text-muted">Waiting for the first confirmed stop…</p>
           )}
         </section>
       )}
 
-      {plan && (
-        <section aria-label={running || stale ? "Previous plan" : "Plan"}>
-          {(running || stale) && (
+      {refreshing && plan && <RefreshingView state={state} plan={plan} onCancel={onCancel} />}
+
+      {plan && !refreshing && (
+        <section aria-label={planning || stale ? "Previous plan" : "Plan"}>
+          {(planning || stale) && (
             <p className="mb-2 text-xs font-medium text-text-muted" data-testid="stale-label">
               {stale
                 ? "Previous plan — these times are for earlier trip details. Press Plan to update."
                 : "Previous plan"}
             </p>
           )}
-          <ResultView plan={plan} dimmed={running || stale} />
+          <ResultView plan={plan} dimmed={planning || stale} actions={actions} />
         </section>
       )}
 
@@ -247,7 +359,8 @@ export default function TimelineV2({ state }: { state: PlannerState }) {
 
       {plan && !running && (
         <p className="mt-6 text-xs text-text-muted">
-          To change the order or how long you stay, edit the stops and press Plan again. {REFRESH_UNAVAILABLE.split(".")[0]}.
+          To change the order or how long you stay, edit the stops and press Plan again. “Refresh from here”
+          recalculates a journey and everything after it from its planned departure.
         </p>
       )}
     </div>

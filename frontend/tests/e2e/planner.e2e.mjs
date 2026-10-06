@@ -10,7 +10,11 @@
 // Run: npm run build && npm run test:e2e
 
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:https";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { after, afterEach, before, beforeEach, describe, test } from "node:test";
 import { chromium } from "playwright";
 
@@ -38,6 +42,9 @@ let log; // requests seen by the mock API
 let planMode; // how the mocked stream answers
 let suggestDelays; // query -> ms
 let pendingPlan; // resolve fn for a held stream
+let refreshMode; // how the mocked refresh stream answers
+let slow; // local HTTPS server that streams refresh events progressively
+let releaseRefresh; // lets a progressive refresh stream send its terminal event
 
 function cors(extra = {}) {
   return {
@@ -105,6 +112,45 @@ function planEvents(req, mode) {
   return out;
 }
 
+function refreshEvents(req, mode) {
+  const op = { operation_id: req.operation_id, input_revision: req.input_revision };
+  const ev = (type, extra) => ({ ...op, type, ...extra });
+  const k = req.leg_index;
+  const n = req.stops.length;
+  const out = [ev("operation_start", { phases: ["verification", "routing"] }), ev("phase_start", { phase: "verification" }), ev("phase_complete", { phase: "verification" }), ev("phase_start", { phase: "routing" })];
+  const suffix = [];
+  let depart = Date.parse(req.planned_departure);
+  for (let i = k; i < n - 1; i++) {
+    const s = req.stops[i];
+    const next = req.stops[i + 1];
+    out.push(ev("leg_progress", { leg_index: i, total_legs: n - 1 - k }));
+    const failAt = mode === "partial" ? k + 1 : mode === "fail-first" ? k : -1;
+    if (i === failAt) {
+      const failed = { item_type: "failed_leg", from_stop_id: s.instance_id, to_stop_id: next.instance_id, from_name: s.selection.name, to_name: next.selection.name, failure_reason: "no_route" };
+      suffix.push(failed);
+      out.push(ev("leg_ready", { leg_index: i, leg: failed, completed_legs: i - k, total_legs: n - 1 - k }));
+      for (let j = i + 1; j < n; j++) suffix.push({ item_type: "unknown_stop", instance_id: req.stops[j].instance_id, place_id: req.stops[j].selection.place_id, name: req.stops[j].selection.name });
+      break;
+    }
+    const arrive = depart + 35 * 60000;
+    const leg = { item_type: "leg", from_stop_id: s.instance_id, to_stop_id: next.instance_id, from_name: s.selection.name, to_name: next.selection.name, mode: req.mode, duration_seconds: 2100, distance_meters: 900, depart_at: new Date(depart).toISOString(), arrive_at: new Date(arrive).toISOString(), summary: "Bus 99 (refreshed)", map_url: "https://www.google.com/maps/dir/?api=1" };
+    const stay = next.stay_minutes ?? (i + 1 === n - 1 ? 0 : 60);
+    const stop = { item_type: "stop", instance_id: next.instance_id, place_id: next.selection.place_id, name: next.selection.name, address: null, lat: next.selection.lat, lng: next.selection.lng, arrive_at: new Date(arrive).toISOString(), depart_at: new Date(arrive + stay * 60000).toISOString(), stay_minutes: stay, stay_source: "default", map_url: "x", hours_status: "unknown", hours_detail: { unknown_reason: "missing" } };
+    suffix.push(leg, stop);
+    out.push(ev("leg_ready", { leg_index: i, leg, completed_legs: i - k + 1, total_legs: n - 1 - k }));
+    out.push(ev("stop_ready", { stop_index: i + 1, stop }));
+    depart = arrive + stay * 60000;
+  }
+  const failed = suffix.some((i) => i.item_type === "failed_leg");
+  const result = {
+    ...op, result_type: failed ? "refresh_partial" : "refresh_complete", leg_index: k, planned_departure: req.planned_departure,
+    timezone: req.departure.timezone, suffix, warnings: [],
+    ...(failed ? { failed_at_leg_index: k + suffix.filter((i) => i.item_type === "leg").length, failure_reason: "no_route" } : {}),
+  };
+  out.push(ev("terminal", { outcome: { outcome_type: "refresh", result } }));
+  return out;
+}
+
 async function apiRoute(route) {
   const req = route.request();
   if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors() });
@@ -141,7 +187,48 @@ async function apiRoute(route) {
     if (planMode === "malformed") text = text.replace('"stop_ready"', '"stop_ready","stop_index":"zero"').replace('"stop_index":0,', "");
     return route.fulfill({ status: 200, headers: cors({ "content-type": "application/x-ndjson" }), body: text });
   }
+  if (path === "/api/v2/refresh/stream") {
+    if (refreshMode === "progressive") return route.continue({ url: `https://127.0.0.1:${slow.port}${path}` });
+    if (refreshMode === "hang") {
+      await new Promise((resolve) => { pendingPlan = resolve; });
+      return route.abort().catch(() => {});
+    }
+    const lines = refreshEvents(body, refreshMode).map((e) => JSON.stringify(e));
+    let text = lines.join("\n") + "\n";
+    if (refreshMode === "truncated") text = lines.slice(0, -1).join("\n") + "\n"; // no terminal
+    if (refreshMode === "malformed") text = lines.slice(0, -1).join("\n") + '\n{"type":"terminal","outcome":' + "\n";
+    return route.fulfill({ status: 200, headers: cors({ "content-type": "application/x-ndjson" }), body: text });
+  }
   return json(route, 404, { error: "not_found" });
+}
+
+// Local HTTPS server (self-signed, test-only) that writes refresh events one
+// at a time and holds the terminal event until the test releases it, so the
+// UI can be observed mid-stream.
+function startSlowServer() {
+  const dir = mkdtempSync(join(tmpdir(), "rw-e2e-"));
+  execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", join(dir, "k.pem"), "-out", join(dir, "c.pem"), "-days", "1", "-subj", "/CN=127.0.0.1"], { stdio: "ignore" });
+  const server = createServer({ key: readFileSync(join(dir, "k.pem")), cert: readFileSync(join(dir, "c.pem")) }, (req, res) => {
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, cors());
+      return res.end();
+    }
+    let raw = "";
+    req.on("data", (c) => { raw += c; });
+    req.on("end", async () => {
+      const body = JSON.parse(raw);
+      log.push({ path: "/api/v2/refresh/stream", body });
+      res.writeHead(200, cors({ "content-type": "application/x-ndjson" }));
+      const events = refreshEvents(body, "ok");
+      for (const e of events.slice(0, -1)) {
+        res.write(JSON.stringify(e) + "\n");
+        await new Promise((r) => setTimeout(r, 30));
+      }
+      await new Promise((resolve) => { releaseRefresh = resolve; });
+      res.end(JSON.stringify(events.at(-1)) + "\n");
+    });
+  });
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, dir, port: server.address().port })));
 }
 
 const count = (path) => log.filter((r) => r.path === path).length;
@@ -183,24 +270,30 @@ describe("v2 planner (browser)", () => {
       await new Promise((r) => setTimeout(r, 100));
     }
     browser = await chromium.launch({ headless: true });
+    slow = await startSlowServer();
   });
 
   after(async () => {
     await browser?.close();
     server?.kill("SIGTERM");
+    slow?.server.close();
+    if (slow) rmSync(slow.dir, { recursive: true, force: true });
   });
 
   afterEach(async () => {
     pendingPlan?.();
+    releaseRefresh?.();
     await page?.close();
   });
 
   beforeEach(async () => {
     log = [];
     planMode = "complete";
+    refreshMode = "ok";
+    releaseRefresh = null;
     suggestDelays = {};
     pendingPlan = null;
-    page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, ignoreHTTPSErrors: true });
     await page.route(/googleapis|gstatic|google\.com/, (r) => r.abort());
     await page.route(`${API}/**`, apiRoute);
     await page.goto(ORIGIN);
@@ -371,15 +464,103 @@ describe("v2 planner (browser)", () => {
     assert.equal(log.find((r) => r.path === "/api/v2/plan/stream").body.departure.occurrence, 2);
   });
 
-  test("refresh and optimise are clearly unavailable; desktop tabs preserved", async () => {
+  async function planThreeStops() {
     await fillReadyDraft();
     await page.getByRole("button", { name: "+ Add another stop" }).filter({ visible: true }).click();
-    await chooseStop(3, "glen", "Glendalough");
+    await chooseStop(3, "trinity", "Trinity College");
     await planButton().click();
     await page.getByTestId("current-result").waitFor();
-    const refresh = page.getByRole("button", { name: "Refresh this journey (not available yet)" }).first();
-    assert.equal(await refresh.isDisabled(), true);
-    assert.match(await refresh.getAttribute("title"), /later update/);
+  }
+  const refreshButton = (n) => page.getByRole("button", { name: "↻ Refresh from here" }).nth(n);
+  const refreshRequests = () => log.filter((r) => r.path === "/api/v2/refresh/stream").map((r) => r.body);
+
+  test("refresh from here streams new journeys separately, then replaces the suffix at once", async () => {
+    await planThreeStops();
+    const before = await page.getByTestId("current-result").innerText();
+    assert.match(before, /Bus 15, 20 min/);
+    refreshMode = "progressive";
+    await refreshButton(1).click();
+    const progress = page.getByTestId("refresh-progress");
+    await page.getByTestId("refreshed-items").getByText("Bus 99 (refreshed)").waitFor();
+    await progress.filter({ hasText: "Refreshed 1 of 1 journey" }).waitFor(); // label updates with the event
+    assert.match(await progress.innerText(), /Refreshing from Guinness Storehouse → Trinity College \(planned 11:20\)\. Refreshed 1 of 1 journey…/);
+    // Previous suffix still visible and labelled; prefix unchanged.
+    const previous = page.getByTestId("previous-timings");
+    assert.match(await previous.innerText(), /Previous timings — refreshing\./);
+    assert.match(await previous.innerText(), /Bus 15, 20 min/);
+    const req = refreshRequests()[0];
+    assert.equal(req.leg_index, 1);
+    // Stop 2's planned departure in the mocked plan: arrive 09:20Z + 60 min stay.
+    assert.equal(req.planned_departure, "2026-10-21T10:20:00.000Z");
+    releaseRefresh();
+    await page.getByTestId("current-result").waitFor();
+    await page.getByTestId("previous-timings").waitFor({ state: "detached" });
+    const after = await page.getByTestId("current-result").innerText();
+    assert.match(after, /Bus 99 \(refreshed\)/);
+    assert.equal((after.match(/Bus 15, 20 min/g) ?? []).length, 1); // only the unchanged first journey
+    assert.equal(count("/api/v2/plan/stream"), 1); // refresh did not re-plan
+  });
+
+  test("a failed refreshed journey shows unknown later times and retries from the same departure", async () => {
+    await planThreeStops();
+    refreshMode = "partial";
+    await refreshButton(0).click();
+    await page.getByTestId("tl-failed-leg").waitFor();
+    const text = await page.getByTestId("current-result").innerText();
+    assert.match(text, /Bus 99 \(refreshed\)/);
+    assert.match(text, /Arrival time unknown/);
+    assert.equal((text.match(/Bus 15, 20 min/g) ?? []).length, 0); // no old downstream timings
+    refreshMode = "fail-first"; // the retried journey fails again
+    const tryAgain = page.getByRole("button", { name: "↻ Try again" });
+    await tryAgain.click();
+    await page.getByTestId("tl-failed-leg").waitFor();
+    await page.getByRole("button", { name: "↻ Try again" }).click();
+    await page.getByTestId("tl-failed-leg").waitFor();
+    const [, retry1, retry2] = refreshRequests();
+    assert.equal(retry1.leg_index, 1);
+    assert.equal(retry1.planned_departure, retry2.planned_departure); // same planned departure each retry
+  });
+
+  test("cancelling a refresh keeps and labels the previous timings", async () => {
+    await planThreeStops();
+    refreshMode = "hang";
+    const failed = page.waitForEvent("requestfailed", (r) => r.url().endsWith("/api/v2/refresh/stream"));
+    await refreshButton(1).click();
+    await page.getByTestId("previous-timings").waitFor();
+    await page.getByTestId("refreshing-view").getByRole("button", { name: "Cancel" }).click();
+    await failed;
+    assert.equal(await page.getByTestId("plan-notice").innerText(), "Refresh cancelled — showing previous timings.");
+    assert.match(await page.getByTestId("current-result").innerText(), /Bus 15, 20 min/);
+  });
+
+  for (const mode of ["truncated", "malformed"]) {
+    test(`a ${mode} refresh stream keeps the previous timings`, async () => {
+      await planThreeStops();
+      const before = await page.getByTestId("current-result").innerText();
+      refreshMode = mode;
+      await refreshButton(1).click();
+      await page.getByTestId("plan-notice").waitFor();
+      assert.equal(await page.getByTestId("plan-notice").innerText(), "Refresh incomplete — showing previous timings.");
+      assert.equal(await page.getByTestId("current-result").innerText(), before);
+    });
+  }
+
+  test("editing during a refresh stops it; refresh then needs a new plan", async () => {
+    await planThreeStops();
+    refreshMode = "hang";
+    const failed = page.waitForEvent("requestfailed", (r) => r.url().endsWith("/api/v2/refresh/stream"));
+    await refreshButton(1).click();
+    await page.getByTestId("previous-timings").waitFor();
+    await page.getByLabel("Departure time").filter({ visible: true }).fill("11:00");
+    await failed;
+    assert.match(await page.getByTestId("plan-notice").innerText(), /Refresh stopped because the trip details changed/);
+    const stale = page.getByRole("button", { name: "↻ Refresh from here" }).first();
+    assert.equal(await stale.isDisabled(), true);
+    assert.match(await stale.getAttribute("title"), /Press Plan first/);
+  });
+
+  test("optimisation stays unavailable; legacy endpoints unused; desktop tabs preserved", async () => {
+    await planThreeStops();
     await page.getByRole("button", { name: "Map", exact: true }).filter({ visible: true }).click();
     await page.getByTestId("optimise-unavailable").filter({ visible: true }).waitFor();
     assert.equal(await page.getByRole("button", { name: /Optimise/ }).count(), 0);

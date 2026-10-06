@@ -189,7 +189,7 @@ claimed beyond what the code and tests show.
 | 4 | Ordinary planning with sequential transit | COMPLETE (SSV): streamed progress, disconnect cancellation releasing capacity (verified), one 60 s deadline incl. verification/admission, accounting. Item 8 solver bounding applies once comparison exists (Step 8). Deployment check of 60 s streaming through Railway/Vercel proxies remains (deployment-only) |
 | 5 | Opening-hours rules | DONE FOR v2 PLANNING (V2-VH; DST fix in SSV) — instant-based comparison across clock changes, next-opening date. Comparison/acceptance retention is Step 8. v1 `/api/plan` keeps its weekly-only logic |
 | 6 | Frontend state + streaming | COMPLETE (SSV): items 1-7; frontend now plans only via `/api/v2/plan/stream`. Item 6 pins: default on, visible, preserved through edits; their effect on optimisation arrives with Step 8 |
-| 7 | Suffix refresh via shared engine | PENDING |
+| 7 | Suffix refresh via shared engine | COMPLETE — backend e4f5f27 (`/api/v2/refresh[/stream]`, planned departure never now, unchanged prefix, ≤ N−1−k calls, failure → unknown downstream); refresh UI committed with this record ("Refresh from here" / "Try again", previous timings labelled while refreshing, atomic suffix replacement, cancel/incomplete keep the previous plan). Step 8 hook (refresh cancels optimisation) applies once optimisation exists |
 | 8 | Compare one local candidate with fresh original | PENDING |
 | 9 | Metrics, security regression, deployment verification | PENDING (B2, B4) |
 | 10 | Review, release readiness, completion report | PENDING |
@@ -681,9 +681,75 @@ Visual check via screenshots at 1440px and 390px.
 8. README/CLAUDE.md still describe the v1 architecture and Pro-tier estimate.
 9. `npm run security:audit` failure (B3).
 
+## Step 7 — suffix refresh (completed 2026-10-06)
+
+### Backend — commit e4f5f27
+- `RefreshRequest` = ItineraryRequest + `leg_index` k + `planned_departure`
+  (instant of leg k from the client's current plan). Provenance documented on
+  the model: itinerary re-verified; planned departure from the client's
+  calculated snapshot, checked for consistency/support (no server result
+  storage). The prefix is neither sent nor returned.
+- `engine.refresh_suffix` shares `_route_sequence` with planning: leg k at
+  the planned departure, later legs at actual arrival + preserved stays,
+  downstream hours re-assessed, first failure → FailedLeg + UnknownStops.
+- Verifies only city, departure zone and stops k..N-1 (D37). Planned
+  departures before the trip departure or outside Routes' documented window
+  (transit −7/+100 days; walking/driving future only) → 422
+  `planned_departure_unsupported` before any provider call; never "now".
+- JSON + NDJSON stream endpoints with planning's events, 60 s deadline,
+  disconnect cancellation; own per-IP allowance (existing refresh limits,
+  scope `refresh-v2`); legacy `/api/refresh-leg` unused.
+- Tests: `tests/test_refresh_v2.py` (14) + contract updates; mutation checks
+  (using now / re-emitting the prefix stop / verifying everything) fail tests.
+
+### Frontend — refresh UI
+- "↻ Refresh from here" on each confirmed journey and "↻ Try again" on a
+  failed journey, only on a current plan with nothing running; on a stale
+  plan they are disabled ("Press Plan first — these times are for earlier
+  trip details.").
+- The planned departure is the origin stop's confirmed departure in the
+  current plan (`lib/v2/refresh.ts` `refreshTarget`), so every retry uses the
+  same planned departure.
+- While refreshing: prefix unchanged; the old suffix stays visible, dimmed,
+  under "Previous timings — refreshing."; refreshed journeys appear
+  separately as they stream in, with "Refreshing from A → B (planned HH:MM).
+  Refreshed N of M journeys…" and Cancel.
+- Success: `mergeRefresh` builds prefix + refreshed suffix and replaces the
+  plan in one step; downstream warnings come only from the refresh. Routing
+  failure: refreshed part + failed journey + unknown later times. Old
+  downstream timings are never merged; an inconsistent refresh (other origin,
+  other planned departure, other stops) is refused and treated as incomplete.
+- Cancel → "Refresh cancelled — showing previous timings."; interrupted or
+  malformed stream → "Refresh incomplete — showing previous timings."; both
+  keep the previous plan object untouched. Server errors keep the previous
+  plan and append "Showing previous timings."
+- Refresh reuses the planning operation model (`purpose: "refresh"`): edits
+  abort it ("Refresh stopped because the trip details changed — showing
+  previous timings."), events for other operations/revisions are ignored, and
+  plan/refresh outcomes are validated per stream kind (a refresh outcome in a
+  plan stream, or vice versa, is malformed).
+- Tests: `tests/unit/refresh.test.ts` (15): target, atomic success merge,
+  partial merge without old timings, refused inconsistent merges, reducer
+  success/partial/cancel/interrupted/malformed, stale events after cancel,
+  after edits and from older operations, cross-stream outcomes. Browser
+  (`planner.e2e.mjs`, 6 refresh scenarios): progressive streaming through a
+  local HTTPS test server (refreshed journeys shown separately while the
+  previous timings stay labelled, then atomic replacement), partial failure
+  + repeated "Try again" from the same planned departure, Cancel, truncated
+  and malformed streams, edit during refresh. Mutation checks (keeping old
+  downstream warnings; generic cancel text) fail tests.
+
+### Checks (2026-10-06)
+Backend: 363 passed, 1 skipped (Redis, not verified); ruff, format, mypy
+clean. Frontend: types drift clean; type-check and lint clean; unit 72
+passed; build OK; browser 20 passed (6 consecutive full runs after one
+earlier unexplained failure in the progressive test; its progress assertion
+now waits for the label update); security smoke passed; security audit
+FAILED (pre-existing B3, dev-only postcss-selector-parser via tailwindcss).
+
 ## Next action
 
 1. Decide selection-lookup limits (D36) and the B3 audit fix.
 2. Monthly free-tier enforcement remains deferred; existing limits retained.
-3. **Step 7:** suffix refresh from planned departure via the shared engine.
-4. **Step 8:** compare one local candidate with a fresh original; acceptance.
+3. **Step 8:** compare one local candidate with a fresh original; acceptance;
+   starting a refresh must cancel optimisation and invalidate its suggestion.

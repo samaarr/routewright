@@ -16,6 +16,7 @@
 
 import { areaStatus, type AreaStatus } from "./area.ts";
 import type { StreamEnd } from "./ndjson.ts";
+import { mergeRefresh, refreshTarget, type RefreshTarget } from "./refresh.ts";
 import { checkDeparture, type DepartureCheck } from "./time.ts";
 import type {
   PhaseName,
@@ -27,7 +28,7 @@ import type {
   VSelectedPlace,
   VStreamEvent,
 } from "./validate.ts";
-import type { PlanStreamRequest } from "./client.ts";
+import type { PlanStreamRequest, RefreshStreamRequest } from "./client.ts";
 
 export const MAX_STOPS = 12;
 export const MAX_STAY_MINUTES = 720;
@@ -61,6 +62,9 @@ export type Operation =
   | { kind: "idle" }
   | {
       kind: "running";
+      // "refresh" recomputes the suffix of the current plan from leg k (D21).
+      purpose: "plan" | "refresh";
+      refresh: RefreshTarget | null;
       operationId: string;
       revision: number;
       phase: PhaseName | null;
@@ -100,6 +104,7 @@ export type Action =
   | { type: "modeChanged"; mode: Mode }
   | { type: "pinToggled"; end: "first" | "last" }
   | { type: "planStarted"; operationId: string }
+  | { type: "refreshStarted"; operationId: string; legIndex: number }
   | { type: "streamEvent"; operationId: string; event: VStreamEvent }
   | { type: "streamEnded"; operationId: string; end: StreamEnd }
   | { type: "planFailed"; operationId: string; code: string; message: string; instanceIds?: string[]; role?: string | null }
@@ -127,15 +132,24 @@ export function initialState(ids: [string, string]): PlannerState {
 
 const STOPPED_BY_EDIT = "Planning stopped because the trip details changed. Press Plan when ready.";
 const CANCELLED = "Planning cancelled. Calls already sent to Google still count toward today's allowance.";
+export const REFRESH_CANCELLED = "Refresh cancelled — showing previous timings.";
+export const REFRESH_INCOMPLETE = "Refresh incomplete — showing previous timings.";
+const REFRESH_STOPPED_BY_EDIT =
+  "Refresh stopped because the trip details changed — showing previous timings. Press Plan when ready.";
+
+function isRefresh(op: Operation): boolean {
+  return op.kind === "running" && op.purpose === "refresh";
+}
 
 function edited(state: PlannerState, draft: Draft): PlannerState {
   const wasRunning = state.operation.kind === "running";
+  const message = isRefresh(state.operation) ? REFRESH_STOPPED_BY_EDIT : STOPPED_BY_EDIT;
   return {
     ...state,
     draft,
     revision: state.revision + 1,
     operation: { kind: "idle" },
-    notice: wasRunning ? { kind: "cancelled", message: STOPPED_BY_EDIT } : state.notice?.kind === "error" ? null : state.notice,
+    notice: wasRunning ? { kind: "cancelled", message } : state.notice?.kind === "error" ? null : state.notice,
   };
 }
 
@@ -226,6 +240,8 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
         notice: null,
         operation: {
           kind: "running",
+          purpose: "plan",
+          refresh: null,
           operationId: action.operationId,
           revision: state.revision,
           phase: null,
@@ -235,6 +251,26 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
           legs: [],
         },
       };
+    case "refreshStarted": {
+      const target = refreshableTarget(state, action.legIndex);
+      if (!target) return state;
+      return {
+        ...state,
+        notice: null,
+        operation: {
+          kind: "running",
+          purpose: "refresh",
+          refresh: target,
+          operationId: action.operationId,
+          revision: state.revision,
+          phase: null,
+          completedLegs: 0,
+          totalLegs: null,
+          stops: [],
+          legs: [],
+        },
+      };
+    }
     case "streamEvent": {
       if (!isCurrentOp(state, action.operationId)) return state;
       const op = state.operation;
@@ -261,6 +297,7 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
       const op = state.operation;
       const end = action.end;
       const idle = { ...state, operation: { kind: "idle" } as const };
+      if (op.purpose === "refresh") return endRefresh(state, idle, op.revision, end);
       if (end.kind === "aborted") return { ...idle, notice: { kind: "cancelled", message: CANCELLED } };
       if (end.kind === "incomplete") {
         return {
@@ -282,7 +319,10 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
           return {
             ...idle,
             notice: { kind: "timeout", message: outcome.message },
-            result: outcome.partial ? { plan: outcome.partial, revision: op.revision } : state.result,
+            result:
+              outcome.partial && outcome.partial.result_type === "partial"
+                ? { plan: outcome.partial, revision: op.revision }
+                : state.result,
           };
         case "error":
           return {
@@ -297,6 +337,8 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
           };
         case "cancelled":
           return { ...idle, notice: { kind: "cancelled", message: CANCELLED } };
+        case "refresh":
+          return state; // impossible: validated per stream kind
       }
       return state;
     }
@@ -315,8 +357,72 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
       };
     case "cancelRequested":
       if (state.operation.kind !== "running") return state;
-      return { ...state, operation: { kind: "idle" }, notice: { kind: "cancelled", message: CANCELLED } };
+      return {
+        ...state,
+        operation: { kind: "idle" },
+        notice: { kind: "cancelled", message: isRefresh(state.operation) ? REFRESH_CANCELLED : CANCELLED },
+      };
   }
+}
+
+/**
+ * Outcome of a refresh. The previous plan is kept unless a validated refresh
+ * result merges cleanly onto it (prefix unchanged, suffix replaced as a whole).
+ */
+function endRefresh(
+  state: PlannerState,
+  idle: PlannerState,
+  revision: number,
+  end: StreamEnd,
+): PlannerState {
+  if (end.kind === "aborted") return { ...idle, notice: { kind: "cancelled", message: REFRESH_CANCELLED } };
+  if (end.kind === "incomplete") return { ...idle, notice: { kind: "incomplete", message: REFRESH_INCOMPLETE } };
+  const outcome = end.event.outcome;
+  const base = state.result;
+  const merge = (partial: Parameters<typeof mergeRefresh>[1]): PlannerState | null => {
+    if (!base) return null;
+    try {
+      return { ...idle, result: { plan: mergeRefresh(base.plan, partial), revision } };
+    } catch {
+      return null;
+    }
+  };
+  const incomplete: PlannerState = { ...idle, notice: { kind: "incomplete", message: REFRESH_INCOMPLETE } };
+  switch (outcome.outcome_type) {
+    case "refresh": {
+      const merged = merge(outcome.result);
+      return merged ? { ...merged, notice: null } : incomplete;
+    }
+    case "timeout": {
+      if (outcome.partial && outcome.partial.result_type === "refresh_partial") {
+        const merged = merge(outcome.partial);
+        if (merged) return { ...merged, notice: { kind: "timeout", message: outcome.message } };
+      }
+      return { ...idle, notice: { kind: "timeout", message: `${outcome.message} Showing previous timings.` } };
+    }
+    case "error":
+      return {
+        ...idle,
+        notice: {
+          kind: "error",
+          code: outcome.code,
+          message: `${outcome.message} Showing previous timings.`,
+          instanceIds: outcome.details?.instance_ids ?? [],
+          role: outcome.details?.role ?? null,
+        },
+      };
+    case "cancelled":
+      return { ...idle, notice: { kind: "cancelled", message: REFRESH_CANCELLED } };
+    case "plan":
+      return incomplete; // impossible: validated per stream kind
+  }
+}
+
+/** A refresh target, only for a current (not stale) plan while nothing runs. */
+export function refreshableTarget(state: PlannerState, legIndex: number): RefreshTarget | null {
+  if (state.operation.kind !== "idle" || !state.result || resultIsStale(state)) return null;
+  if (!readiness(state).ready) return null;
+  return refreshTarget(state.result.plan, legIndex);
 }
 
 // ---- Derived values ---------------------------------------------------------
@@ -390,9 +496,29 @@ export function resultIsStale(state: PlannerState): boolean {
   return state.result !== null && state.result.revision !== state.revision;
 }
 
+function journeys(n: number): string {
+  return `${n} ${n === 1 ? "journey" : "journeys"}`;
+}
+
 export function progressLabel(op: Operation): string | null {
   if (op.kind !== "running") return null;
+  if (op.purpose === "refresh") {
+    if (op.phase === null || op.phase === "verification") return "Checking the remaining places…";
+    if (op.totalLegs === null) return "Refreshing journeys…";
+    return `Refreshed ${op.completedLegs} of ${journeys(op.totalLegs)}…`;
+  }
   if (op.phase === null || op.phase === "verification") return "Checking your places…";
   if (op.totalLegs === null) return "Planning journeys…";
-  return `Planned ${op.completedLegs} of ${op.totalLegs} journeys…`;
+  return `Planned ${op.completedLegs} of ${journeys(op.totalLegs)}…`;
+}
+
+/** The refresh request for leg ``legIndex`` of the current plan, or null. */
+export function refreshRequest(
+  state: PlannerState,
+  legIndex: number,
+): (Omit<RefreshStreamRequest, "operation_id" | "input_revision"> & { target: RefreshTarget }) | null {
+  const target = refreshableTarget(state, legIndex);
+  const ready = readiness(state);
+  if (!target || !ready.ready) return null;
+  return { ...ready.request, leg_index: legIndex, planned_departure: target.plannedDeparture, target };
 }

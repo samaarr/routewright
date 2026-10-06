@@ -53,9 +53,35 @@ export type VPartialPlan = PlanCommon & {
 };
 export type VPlanResult = VCompletePlan | VPartialPlan;
 
+interface RefreshCommon {
+  operation_id: string;
+  input_revision: number;
+  leg_index: number;
+  planned_departure: string;
+  timezone: string;
+  suffix: VTimelineItem[];
+  warnings: Warning[];
+}
+export type VRefreshComplete = RefreshCommon & { result_type: "refresh_complete" };
+export type VRefreshPartial = RefreshCommon & {
+  result_type: "refresh_partial";
+  failed_at_leg_index: number;
+  failure_reason: string;
+};
+export type VRefreshResult = VRefreshComplete | VRefreshPartial;
+
+/** Which operation a stream belongs to; decides which terminal results are valid. */
+export type StreamKind = "plan" | "refresh";
+
 export type VOutcome =
   | { outcome_type: "plan"; result: VPlanResult }
-  | { outcome_type: "timeout"; phase: PhaseName; message: string; partial: VPartialPlan | null }
+  | { outcome_type: "refresh"; result: VRefreshResult }
+  | {
+      outcome_type: "timeout";
+      phase: PhaseName;
+      message: string;
+      partial: VPartialPlan | VRefreshPartial | null;
+    }
   | { outcome_type: "error"; code: string; message: string; details: ErrorDetails | null }
   | { outcome_type: "cancelled"; reason: string };
 
@@ -361,15 +387,60 @@ function errorDetails(v: unknown, path: string): ErrorDetails | null {
   };
 }
 
-function outcome(v: unknown, path: string): VOutcome {
+export function refreshResult(v: unknown, path = "refresh"): VRefreshResult {
+  const o = obj(v, path);
+  const legIndex = int(o, "leg_index", path, 0, 100);
+  const suffix = arr(o, "suffix", path, 60).map((x, i) => timelineItem(x, `${path}.suffix[${i}]`));
+  const first = suffix[0];
+  if (!first || (first.item_type !== "leg" && first.item_type !== "failed_leg")) {
+    throw new ValidationError(`${path}.suffix`, "must start with the refreshed leg");
+  }
+  const common: RefreshCommon = {
+    operation_id: str(o, "operation_id", path),
+    input_revision: int(o, "input_revision", path),
+    leg_index: legIndex,
+    planned_departure: isoTime(o, "planned_departure", path),
+    timezone: str(o, "timezone", path),
+    suffix,
+    warnings:
+      o.warnings === undefined
+        ? []
+        : arr(o, "warnings", path, 100).map((x, i) => warning(x, `${path}.warnings[${i}]`)),
+  };
+  if (o.result_type === "refresh_complete") {
+    if (suffix.some((i) => i.item_type === "failed_leg" || i.item_type === "unknown_stop")) {
+      throw new ValidationError(path, "complete refresh contains unknown items");
+    }
+    return { ...common, result_type: "refresh_complete" };
+  }
+  if (o.result_type === "refresh_partial") {
+    return {
+      ...common,
+      result_type: "refresh_partial",
+      failed_at_leg_index: int(o, "failed_at_leg_index", path, legIndex, 100),
+      failure_reason: str(o, "failure_reason", path),
+    };
+  }
+  throw new ValidationError(`${path}.result_type`, "expected refresh_complete or refresh_partial");
+}
+
+function outcome(v: unknown, path: string, kind: StreamKind): VOutcome {
   const o = obj(v, path);
   switch (o.outcome_type) {
     case "plan":
+      if (kind !== "plan") throw new ValidationError(`${path}.outcome_type`, "plan outcome in a refresh stream");
       return { outcome_type: "plan", result: planResult(o.result, `${path}.result`) };
+    case "refresh":
+      if (kind !== "refresh") throw new ValidationError(`${path}.outcome_type`, "refresh outcome in a plan stream");
+      return { outcome_type: "refresh", result: refreshResult(o.result, `${path}.result`) };
     case "timeout": {
-      const partial = o.partial === undefined || o.partial === null ? null : planResult(o.partial, `${path}.partial`);
-      if (partial !== null && partial.result_type !== "partial") {
-        throw new ValidationError(`${path}.partial`, "expected partial plan");
+      let partial: VPartialPlan | VRefreshPartial | null = null;
+      if (o.partial !== undefined && o.partial !== null) {
+        const p = kind === "plan" ? planResult(o.partial, `${path}.partial`) : refreshResult(o.partial, `${path}.partial`);
+        if (p.result_type !== "partial" && p.result_type !== "refresh_partial") {
+          throw new ValidationError(`${path}.partial`, "expected a partial result");
+        }
+        partial = p;
       }
       return {
         outcome_type: "timeout",
@@ -388,12 +459,12 @@ function outcome(v: unknown, path: string): VOutcome {
     case "cancelled":
       return { outcome_type: "cancelled", reason: str(o, "reason", path) };
     default:
-      // RefreshOutcome and anything unknown are not valid for a plan stream.
+      // Anything else is not a valid outcome for a planning or refresh stream.
       throw new ValidationError(`${path}.outcome_type`, "unexpected outcome for planning");
   }
 }
 
-export function streamEvent(v: unknown, path = "event"): VStreamEvent {
+export function streamEvent(v: unknown, path = "event", kind: StreamKind = "plan"): VStreamEvent {
   const o = obj(v, path);
   const base: EventBase = {
     operation_id: str(o, "operation_id", path),
@@ -438,7 +509,7 @@ export function streamEvent(v: unknown, path = "event"): VStreamEvent {
       };
     }
     case "terminal":
-      return { ...base, type: "terminal", outcome: outcome(o.outcome, `${path}.outcome`) };
+      return { ...base, type: "terminal", outcome: outcome(o.outcome, `${path}.outcome`, kind) };
     default:
       throw new ValidationError(`${path}.type`, "unknown event type");
   }

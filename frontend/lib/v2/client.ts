@@ -11,6 +11,7 @@ import {
   selectedPlace,
   suggestions,
   type VSelectedCity,
+  type StreamKind,
   type VSelectedPlace,
   type VStreamEvent,
   type VSuggestions,
@@ -202,18 +203,21 @@ export interface PlanStreamRequest {
   mode: "transit" | "walking" | "driving";
 }
 
-/**
- * Start one streamed plan. Resolves when the stream ends (terminal, incomplete
- * or aborted). Throws ApiError for HTTP errors returned before streaming.
- */
-export async function streamPlan(
+export interface RefreshStreamRequest extends PlanStreamRequest {
+  leg_index: number;
+  planned_departure: string; // ISO instant of leg k's planned departure
+}
+
+async function streamOperation(
+  path: string,
   request: PlanStreamRequest,
+  kind: StreamKind,
   onEvent: (event: VStreamEvent) => void,
   signal: AbortSignal,
 ): Promise<StreamEnd> {
   let res: Response;
   try {
-    res = await fetch(`${BASE}/api/v2/plan/stream`, {
+    res = await fetch(`${BASE}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
       body: JSON.stringify(request),
@@ -229,8 +233,29 @@ export async function streamPlan(
   }
   return readPlanStream(
     res.body,
-    { operationId: request.operation_id, inputRevision: request.input_revision },
+    { operationId: request.operation_id, inputRevision: request.input_revision, kind },
     onEvent,
     signal,
   );
+}
+
+/**
+ * Start one streamed plan. Resolves when the stream ends (terminal, incomplete
+ * or aborted). Throws ApiError for HTTP errors returned before streaming.
+ */
+export function streamPlan(
+  request: PlanStreamRequest,
+  onEvent: (event: VStreamEvent) => void,
+  signal: AbortSignal,
+): Promise<StreamEnd> {
+  return streamOperation("/api/v2/plan/stream", request, "plan", onEvent, signal);
+}
+
+/** Start one streamed suffix refresh (D21); same semantics as streamPlan. */
+export function streamRefresh(
+  request: RefreshStreamRequest,
+  onEvent: (event: VStreamEvent) => void,
+  signal: AbortSignal,
+): Promise<StreamEnd> {
+  return streamOperation("/api/v2/refresh/stream", request, "refresh", onEvent, signal);
 }

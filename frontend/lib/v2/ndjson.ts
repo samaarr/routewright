@@ -11,7 +11,7 @@
 // truncation) or anything is malformed, the result is "incomplete" — never a
 // success. There is no automatic reconnection: retrying is the user's choice.
 
-import { ValidationError, streamEvent, type VStreamEvent } from "./validate.ts";
+import { ValidationError, streamEvent, type StreamKind, type VStreamEvent } from "./validate.ts";
 
 export const MAX_LINE_CHARS = 512 * 1024;
 export const MAX_EVENTS = 400;
@@ -33,6 +33,8 @@ export type StreamEnd =
 export interface StreamIdentity {
   operationId: string;
   inputRevision: number;
+  /** Which operation the stream belongs to (default "plan"). */
+  kind?: StreamKind;
 }
 
 function isAbort(err: unknown): boolean {
@@ -68,7 +70,7 @@ export async function readPlanStream(
     if (count > MAX_EVENTS) return { kind: "incomplete", reason: "too_many_events" };
     let event: VStreamEvent;
     try {
-      event = streamEvent(JSON.parse(line));
+      event = streamEvent(JSON.parse(line), "event", identity.kind ?? "plan");
     } catch (err) {
       if (err instanceof SyntaxError || err instanceof ValidationError) {
         return { kind: "incomplete", reason: "malformed" };

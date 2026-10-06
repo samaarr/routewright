@@ -13,8 +13,9 @@
 // v1 results into a v2 plan.
 
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ApiError, messageFor, streamPlan } from "@/lib/v2/client.ts";
-import { initialState, readiness, reducer, resultIsStale } from "@/lib/v2/state.ts";
+import { ApiError, messageFor, streamPlan, streamRefresh } from "@/lib/v2/client.ts";
+import type { StreamEnd } from "@/lib/v2/ndjson.ts";
+import { initialState, readiness, reducer, refreshRequest, resultIsStale } from "@/lib/v2/state.ts";
 import PlanMap, { type MapPin } from "./PlanMap";
 import PlanFormV2 from "./v2/PlanFormV2";
 import TimelineV2 from "./v2/TimelineV2";
@@ -73,19 +74,10 @@ export default function PlannerPage() {
     else setMobileTab("timeline");
   }
 
-  function startPlan() {
-    const r = readiness(state);
-    if (!r.ready || state.operation.kind === "running") return;
-    const operationId = uid();
-    const controller = new AbortController();
-    active.current = { id: operationId, controller };
-    dispatch({ type: "planStarted", operationId });
-    focusTimeline();
-    streamPlan(
-      { ...r.request, operation_id: operationId, input_revision: state.revision },
-      (event) => dispatch({ type: "streamEvent", operationId, event }),
-      controller.signal,
-    ).then(
+  // Routes one operation's stream into the reducer. The reducer ignores
+  // anything for an operation that is no longer the running one.
+  function follow(operationId: string, run: Promise<StreamEnd>) {
+    run.then(
       (end) => dispatch({ type: "streamEnded", operationId, end }),
       (err: unknown) => {
         const e = err instanceof ApiError ? err : null;
@@ -99,6 +91,47 @@ export default function PlannerPage() {
           role: typeof e?.details?.role === "string" ? e.details.role : null,
         });
       },
+    );
+  }
+
+  function begin(): { operationId: string; signal: AbortSignal } {
+    const operationId = uid();
+    const controller = new AbortController();
+    active.current = { id: operationId, controller };
+    return { operationId, signal: controller.signal };
+  }
+
+  function startPlan() {
+    const r = readiness(state);
+    if (!r.ready || state.operation.kind === "running") return;
+    const { operationId, signal } = begin();
+    dispatch({ type: "planStarted", operationId });
+    focusTimeline();
+    follow(
+      operationId,
+      streamPlan(
+        { ...r.request, operation_id: operationId, input_revision: state.revision },
+        (event) => dispatch({ type: "streamEvent", operationId, event }),
+        signal,
+      ),
+    );
+  }
+
+  // "Refresh from here" / "Try again": recompute from leg k at its planned
+  // departure in the current plan (the same instant on every retry).
+  function startRefresh(legIndex: number) {
+    const r = refreshRequest(state, legIndex);
+    if (!r) return;
+    const { target: _target, ...request } = r;
+    const { operationId, signal } = begin();
+    dispatch({ type: "refreshStarted", operationId, legIndex });
+    follow(
+      operationId,
+      streamRefresh(
+        { ...request, operation_id: operationId, input_revision: state.revision },
+        (event) => dispatch({ type: "streamEvent", operationId, event }),
+        signal,
+      ),
     );
   }
 
@@ -118,7 +151,9 @@ export default function PlannerPage() {
       onCancel={() => dispatch({ type: "cancelRequested" })}
     />
   );
-  const timelinePane = <TimelineV2 state={state} />;
+  const timelinePane = (
+    <TimelineV2 state={state} onRefresh={startRefresh} onCancel={() => dispatch({ type: "cancelRequested" })} />
+  );
   const mapPane = (
     <>
       <PlanMap stops={pins} optimiseState={{ kind: "none" }} onApply={NOOP} onDismiss={NOOP} onToggleView={NOOP} />
