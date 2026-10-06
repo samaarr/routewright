@@ -81,9 +81,10 @@ def _planned_leg(from_id: str = "s1", to_id: str = "s2") -> PlannedLeg:
         to_name="Temple Bar",
         mode="transit",
         duration_seconds=1200,
+        journey_seconds=1200,
         depart_at=_LATER,
         arrive_at=datetime(2026, 6, 1, 9, 40, tzinfo=timezone.utc),
-        summary="Take the 37 bus, 20 min",
+        summary="Take the 37",
         map_url="https://maps.google.com/?saddr=53.344,-6.254&daddr=53.345,-6.267",
     )
 

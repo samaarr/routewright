@@ -27,7 +27,7 @@ function stop(id: string, arrive: string, depart: string, stay: number) {
 function leg(from: string, to: string, depart: string, arrive: string) {
   return {
     item_type: "leg", from_stop_id: from, to_stop_id: to, from_name: `Stop ${from}`, to_name: `Stop ${to}`, mode: "transit",
-    duration_seconds: 1200, distance_meters: 900, depart_at: T(depart), arrive_at: T(arrive), summary: "Bus", map_url: "m",
+    duration_seconds: 1200, journey_seconds: (Date.parse(T(arrive)) - Date.parse(T(depart))) / 1000, distance_meters: 900, depart_at: T(depart), arrive_at: T(arrive), summary: "Bus", map_url: "m",
   };
 }
 const OLD = planResult({

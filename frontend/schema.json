@@ -1401,7 +1401,13 @@
           "type": "string"
         },
         "duration_seconds": {
+          "description": "Google's travel time for the route (does not define waiting).",
           "title": "Duration Seconds",
+          "type": "integer"
+        },
+        "journey_seconds": {
+          "description": "Elapsed journey time: arrival minus planned departure, including waiting, transfers and walking. Comparison totals sum this value.",
+          "title": "Journey Seconds",
           "type": "integer"
         },
         "distance_meters": {
@@ -1427,6 +1433,7 @@
           "type": "string"
         },
         "summary": {
+          "description": "Line or mode label, without a duration.",
           "title": "Summary",
           "type": "string"
         },
@@ -1442,6 +1449,7 @@
         "to_name",
         "mode",
         "duration_seconds",
+        "journey_seconds",
         "depart_at",
         "arrive_at",
         "summary",

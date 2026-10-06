@@ -58,3 +58,9 @@ test("suggestion and city payloads are validated", () => {
   assert.throws(() => suggestions({ status: "no_matches", suggestions: [{ place_id: "x", primary_text: "X" }] }), ValidationError);
   assert.throws(() => selectedCity({ place_id: "c", name: "C", lat: 1, lng: 1, timezone: "Europe/Dublin", viewport: { low_lat: 5, low_lng: 0, high_lat: 1, high_lng: 1 } }), ValidationError);
 });
+
+test("legs must carry the server-derived journey time", () => {
+  const noJourney = { ...leg("a", "b") } as Record<string, unknown>;
+  delete noJourney.journey_seconds;
+  assert.throws(() => streamEvent(ev("leg_ready", { leg_index: 0, leg: noJourney, completed_legs: 1, total_legs: 1 })), ValidationError);
+});

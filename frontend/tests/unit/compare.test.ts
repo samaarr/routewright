@@ -25,7 +25,7 @@ const stop = (id: string, arrive: string, depart: string, stay: number) => ({
 });
 const leg = (from: string, to: string, depart: string, arrive: string) => ({
   item_type: "leg", from_stop_id: from, to_stop_id: to, from_name: from, to_name: to, mode: "transit",
-  duration_seconds: 600, distance_meters: 900, depart_at: T(depart), arrive_at: T(arrive), summary: "Bus", map_url: "m",
+  duration_seconds: 600, journey_seconds: (Date.parse(T(arrive)) - Date.parse(T(depart))) / 1000, distance_meters: 900, depart_at: T(depart), arrive_at: T(arrive), summary: "Bus", map_url: "m",
 });
 function plan(ids: string[], rev: number, op = "op-c", minutes = 20) {
   const tl: unknown[] = [];

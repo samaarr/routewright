@@ -31,6 +31,7 @@ export function leg(from: string, to: string) {
     to_name: `Stop ${to}`,
     mode: "transit",
     duration_seconds: 1200,
+    journey_seconds: 1200,
     distance_meters: 1000,
     depart_at: "2026-10-21T10:00:00Z",
     arrive_at: "2026-10-21T10:20:00Z",

@@ -94,7 +94,7 @@ function planEvents(req, mode) {
       break;
     }
     const depart = t + stay * 60000;
-    const leg = { item_type: "leg", from_stop_id: s.instance_id, to_stop_id: next.instance_id, from_name: s.selection.name, to_name: next.selection.name, mode: req.mode, duration_seconds: 1200, distance_meters: 900, depart_at: new Date(depart).toISOString(), arrive_at: new Date(depart + 1200000).toISOString(), summary: "Bus 15, 20 min", map_url: "https://www.google.com/maps/dir/?api=1" };
+    const leg = { item_type: "leg", from_stop_id: s.instance_id, to_stop_id: next.instance_id, from_name: s.selection.name, to_name: next.selection.name, mode: req.mode, duration_seconds: 1200, journey_seconds: 1200, distance_meters: 900, depart_at: new Date(depart).toISOString(), arrive_at: new Date(depart + 1200000).toISOString(), summary: "Bus 15, 20 min", map_url: "https://www.google.com/maps/dir/?api=1" };
     timeline.push(leg);
     out.push(ev("leg_ready", { leg_index: i, leg, completed_legs: i + 1, total_legs: n - 1 }));
     t = depart + 1200000;
@@ -134,7 +134,7 @@ function refreshEvents(req, mode) {
       break;
     }
     const arrive = depart + 35 * 60000;
-    const leg = { item_type: "leg", from_stop_id: s.instance_id, to_stop_id: next.instance_id, from_name: s.selection.name, to_name: next.selection.name, mode: req.mode, duration_seconds: 2100, distance_meters: 900, depart_at: new Date(depart).toISOString(), arrive_at: new Date(arrive).toISOString(), summary: "Bus 99 (refreshed)", map_url: "https://www.google.com/maps/dir/?api=1" };
+    const leg = { item_type: "leg", from_stop_id: s.instance_id, to_stop_id: next.instance_id, from_name: s.selection.name, to_name: next.selection.name, mode: req.mode, duration_seconds: 2100, journey_seconds: 2100, distance_meters: 900, depart_at: new Date(depart).toISOString(), arrive_at: new Date(arrive).toISOString(), summary: "Bus 99 (refreshed)", map_url: "https://www.google.com/maps/dir/?api=1" };
     const stay = next.stay_minutes ?? (i + 1 === n - 1 ? 0 : 60);
     const stop = { item_type: "stop", instance_id: next.instance_id, place_id: next.selection.place_id, name: next.selection.name, address: null, lat: next.selection.lat, lng: next.selection.lng, arrive_at: new Date(arrive).toISOString(), depart_at: new Date(arrive + stay * 60000).toISOString(), stay_minutes: stay, stay_source: "default", map_url: "x", hours_status: "unknown", hours_detail: { unknown_reason: "missing" } };
     suffix.push(leg, stop);
@@ -167,7 +167,7 @@ function comparePlan(req, ids, legMinutes, op) {
     if (i < ids.length - 1) {
       const next = byId.get(ids[i + 1]);
       timeline.push({ item_type: "leg", from_stop_id: id, to_stop_id: ids[i + 1], from_name: s.selection.name, to_name: next.selection.name, mode: req.mode,
-        duration_seconds: legMinutes * 60, distance_meters: 900, depart_at: new Date(t).toISOString(), arrive_at: new Date(t + legMinutes * 60000).toISOString(),
+        duration_seconds: legMinutes * 60, journey_seconds: legMinutes * 60, distance_meters: 900, depart_at: new Date(t).toISOString(), arrive_at: new Date(t + legMinutes * 60000).toISOString(),
         summary: `Bus ${legMinutes} min${op === "cand" ? " (alt)" : " (fresh)"}`, map_url: "m" });
       t += legMinutes * 60000;
     }
@@ -461,6 +461,8 @@ describe("v2 planner (browser)", () => {
     assert.match(text, /hours for this date/);
     assert.match(text, /Opening hours unavailable/);
     assert.match(text, /Stay 90 min \(your choice\)/);
+    assert.match(text, /20 min including waiting/); // journey time, explicitly labelled
+    assert.match(await page.getByTestId("journey-time-legend").innerText(), /including waiting, transfers and walking/);
     // Travel (20 min) plus the 90 min stay shifts the next departure: 10:20 → 11:50 → 12:10 arrival.
     assert.match(text, /leave 11:50/);
     assert.match(text, /12:10/);

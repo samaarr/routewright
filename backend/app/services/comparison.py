@@ -137,11 +137,9 @@ def is_complete(timeline: Timeline) -> bool:
 
 
 def journey_seconds(timeline: Timeline) -> int:
-    return sum(
-        int((i.arrive_at - i.depart_at).total_seconds())
-        for i in timeline
-        if isinstance(i, PlannedLeg)
-    )
+    """Total elapsed journey time: the sum of each leg's ``journey_seconds``
+    (arrival minus planned departure) — the same value the UI shows per leg."""
+    return sum(i.journey_seconds for i in timeline if isinstance(i, PlannedLeg))
 
 
 def disqualified_stops(timeline: Timeline) -> list[str]:

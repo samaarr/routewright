@@ -128,7 +128,12 @@ function LegRow({ leg, first, legIndex, actions }: { leg: VPlannedLeg; first: bo
       <div className="flex flex-wrap items-baseline gap-x-1.5">
         <span className="text-text-muted">↓</span>
         <span className="text-body text-text-secondary">{leg.summary}</span>
-        <span className="text-text-ghost">· {fmtDuration(leg.duration_seconds)} ·</span>
+        <span className="text-xs text-text-tertiary" data-testid="leg-journey-time">
+          · {fmtDuration(leg.journey_seconds)} including waiting
+          {Math.abs(leg.journey_seconds - leg.duration_seconds) >= 60 &&
+            ` (Google travel time: ${fmtDuration(leg.duration_seconds)})`}{" "}
+          ·
+        </span>
         <a
           href={leg.map_url}
           target="_blank"
@@ -305,7 +310,8 @@ function Totals({ r }: { r: VComparisonResult }) {
   if (r.original_seconds === null || r.candidate_seconds === null) return null;
   return (
     <p className="mt-1 text-xs text-text-secondary" data-testid="comparison-totals">
-      Journey time — your order: {fmtDuration(r.original_seconds)} · alternative: {fmtDuration(r.candidate_seconds)}
+      Journey time including waiting — your order: {fmtDuration(r.original_seconds)} · alternative:{" "}
+      {fmtDuration(r.candidate_seconds)}
     </p>
   );
 }
@@ -591,7 +597,14 @@ export default function TimelineV2({
       )}
 
       {plan && !running && (
-        <p className="mt-6 text-xs text-text-muted">
+        <p className="mt-6 text-xs text-text-muted" data-testid="journey-time-legend">
+          Journey times run from the planned departure to arrival at the next stop, including waiting, transfers and
+          walking. Savings compare the same journey times.
+        </p>
+      )}
+
+      {plan && !running && (
+        <p className="mt-2 text-xs text-text-muted">
           To change the order or how long you stay, edit the stops and press Plan again. “Refresh from here”
           recalculates a journey and everything after it from its planned departure.
         </p>

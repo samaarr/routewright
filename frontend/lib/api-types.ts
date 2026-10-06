@@ -46,10 +46,20 @@ export type ToStopId = string;
 export type FromName = string;
 export type ToName = string;
 export type Mode1 = "transit" | "walking" | "driving";
+/**
+ * Google's travel time for the route (does not define waiting).
+ */
 export type DurationSeconds = number;
+/**
+ * Elapsed journey time: arrival minus planned departure, including waiting, transfers and walking. Comparison totals sum this value.
+ */
+export type JourneySeconds = number;
 export type DistanceMeters = number | null;
 export type DepartAt1 = string;
 export type ArriveAt1 = string;
+/**
+ * Line or mode label, without a duration.
+ */
 export type Summary = string;
 export type MapUrl1 = string;
 export type ItemType2 = "failed_leg";
@@ -456,6 +466,7 @@ export interface PlannedLeg {
   to_name: ToName;
   mode: Mode1;
   duration_seconds: DurationSeconds;
+  journey_seconds: JourneySeconds;
   distance_meters?: DistanceMeters;
   depart_at: DepartAt1;
   arrive_at: ArriveAt1;

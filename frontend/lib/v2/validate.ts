@@ -311,6 +311,7 @@ function plannedLeg(o: Obj, path: string): VPlannedLeg {
     to_name: str(o, "to_name", path),
     mode: oneOf(o, "mode", path, MODES),
     duration_seconds: int(o, "duration_seconds", path, 0, 7 * 86400),
+    journey_seconds: int(o, "journey_seconds", path, 0, 7 * 86400),
     distance_meters: optNum(o, "distance_meters", path),
     depart_at: isoTime(o, "depart_at", path),
     arrive_at: isoTime(o, "arrive_at", path),

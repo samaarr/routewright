@@ -210,3 +210,37 @@ def test_undocumented_final_walk_fails_the_leg_without_inventing_time(
         "unknown_stop",
         "unknown_stop",
     ]
+
+
+def test_journey_time_includes_waiting_and_is_distinct_from_travel_time(
+    google: dict[str, Any],
+) -> None:
+    """2 min wait + 10 min ride + 5 min walk: journey 17 min (arrival - planned
+    departure). The route duration Google reports here (15 min, no wait) is kept
+    separately as travel time; the label has no duration in it."""
+    mock = MockGoogleRoutes({"AB": (120, 600, 300)})
+    original = mock.handler
+
+    def without_wait(request: httpx.Request) -> httpx.Response:
+        resp = original(request)
+        data = json.loads(resp.content)
+        data["routes"][0]["duration"] = "900s"
+        return httpx.Response(200, json=data)
+
+    mock.handler = without_wait  # type: ignore[method-assign]
+    google["mock"] = mock
+    leg = next(i for i in _plan("AB")["timeline"] if i["item_type"] == "leg")
+    assert (leg["journey_seconds"], leg["duration_seconds"]) == (1020, 900)
+    assert leg["summary"] == "Take the 15"
+    depart = datetime.fromisoformat(leg["depart_at"])
+    assert datetime.fromisoformat(leg["arrive_at"]) - depart == timedelta(seconds=1020)
+
+
+def test_comparison_totals_sum_the_displayed_journey_times(google: dict[str, Any]) -> None:
+    spec = {k: (60, r, f) for k, (w, r, f) in _RIDES.items()}  # a 1-min wait everywhere
+    google["mock"] = MockGoogleRoutes(spec)
+    body = _payload([_stop(p.lower(), p, 0) for p in "ABCD"], date="2026-10-21", time_="09:00")
+    body.update({"fixed_first": True, "fixed_last": True})
+    res = TestClient(app).post("/api/v2/compare", json=body).json()
+    legs = [i for i in res["original"]["timeline"] if i["item_type"] == "leg"]
+    assert res["original_seconds"] == sum(leg["journey_seconds"] for leg in legs) == 3 * (1200 + 60)

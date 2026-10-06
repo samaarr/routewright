@@ -229,11 +229,20 @@ class PlannedLeg(BaseModel):
     from_name: str
     to_name: str
     mode: Literal["transit", "walking", "driving"]
-    duration_seconds: int
+    duration_seconds: int = Field(
+        ..., description="Google's travel time for the route (does not define waiting)."
+    )
+    journey_seconds: int = Field(
+        ...,
+        description=(
+            "Elapsed journey time: arrival minus planned departure, including waiting, "
+            "transfers and walking. Comparison totals sum this value."
+        ),
+    )
     distance_meters: int | None = None
     depart_at: datetime
     arrive_at: datetime
-    summary: str
+    summary: str = Field(..., description="Line or mode label, without a duration.")
     map_url: str
 
 

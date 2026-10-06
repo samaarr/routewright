@@ -68,6 +68,14 @@ def _dir_url_coords(
     return f"https://www.google.com/maps/dir/?api=1&origin={o}&destination={d}&travelmode={mode}"
 
 
+def _label(mode: TransportMode, transit_line: str | None) -> str:
+    """Line or mode label without a duration: v2 shows durations separately and
+    explicitly (journey time incl. waiting vs Google's travel time)."""
+    if transit_line:
+        return f"Take the {transit_line}"
+    return {"transit": "Walk", "walking": "Walk", "driving": "Drive"}[mode]
+
+
 class GoogleRoutesAdapter:
     """Wraps directions.fetch_leg() as a RoutesAdapter for the planning engine.
 
@@ -109,7 +117,7 @@ class GoogleRoutesAdapter:
             duration_seconds=result.duration_seconds,
             distance_meters=result.distance_meters,
             arrive_at=result.arrive_at,
-            summary=result.summary,
+            summary=_label(mode, result.transit_line),
             map_url=_dir_url_coords(origin_lat, origin_lng, dest_lat, dest_lng, mode),
         )
 

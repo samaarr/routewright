@@ -446,6 +446,8 @@ async def _route_sequence(
             to_name=next_stop.name,
             mode=mode,
             duration_seconds=result.duration_seconds,
+            # Same definition everywhere (display, totals, comparison savings).
+            journey_seconds=int((result.arrive_at - depart_at).total_seconds()),
             distance_meters=result.distance_meters,
             depart_at=depart_at,
             arrive_at=result.arrive_at,
