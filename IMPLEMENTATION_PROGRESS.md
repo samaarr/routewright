@@ -954,20 +954,46 @@ frontend runtime change). Container image not rebuilt with `--ws none`.
   expected); its restrictions are unknown. `routewright.com` is registered by
   an unknown owner. Nothing was changed.
 
+### Revision after hosting was fixed to Railway + Vercel (2026-10-06)
+- Fly.io removed from the plan. Railway Static Outbound IPs are Pro-only
+  ($20/month incl. $20 usage; IPv4; may be shared with other customers) →
+  deployment **blocked** pending the cost decision; requirement not relaxed.
+- Upstash verified against docs: TLS always on, `eu-west-1` available,
+  500K commands/month free, eviction off by default (writes rejected when
+  full), `ERR max requests limit exceeded` at the limit, adding a card
+  auto-upgrades (proposal: no card). Library needs only EVALSHA/GET/TTL/PING.
+- Local TLS verification: TLS-only Redis with a throwaway CA — shared-store
+  tests 4/4 over `rediss://`; plaintext, wrong CA, wrong hostname refused.
+- Final container rebuilt from HEAD (`--ws none`) and run in production mode
+  against that Redis: non-root, `/healthz` 200, 429 and Upgrade (405) logged
+  without IPs, retired routes 404, no client/forged/peer IPs in the log,
+  `redis://` refused at startup. Test resources removed.
+- Finding: rate-limit keys in Redis contain raw client IPs → hashed-key
+  proposal added to D-1.
+- Railway 502: consistent ~15 s then `Application failed to respond`
+  (`x-railway-fallback`); cause unknown without dashboard access; required
+  information listed in DEPLOYMENT_PLAN.md §3.
+- Rollback corrected: Railway Rollback restores image + custom variables
+  (docs; 72 h Hobby / 120 h Pro retention), Redeploy not used for rollback;
+  Vercel Hobby rolls back only to the previous production build, keeps
+  build-time `NEXT_PUBLIC_*`; release pairs defined; first v2 release has no
+  compatible predecessor → "safe off" instead.
+- Smallest live test: 4 stops (pins on), ≈ 58 billable events.
+
 ### Unresolved proposals
-D-1 client IP (Railway), Redis provider (Upstash proposed), egress-IP hosting
-option (Railway Pro vs Fly.io), production Map ID, push/CI, domain ownership.
+C1 Railway Pro, C2 Upstash, D-1 client IP + hashed keys, D-5 Map ID, D-6
+push/CI, D-8 domain ownership.
 
 ### Deployment blockers
-1. Server-key egress IP (A4) — hosting decision/paid change required.
+1. Server-key egress IP (A4) — Railway Pro cost decision (+$15/month net).
 2. Approvals for push, hosting changes, key creation, deploy, live test.
 3. Client identity (D-1) before any public traffic.
 4. Monthly free-tier enforcement deferred → no free-tier-safe public claim.
 
 ## Next action
 
-1. Owner decisions in DEPLOYMENT_PLAN.md §14 (hosting for the egress IP,
-   Redis provider, D-1, Map ID, push, deploy, live-test allowance).
+1. Owner decisions in DEPLOYMENT_PLAN.md §15 (Railway Pro, Upstash, D-1,
+   Map ID, push, deploy, live-test allowance) and the 502 information (§3).
 2. After approval: implement D-1 (if Railway), push, deploy per §11, run
    PRODUCTION_VERIFICATION.md.
 3. Monthly free-tier enforcement remains deferred; existing limits retained.

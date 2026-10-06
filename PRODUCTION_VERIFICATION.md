@@ -1,7 +1,7 @@
 # Production verification checklist
 
 Prepared 2026-10-06 (Step 9); revised after the owner's approvals the same
-day. Execution order, commands and the live test plan:
+day. Hosting is fixed to Railway (backend) and Vercel (frontend). Execution order, commands and the live test plan:
 [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md).
 
 **Nothing below is verified in production.** Every item needs the real
@@ -18,8 +18,8 @@ Status key: `[ ]` not verified · `[x]` verified (with evidence) · `[!]` failed
 
 - [ ] Deployment, push, hosting changes, key creation and the live test are
       approved (DEPLOYMENT_PLAN.md §14) — this checklist authorises nothing.
-- [ ] A4 satisfied: the backend has a verified static egress IP (§4 below);
-      otherwise stop.
+- [ ] A4 satisfied: Railway Pro active and Static Outbound IPs enabled on the
+      backend service (§4 below); otherwise stop — deployment is blocked.
 - [ ] This month's Google usage recorded **per SKU across the billing
       account**; temporary low daily quotas set on Places API (New) and
       Routes API; budget alerts set. Quotas and alerts do not guarantee zero
@@ -31,10 +31,10 @@ Status key: `[ ]` not verified · `[x]` verified (with evidence) · `[!]` failed
       `routewright-production.up.railway.app` confirmed in the dashboards.
 - [ ] The browser key embedded in the live bundle: restrictions checked
       (Websites + Maps JavaScript API only). Status today: UNKNOWN.
-- [ ] Old Railway service: cause of the current `502 Application failed to
-      respond` noted; if replaced, its domain removed and the service and any
-      volume deleted after checking contents (may hold the legacy rich
-      cache). Not to be restarted with the old v1 code.
+- [ ] Railway service: cause of the current `502 Application failed to
+      respond` identified from deploy logs/status (DEPLOYMENT_PLAN.md §3);
+      any volume checked and deleted (may hold the legacy rich cache); never
+      rolled back or restarted with the old v1 code.
 
 ## 2. Backend basics (0 calls)
 
@@ -49,6 +49,10 @@ Status key: `[ ]` not verified · `[x]` verified (with evidence) · `[!]` failed
       other origin not allowed.
 - [ ] Container user is non-root (image `USER app`; `RAILWAY_RUN_UID` unset
       on Railway); uvicorn runs with `--ws none` (an Upgrade request gets 405).
+
+- [ ] Release pair recorded: Railway deployment ID, Vercel deployment URL, git
+      SHA, variable names and non-secret values (rollback needs it;
+      DEPLOYMENT_PLAN.md §13).
 
 ## 3. Streaming and disconnects
 
@@ -65,8 +69,12 @@ Status key: `[ ]` not verified · `[x]` verified (with evidence) · `[!]` failed
 
 ## 4. Keys and egress (A4)
 
-- [ ] Egress IP(s) read from the host (Railway Settings → Networking, or
-      `fly ips list`) and recorded; note whether shared with other customers.
+- [ ] Static outbound IPv4 address(es) read from Railway (Settings →
+      Networking or `railway outbound-network static-ip status`) after the
+      redeploy and recorded; Railway states they may be shared with other
+      customers.
+- [ ] First live server call succeeds from those IPs (no IPv6 egress
+      mismatch).
 - [ ] Server key: API restrictions Places API (New) + Routes API only;
       application restriction = exactly those IPs.
 - [ ] Browser key: Websites `https://routewright.vercel.app/*` only; Maps
@@ -94,10 +102,12 @@ Status key: `[ ]` not verified · `[x]` verified (with evidence) · `[!]` failed
 - [ ] Backend: after verification set `HSTS_ENABLED=true`; header
       `strict-transport-security: max-age=31536000` present.
 - [ ] `TRUSTED_PROXY_IPS` empty, `TRUSTED_PROXY_COUNT` unset.
-- [ ] If D-1 implemented: `RAILWAY_TCP_PROXY_DOMAIN` absent (startup would
-      refuse); project contains only the backend; forged `X-Real-IP` and
+- [ ] If D-1 implemented: no TCP proxy (startup would refuse); the
+      environment contains only the backend; forged `X-Real-IP` and
       `X-Forwarded-For` from a client do not create a new bucket; two networks
-      get separate buckets; metrics `client_ip_source` mostly `header`.
+      get separate buckets; metrics `client_ip_source` mostly `header`;
+      Redis keys contain no raw IP (hashed keys). Re-check after any
+      networking change.
 - [ ] If D-1 not implemented: all visitors share one bucket — acceptable only
       for the closed live test.
 - [ ] (0 calls) 11 rejected plans within a minute → 11th is 429 with
@@ -105,9 +115,10 @@ Status key: `[ ]` not verified · `[x]` verified (with evidence) · `[!]` failed
 
 ## 7. Redis (A2)
 
-- [ ] `RATE_LIMIT_STORAGE_URI` is `rediss://` (provider per approval), used
-      only by RouteWright; certificate and hostname verified (startup passes
-      without weakening options).
+- [ ] `RATE_LIMIT_STORAGE_URI` is `rediss://` to the approved Upstash
+      database (`eu-west-1`), used only by RouteWright; startup passes without
+      weakening options; no payment method on the Upstash account (no
+      automatic paid upgrade); eviction disabled.
 - [ ] Eviction policy does not drop limit keys; limits survive a backend
       redeploy within the same window.
 - [ ] (0 calls) Redis unavailable → v2 endpoints return 503
@@ -160,7 +171,10 @@ As of 2026-10-06 at HEAD (v1 retired):
 - Frontend: type-check, lint, unit 88, types drift clean (types regenerated
   without v1 models). Browser e2e (31) last run before the v1 retirement; no
   frontend runtime code changed since.
-- Earlier the same day: container check on a locally built image (non-root
-  uid 1000, `/healthz` 200, request reached the intended container, no client
-  IPs for health/rejected-plan requests). The image has not been rebuilt with
-  `--ws none`; CI's container job will.
+- Final container (rebuilt from HEAD with `--ws none`) in production mode
+  against a TLS-only local Redis: non-root uid 1000, `/healthz` 200, 429 after
+  10 rejected plans, Upgrade → 405, retired routes 404, no client/forged/peer
+  IPs anywhere in the application log; `redis://` refused at startup.
+  Redis over verified TLS: shared-store tests 4/4; plaintext, wrong CA,
+  wrong hostname refused. Finding: rate-limit keys in Redis contain raw
+  client IPs (proposal: hashed keys, DEPLOYMENT_PLAN.md §8).

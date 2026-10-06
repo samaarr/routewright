@@ -975,13 +975,19 @@ verifies the deployment's settings. See [SECURITY.md](SECURITY.md),
   sensitive content or comparison savings.
 
 ### Deployment blockers and open approvals
-- [ ] **Server key outbound-IP restriction (approved requirement):** current
-  hosting has no static egress IP; choose Railway Pro ($20/month, shared IPs)
-  or a Fly.io migration (dedicated egress IP $3.60/month + compute) — no paid
-  upgrade authorised yet (DEPLOYMENT_PLAN.md §6).
-- [ ] Redis provider with TLS (proposal: Upstash free plan, `eu-west-1`).
-- [ ] Client-IP integration (proposal D-1 for Railway; a Fly move needs a new
-  design). Until then all visitors share one rate-limit identity.
+- [ ] **Server key outbound-IP restriction (approved requirement) — BLOCKED:**
+  hosting is fixed to Railway + Vercel; Static Outbound IPs need Railway Pro
+  ($20/month incl. $20 usage; +$15/month net over Hobby; IPs may be shared
+  with other customers). Cost decision pending; not relaxed
+  (DEPLOYMENT_PLAN.md §6).
+- [ ] Redis provider with TLS (proposal: Upstash free plan, `eu-west-1`, no
+  payment method so no automatic paid upgrade; eviction off). TLS path
+  verified locally with the existing client and limiter library.
+- [ ] Client-IP integration (final proposal D-1, Railway) incl. HMAC-hashed
+  limiter keys (Redis keys currently contain raw client IPs). Until then all
+  visitors share one rate-limit identity.
+- [ ] Railway 502 on the existing service: owner to collect deployment status,
+  deploy logs and settings (DEPLOYMENT_PLAN.md §3).
 - [ ] Confirm ownership of `routewright.vercel.app` and the Railway project;
   the live frontend serves an old build and its backend returns 502.
 - [ ] Check the restrictions of the browser key embedded in the live bundle.

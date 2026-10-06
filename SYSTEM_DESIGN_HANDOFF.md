@@ -173,10 +173,11 @@ Approved by the owner (details and status: DEPLOYMENT_PLAN.md §1):
 - **Legacy endpoints retired:** `/api/plan`, `/api/optimise`,
   `/api/refresh-leg` and the Text Search client removed; v2 services and the
   local optimiser kept.
+- **Hosting fixed:** Railway (backend) + Vercel (frontend); no migration.
 - **Server key:** must have a verified outbound-IP restriction plus Places API
-  (New) + Routes API restriction before deployment. Current hosting cannot
-  provide a static egress IP without a paid change → **deployment blocked**
-  pending a hosting decision.
+  (New) + Routes API restriction before deployment. Railway Static Outbound
+  IPs require Pro ($20/month; IPs may be shared with other customers) →
+  **deployment blocked** pending that cost decision.
 - **Metrics:** aggregate app logs on the hosting platform only, no archive,
   no sensitive content or comparison savings; platform HTTP logs (with client
   IPs) documented separately; actual retention to be verified.
@@ -184,8 +185,10 @@ Approved by the owner (details and status: DEPLOYMENT_PLAN.md §1):
   claim.
 
 Completed fixes: client IPs removed from 429 and uvicorn WebSocket log lines.
-Open proposals: Railway client-IP integration (D-1), Redis provider, egress-IP
-hosting option, production Map ID, push/CI, domain ownership. Existing live
+Open proposals: Railway Pro (static IPs), Upstash Redis (TLS), Railway
+client-IP integration with hashed limiter keys (D-1), production Map ID,
+push/CI, domain ownership. Final container verified locally in production
+mode against TLS Redis. Existing live
 deployment found: `routewright.vercel.app` (old build) calling
 `routewright-production.up.railway.app` (returns 502). Nothing deployed.
 
