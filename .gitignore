@@ -56,3 +56,7 @@ logs/
 Thumbs.db
 CLAUDE.md
 
+.vercel
+.env*
+!.env.example
+!.env.local.example

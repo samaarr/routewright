@@ -1,0 +1,13 @@
+# Verified false positives (reviewed 2026-10-07). Each entry is one exact
+# finding fingerprint; no rule or path is excluded wholesale.
+#
+# RFC 6455 sample handshake value "dGhlIHNhbXBsZSBub25jZQ==" ("the sample
+# nonce") used by the uvicorn WebSocket logging test.
+f3901c9b01f24f3714484e726297699b8523fa62:backend/tests/test_ratelimit_logging.py:generic-api-key:118
+backend/tests/test_ratelimit_logging.py:generic-api-key:118
+# Fake Places session tokens in mocked-provider tests ("tok-12345678" and a
+# hand-written test UUID); never sent to Google.
+ef3af787b02f72fbe2294fb77e319610b2cd4c5c:backend/tests/test_security_v2.py:generic-api-key:148
+backend/tests/test_security_v2.py:generic-api-key:148
+889f310764f6a6d8cb49434ec74dec4851614466:backend/tests/test_selection.py:generic-api-key:45
+backend/tests/test_selection.py:generic-api-key:46
