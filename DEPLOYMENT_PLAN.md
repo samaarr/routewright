@@ -1,10 +1,10 @@
 # Deployment plan — RouteWright v2 (Railway + Vercel)
 
-> **PROPOSAL — NOT APPROVED FOR EXECUTION. DEPLOYMENT BLOCKED** pending a
-> cost decision on Railway Pro (§6). Approved design decisions are recorded
-> in §1; the push, hosting changes, upgrades, key creation, deployment and
-> live Google calls all still require explicit approval (§15). Nothing in
-> this document has been deployed or verified in production.
+> **Status 2026-10-07: prototype deployment AUTHORISED on Railway Hobby +
+> Vercel** (closed audience), with the server-key IP restriction waived as an
+> accepted temporary risk (§6). Upgrades, purchases and paid Redis overflow
+> remain unauthorised. The owner pushes commits personally. Nothing in this
+> document is verified in production until marked so.
 
 Revised 2026-10-06 after the owner fixed the hosting to **Railway (backend)
 and Vercel (frontend)**. Other hosts are out of scope. Companion checklist:
@@ -28,7 +28,7 @@ dashboard/account access; **PROPOSED** awaiting approval.
 | A1 | **Ephemeral cache**: container filesystem, no volume, non-root, `RAILWAY_RUN_UID` unset; planning independent of the cache; failures fall back | Done (`7365dee`); storage considerations remain (§10) |
 | A2 | **Redis requires verified TLS (`rediss://`)**, no plaintext exception | Done (`5ef006d`); VERIFIED (local) over real TLS (§7); provider needs approval |
 | A3 | **v1 endpoints retired** (`/api/plan`, `/api/optimise`, `/api/refresh-leg`) | Done (`3c9f7ec`); VERIFIED (local) 404 in the production-mode container |
-| A4 | **Server key: verified outbound-IP restriction** + Places API (New) + Routes API restriction, before deployment | **BLOCKED** — needs Railway Pro (§6); not relaxed |
+| A4 | Server key: outbound-IP restriction + Places API (New) + Routes API restriction | **Waived for the closed prototype (2026-10-07)** as an accepted temporary risk on Railway Hobby; API restriction kept; **mandatory review before public launch** (§6) |
 | A5 | **Metrics**: aggregate app logs on the platform only, no archive, no sensitive content or comparison savings; platform HTTP logs documented separately; retention to verify | Code done; retention UNKNOWN (§11) |
 | A6 | **Monthly free-tier enforcement deferred**; limits unchanged; no zero-charge claim from quotas or alerts | Unchanged |
 
@@ -150,7 +150,9 @@ Ownership is UNKNOWN from here; confirm in the dashboards.
 
 ---
 
-## 6. Server-key outbound-IP restriction on Railway (A4) — BLOCKED
+## 6. Server-key outbound-IP restriction on Railway (A4) — WAIVED FOR THE PROTOTYPE
+
+**Accepted temporary risk (product manager, 2026-10-07):** for the closed prototype on Railway Hobby the server key has **no outbound-IP restriction** (Hobby has no static egress IP). It stays API-restricted to Places API (New) and Routes API and lives only in Railway secrets. Risk: a leaked key could be used from anywhere against those APIs, billed to our account. **Mandatory review before any public launch:** re-decide the IP restriction (Railway Pro static IPs or equivalent), rotate the key, and re-check quotas and usage.
 
 **Railway options (VERIFIED docs):** Static Outbound IPs are available only
 on **Pro**, for any service, IPv4 only, enabled per service (Settings →

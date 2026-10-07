@@ -174,6 +174,9 @@ Approved by the owner (details and status: DEPLOYMENT_PLAN.md §1):
   `/api/refresh-leg` and the Text Search client removed; v2 services and the
   local optimiser kept.
 - **Hosting fixed:** Railway (backend) + Vercel (frontend); no migration.
+- **Prototype on Railway Hobby (2026-10-07):** server key without IP
+  restriction accepted as a temporary risk for the closed prototype;
+  mandatory review before public launch.
 - **Server key:** must have a verified outbound-IP restriction plus Places API
   (New) + Routes API restriction before deployment. Railway Static Outbound
   IPs require Pro ($20/month; IPs may be shared with other customers) →

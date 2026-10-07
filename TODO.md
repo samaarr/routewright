@@ -975,6 +975,10 @@ verifies the deployment's settings. See [SECURITY.md](SECURITY.md),
   sensitive content or comparison savings.
 
 ### Deployment blockers and open approvals
+- [ ] **Public-launch gate (mandatory):** review the accepted Hobby risk —
+  server key without an outbound-IP restriction (accepted 2026-10-07 for the
+  closed prototype). Re-decide the IP restriction, rotate the key, re-check
+  quotas/usage before opening the app to a public audience.
 - [ ] **Server key outbound-IP restriction (approved requirement) — BLOCKED:**
   hosting is fixed to Railway + Vercel; Static Outbound IPs need Railway Pro
   ($20/month incl. $20 usage; +$15/month net over Hobby; IPs may be shared
