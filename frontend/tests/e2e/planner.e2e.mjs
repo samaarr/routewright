@@ -46,6 +46,7 @@ let refreshMode; // how the mocked refresh stream answers
 let compareMode; // how the mocked comparison stream answers
 let slow; // local HTTPS server that streams refresh events progressively
 let releaseRefresh; // lets a progressive refresh stream send its terminal event
+let refreshGate; // created before each test so release can never precede the server's wait
 
 function cors(extra = {}) {
   return {
@@ -290,7 +291,7 @@ function startSlowServer() {
         res.write(JSON.stringify(e) + "\n");
         await new Promise((r) => setTimeout(r, 30));
       }
-      await new Promise((resolve) => { releaseRefresh = resolve; });
+      await refreshGate;
       res.end(JSON.stringify(events.at(-1)) + "\n");
     });
   });
@@ -357,7 +358,7 @@ describe("v2 planner (browser)", () => {
     planMode = "complete";
     refreshMode = "ok";
     compareMode = "recommended";
-    releaseRefresh = null;
+    refreshGate = new Promise((resolve) => { releaseRefresh = resolve; });
     suggestDelays = {};
     pendingPlan = null;
     page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, ignoreHTTPSErrors: true });
