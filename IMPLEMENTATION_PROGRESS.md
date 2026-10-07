@@ -990,10 +990,40 @@ push/CI, D-8 domain ownership.
 3. Client identity (D-1) before any public traffic.
 4. Monthly free-tier enforcement deferred → no free-tier-safe public claim.
 
+## Prototype deployment — release R1 (2026-10-07)
+
+Deployed and verified live on Railway Hobby + Vercel (closed prototype).
+Frontend https://routewright.vercel.app; backend health
+https://routewright-production.up.railway.app/healthz. Release pair, settings
+and rollback: DEPLOYMENT_PLAN.md §0; evidence: PRODUCTION_VERIFICATION.md
+"Live results — release R1".
+
+Work done:
+- D-1 Railway client identity + HMAC limiter keys (`d80590f`), accepted
+  Hobby key risk recorded (`a7f8aae`).
+- CI fixed: gitleaks fingerprint-ignores for three verified test fixtures
+  (`8d4118d`); e2e harness race (`d5e1fe5`, reproduced on Node 22). CI green
+  on `d5e1fe5`.
+- Railway: 502 cause = startup refusal (missing `LIMITER_KEY_SECRET`; Redis
+  URL absent; `ALLOWED_ORIGINS` contained http://localhost). Set variables
+  (secrets without printing), healthcheck `/healthz`, `PORT=8080`,
+  `CLIENT_IP_SOURCE=railway`; deleted the old volume and moved to EU West
+  (both approved). Vercel production `NEXT_PUBLIC_API_URL` reset; frontend
+  redeployed after backend health.
+- Live pass: selection, timezone, streamed planning, refresh from planned
+  departure, comparison (40 min saving) and zero-call acceptance, cancel,
+  map under CSP, desktop/mobile, headers, CORS, retired routes, forged-header
+  rate limiting, hashed keys in TLS Redis, safe logs. 33 backend provider
+  calls + 2 map loads.
+
+Remaining (unverified live): opening-hours warnings/partial failures,
+mid-call cancellation, production Redis fail-closed, runtime `id`, Map ID
+value, log retention, Upstash usage, billing confirmation. Public launch is
+gated on the server-key IP-restriction review and free-tier enforcement.
+
 ## Next action
 
-1. Owner decisions in DEPLOYMENT_PLAN.md §15 (Railway Pro, Upstash, D-1,
-   Map ID, push, deploy, live-test allowance) and the 502 information (§3).
-2. After approval: implement D-1 (if Railway), push, deploy per §11, run
-   PRODUCTION_VERIFICATION.md.
-3. Monthly free-tier enforcement remains deferred; existing limits retained.
+1. Closed-prototype use and feedback.
+2. Before any public audience: mandatory server-key review (IP restriction,
+   rotation, quotas), monthly free-tier enforcement, D36/D46 decisions,
+   `braces` exception (expires 2026-11-04).

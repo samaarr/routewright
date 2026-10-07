@@ -188,6 +188,10 @@ Approved by the owner (details and status: DEPLOYMENT_PLAN.md §1):
   claim.
 
 Completed fixes: client IPs removed from 429 and uvicorn WebSocket log lines.
+**Prototype deployed 2026-10-07 (release R1):** https://routewright.vercel.app
+→ Railway `routewright-production.up.railway.app` (EU West, Upstash TLS Redis,
+Railway client-IP mode, HMAC limiter keys, no volume). Verified live; gaps
+in PRODUCTION_VERIFICATION.md.
 Open proposals: Railway Pro (static IPs), Upstash Redis (TLS), Railway
 client-IP integration with hashed limiter keys (D-1), production Map ID,
 push/CI, domain ownership. Final container verified locally in production

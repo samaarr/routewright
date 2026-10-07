@@ -14,6 +14,94 @@ excerpt or command output) for each item.
 Status key: `[ ]` not verified · `[x]` verified (with evidence) · `[!]` failed.
 "0 calls" marks checks that make no Google calls.
 
+## Live results — release R1 (2026-10-07)
+
+Release pair in DEPLOYMENT_PLAN.md §0. One live pass (headless Chromium
+against production, Dublin, Fri 2026-10-09 10:00, transit, 4 stops), plus
+zero-call checks with curl.
+
+### Verified in production [x]
+- [x] **Connected app:** `https://routewright.vercel.app` → backend
+      `https://routewright-production.up.railway.app` (CSP `connect-src` and
+      bundle name exactly that origin). `/healthz` 200 `{"status":"ok"}`.
+- [x] **Selection:** city "Dublin, Ireland" → "Times use Dublin local time
+      (Europe/Dublin)"; four explicit selections (Trinity College, Kilmainham
+      Gaol, National Gallery of Ireland, Guinness Storehouse).
+- [x] **Planning stream:** progress arrived incrementally ("Checking your
+      places…" 33 ms → "Planned 0/1/2 of 3 journeys…" at 0.8/1.1/1.3 s);
+      sequential times 10:00 → 10:34 → leave 12:04 → 12:42 → leave 13:57 →
+      14:32; legs show journey time including waiting and Google travel time
+      (e.g. "35 min including waiting (Google travel time: 31 min)").
+- [x] **Final walking steps:** every leg produced an arrival; no
+      `arrival_unknown` in metrics (indirect evidence — raw Routes responses
+      are not logged).
+- [x] **Opening hours shown:** "Open until 17:15 · hours for this date" etc.;
+      Trinity College "Opening hours unavailable" (Google returned none).
+- [x] **Refresh:** from the last leg, request `leg_index 2`,
+      `planned_departure 2026-10-09T12:57:47Z` (= 13:57 Dublin, the planned
+      departure, not "now"); earlier legs unchanged; metrics `complete`,
+      1 route call.
+- [x] **Comparison:** one alternative checked plus the original recalculated
+      (6 route calls = 2(N−1)); outcome "Estimated journey-time saving:
+      40 min."; **Use this order** applied the new order (Trinity → National
+      Gallery → Kilmainham → Guinness, consistent times) with **0 API requests**.
+- [x] **Cancel:** notice "Planning cancelled…"; backend metrics
+      `outcome=cancelled`, 0 provider calls; previous plan unchanged 3 s later.
+- [x] **Map under production CSP:** Maps JS 200, 13 tiles, `.gm-style` present,
+      transit layer visible; no `securitypolicyviolation`, no console errors,
+      no Google Maps key/referrer errors on `routewright.vercel.app`.
+- [x] **Layouts:** desktop (1280 px, map/plan tabs) and mobile (390 px; no
+      horizontal overflow) screenshots reviewed.
+- [x] **HTTPS/headers:** backend `http://` → 301 HTTPS; API responses
+      `no-store`, CSP `default-src 'none'; frame-ancestors 'none'`, `nosniff`,
+      `DENY`; frontend HSTS `max-age=63072000; includeSubDomains; preload`,
+      nonce CSP, `nosniff`, `DENY`, referrer and permissions policies.
+- [x] **CORS:** allowed only for `https://routewright.vercel.app`; other origin
+      → 400 without allow-origin.
+- [x] **Retired routes:** `/api/plan`, `/api/optimise`, `/api/refresh-leg` → 404
+      (GET and JSON POST).
+- [x] **Trusted ingress / forged headers:** 11 rejected plans with different
+      forged `X-Real-IP`, `X-Forwarded-For` and `X-Railway-Edge` → one bucket,
+      11th = 429 with `Retry-After`; all metrics `client_ip_source="header"`.
+- [x] **Shared rate limits in TLS Redis:** read-only check over verified TLS
+      (`SSLConnection`, cert required): limit keys are
+      `LIMITS:LIMITER/<hmac32>/…` plus `provider-global`; **no key contains an
+      IP**.
+- [x] **Safe logs:** application log for the deployment contains no client IP
+      (only uvicorn's `0.0.0.0` bind address), no access lines.
+- [x] **Server key** absent from Vercel env and from all 7 production JS chunks
+      (compared in-process, value never printed); one key-shaped string in the
+      bundle = the browser key.
+- [x] **Volume removed; region EU West** (`europe-west4-drams3a`), next to
+      Upstash eu-west-1.
+
+### Live provider calls (from backend metrics; browser map loads separate)
+| Category | Calls |
+|----------|------:|
+| Autocomplete | 5 |
+| Place Details Essentials | 4 |
+| Place Details Pro | 4 |
+| Place Details Enterprise | 10 |
+| Compute Routes | 10 |
+| **Backend total** | **33** |
+| Dynamic Maps (browser loads) | 2 |
+
+No quota errors. Google billing reports lag; no zero-charge claim.
+
+### Not verified live [ ]
+- [ ] Opening-hours **warnings** and **partial failures** (none occurred on
+      this trip; covered by mocked tests only).
+- [ ] Cancellation **during** provider calls and late-event rejection after a
+      cancel (this cancel landed before the first call); mocked tests only.
+- [ ] Redis-outage fail-closed in production (not induced; verified locally).
+- [ ] Runtime `id` inside the Railway container (`railway ssh` needs an
+      account SSH key); non-root rests on the Dockerfile build.
+- [ ] Production Map ID: the configured value is a sensitive Vercel variable
+      and was not read; the map works with it.
+- [ ] Actual log retention (Railway Hobby documents 7 days; plan not
+      re-confirmed) and Upstash command usage (no console access).
+- [ ] Billing-report confirmation of SKU mapping for the 35 events above.
+
 ## 0. Preconditions
 
 - [ ] Deployment, push, hosting changes, key creation and the live test are

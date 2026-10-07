@@ -1,10 +1,10 @@
 # Deployment plan — RouteWright v2 (Railway + Vercel)
 
-> **Status 2026-10-07: prototype deployment AUTHORISED on Railway Hobby +
-> Vercel** (closed audience), with the server-key IP restriction waived as an
-> accepted temporary risk (§6). Upgrades, purchases and paid Redis overflow
-> remain unauthorised. The owner pushes commits personally. Nothing in this
-> document is verified in production until marked so.
+> **Status 2026-10-07: prototype DEPLOYED and verified live** on Railway Hobby
+> + Vercel for a closed audience (release R1, §0). The server-key IP
+> restriction is waived as an accepted temporary risk with a **mandatory
+> review before public launch** (§6). Upgrades, purchases and paid Redis
+> overflow remain unauthorised; monthly free-tier enforcement is deferred.
 
 Revised 2026-10-06 after the owner fixed the hosting to **Railway (backend)
 and Vercel (frontend)**. Other hosts are out of scope. Companion checklist:
@@ -15,6 +15,49 @@ local run, 2026-10-06; **VERIFIED (public probe)** read-only requests from
 outside (no Google calls); **VERIFIED (docs)** official provider docs,
 2026-10-06 (staff forum answers labelled separately); **UNKNOWN** needs
 dashboard/account access; **PROPOSED** awaiting approval.
+
+---
+
+## 0. Deployed release R1 (2026-10-07)
+
+**URLs:** frontend <https://routewright.vercel.app> · backend health
+<https://routewright-production.up.railway.app/healthz>
+
+### Release pair R1
+| Item | Value |
+|------|-------|
+| Git commit | `d5e1fe5` (CI: backend, frontend, secrets, container all green) |
+| Railway | project `observant-respect` (`ee210145…`), env `production`, service `routewright` (`ae4ec9f8…`), deployment `9deb1d73-8f1f-4bff-9984-2ec80575f6e4`, region `europe-west4-drams3a`, 1 replica |
+| Vercel | project `samar-routewright/routewright`, deployment `https://routewright-cironfrtx-samar-routewright.vercel.app` (redeployed after backend health), aliased to `routewright.vercel.app` |
+| Railway settings | Dockerfile build from `/backend` (non-root `USER app`, `--no-access-log --ws none`), no start-command override, healthcheck `/healthz` 120 s, restart on failure, **no volume** (old `routewright-volume` deleted with approval), no TCP proxy, app sleeping off |
+| Railway variables (names; secrets not recorded) | secrets: `GOOGLE_MAPS_API_KEY`, `RATE_LIMIT_STORAGE_URI` (`rediss://` Upstash eu-west-1, no TLS-weakening options), `LIMITER_KEY_SECRET` (64 hex, generated into Railway via stdin). Config: `APP_ENV=production`, `ALLOWED_ORIGINS=https://routewright.vercel.app`, `CLIENT_IP_SOURCE=railway`, `PORT=8080`, `LOG_LEVEL=INFO`, `CACHE_DB_PATH=/tmp/places_cache.db`, `CACHE_TTL_DAYS`, `MAX_REQUESTS_PER_IP_PER_DAY=20` (existing value kept), `MAX_STOPS_PER_REQUEST`, `RATE_LIMIT_WHITELIST_IPS` (1 entry, existing). Unused leftovers: `ANTHROPIC_API_KEY` (empty), `LLM_MODEL`, `NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID`, `PIP_*`, `PYTHON*` |
+| Vercel variables (names) | `NEXT_PUBLIC_API_URL` (production reset to `https://routewright-production.up.railway.app`), `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` (browser key), `NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID` (sensitive; value not readable). No `GOOGLE_MAPS_API_KEY` |
+
+### Fix of the reported 502
+The pushed code requires `LIMITER_KEY_SECRET` in production; the 18:42
+auto-deploy crashed at startup on its absence (deploy logs), and
+`RATE_LIMIT_STORAGE_URI` and an HTTPS-only `ALLOWED_ORIGINS` were also
+missing/invalid. Fixed through configuration only (variables above,
+healthcheck, explicit `PORT=8080` matching the domain's target port), then
+the normal push-triggered deploy.
+
+### Rollback for R1
+- Backend: Railway Rollback to `f463b5ef` (commit `8d4118d`, same backend
+  code and API as R1, EU region; restores image and variables; available for
+  72 h on Hobby after it was replaced). Check variables afterwards.
+- Frontend: `vercel rollback` returns to `routewright-prd6qxr1f` (same commit
+  `d5e1fe5`); compatible with either backend deployment.
+- Never roll back to deployments before `b8a92c9f` (v1-era code, legacy routes).
+- Emergency stop: set the Google daily quotas to 0; app fails closed on Redis
+  loss (503, no provider calls).
+
+### Deploy-on-push note
+Both platforms deploy every push to `main` (Railway `checkSuites` off;
+Vercel builds every commit). A docs-only push therefore redeploys identical
+code. Suggestion (not applied): Railway "wait for CI" and watch paths
+`/backend/**`; Vercel ignored-build step for non-frontend changes.
+
+### Live verification (2026-10-07, one pass) — see PRODUCTION_VERIFICATION.md
 
 ---
 

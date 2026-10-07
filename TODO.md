@@ -974,6 +974,10 @@ verifies the deployment's settings. See [SECURITY.md](SECURITY.md),
 - [x] Metrics: aggregate app logs on the hosting platform only; no archive; no
   sensitive content or comparison savings.
 
+### Prototype deployed (2026-10-07, release R1)
+- [x] Railway Hobby + Vercel connected and verified live (DEPLOYMENT_PLAN.md §0,
+  PRODUCTION_VERIFICATION.md). Remaining live gaps listed there.
+
 ### Deployment blockers and open approvals
 - [ ] **Public-launch gate (mandatory):** review the accepted Hobby risk —
   server key without an outbound-IP restriction (accepted 2026-10-07 for the
