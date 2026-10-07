@@ -16,6 +16,8 @@ Fields (all bounded / low-cardinality):
     elapsed_ms   integer milliseconds
     stop_count   number of stops (2-12) or null
     calls        {provider call kind: count} for calls this operation issued
+    client_ip_source  how the rate-limit identity was derived (peer | header |
+                 fallback_*), never the address itself; null if not limited
 
 Deliberately excluded: place names/IDs, coordinates, travel dates/times,
 IP addresses, operation IDs or any per-trip identifier, plans, request or
@@ -142,9 +144,22 @@ class OperationMetrics:
             "elapsed_ms": int((time.monotonic() - self._start) * 1000),
             "stop_count": self.stop_count,
             "calls": {k: v for k, v in sorted(self.calls.items()) if k in CALL_KINDS},
+            "client_ip_source": _ip_source(),
             "level": "info",
         }
         log.info(json.dumps(record, sort_keys=True))
+
+
+CLIENT_IP_SOURCES = frozenset(
+    {"peer", "header", "fallback_missing", "fallback_invalid", "fallback_peer_public"}
+)
+
+
+def _ip_source() -> str | None:
+    from app.core.limiter import client_ip_source  # late import: limiter imports settings only
+
+    value = client_ip_source.get()
+    return value if value in CLIENT_IP_SOURCES else None
 
 
 def record_call(kind: str) -> None:

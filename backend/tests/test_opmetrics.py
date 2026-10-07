@@ -27,6 +27,7 @@ from tests.test_final_walk import MockGoogleRoutes, google  # noqa: F401  (fixtu
 from tests.test_plan_v2_verified import _NOW, FakePlaces, FakeRoutes, _payload, _stop
 
 KEYS = {
+    "client_ip_source",
     "event",
     "operation",
     "transport",

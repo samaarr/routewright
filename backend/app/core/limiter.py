@@ -1,8 +1,15 @@
-"""Client identity is derived only through explicitly trusted proxy networks."""
+"""Client identity for rate limiting (trusted proxies, Railway edge) and keying.
 
+Identities are never stored raw: the limiter key is an HMAC of the identity
+under LIMITER_KEY_SECRET, so the shared Redis holds no client IPs.
+"""
+
+import hashlib
+import hmac
 import logging
-from ipaddress import ip_address, ip_network
-from typing import Any, cast
+from contextvars import ContextVar
+from ipaddress import IPv6Address, ip_address, ip_network
+from typing import Any, Literal, cast
 
 from fastapi import Request
 from slowapi import Limiter
@@ -10,8 +17,21 @@ from slowapi import Limiter
 from app.core.config import settings
 from app.core.logredact import redact_addresses
 
+ClientIpSource = Literal[
+    "peer", "header", "fallback_missing", "fallback_invalid", "fallback_peer_public"
+]
+# Aggregate metric only (no address): how the current request's identity was derived.
+client_ip_source: ContextVar[ClientIpSource | None] = ContextVar(
+    "routewright_client_ip_source", default=None
+)
 
-def _client_ip(request: Request) -> str:
+# Non-production fallback so tests/dev never key on raw IPs; production
+# requires a real secret (main.validate_production).
+_DEV_KEY_SECRET = "routewright-development-only-limiter-key"
+_RAILWAY_EDGE_MARKERS = ("x-railway-edge", "x-railway-request-id")
+
+
+def _trusted_chain_ip(request: Request) -> str:
     peer = request.client.host if request.client else "unknown"
     try:
         networks = [
@@ -30,6 +50,56 @@ def _client_ip(request: Request) -> str:
     except ValueError:
         pass
     return peer
+
+
+def _railway_ip(request: Request) -> tuple[str, ClientIpSource]:
+    """Railway edge identity (DEPLOYMENT_PLAN.md D-1).
+
+    X-Real-IP is written by Railway's HTTP edge. It is used only when every
+    condition that holds for edge traffic holds; otherwise the TCP peer is used,
+    which puts the request in one shared, stricter bucket. X-Forwarded-For is
+    ignored entirely.
+    """
+    peer = request.client.host if request.client else "unknown"
+    try:
+        peer_address = ip_address(peer)
+    except ValueError:
+        return peer, "fallback_invalid"
+    if peer_address.is_global:
+        # Edge traffic arrives from Railway's internal network; a public peer
+        # means a path that did not come through the edge.
+        return peer, "fallback_peer_public"
+    values = request.headers.getlist("x-real-ip")
+    if not values or not all(request.headers.get(m) for m in _RAILWAY_EDGE_MARKERS):
+        return peer, "fallback_missing"
+    if len(values) != 1 or values[0] != values[0].strip() or "," in values[0]:
+        return peer, "fallback_invalid"
+    try:
+        client = ip_address(values[0])
+    except ValueError:
+        return peer, "fallback_invalid"
+    if isinstance(client, IPv6Address) and client.ipv4_mapped is not None:
+        client = client.ipv4_mapped
+    if not client.is_global:
+        return peer, "fallback_invalid"
+    return str(client), "header"
+
+
+def _client_ip(request: Request) -> str:
+    """Raw client identity (never stored or logged; see limiter_key)."""
+    if settings.client_ip_source == "railway":
+        identity, source = _railway_ip(request)
+    else:
+        identity, source = _trusted_chain_ip(request), "peer"
+    client_ip_source.set(source)
+    return identity
+
+
+def limiter_key(request: Request) -> str:
+    """Rate-limit storage key: HMAC-SHA256 of the identity, never the raw IP."""
+    secret = settings.limiter_key_secret or _DEV_KEY_SECRET
+    digest = hmac.new(secret.encode(), _client_ip(request).encode(), hashlib.sha256)
+    return digest.hexdigest()[:32]
 
 
 def request_cost(request: Request) -> int:
@@ -62,7 +132,7 @@ class _ClientKeyFilter(logging.Filter):
 logging.getLogger("slowapi").addFilter(_ClientKeyFilter())
 
 limiter = Limiter(
-    key_func=_client_ip,
+    key_func=limiter_key,
     storage_uri=settings.rate_limit_storage_uri,
     storage_options=cast(
         Any,

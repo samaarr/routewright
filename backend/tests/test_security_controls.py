@@ -161,6 +161,7 @@ async def test_provider_capacity_times_out(monkeypatch):
 def test_production_requires_shared_storage(monkeypatch):
     monkeypatch.setattr(settings, "app_env", "production")
     monkeypatch.setattr(settings, "google_maps_api_key", "test-placeholder")
+    monkeypatch.setattr(settings, "limiter_key_secret", "k" * 32)
     monkeypatch.setattr(settings, "rate_limit_storage_uri", "memory://")
     with pytest.raises(RuntimeError, match="shared Redis"):
         validate_production()
@@ -253,6 +254,7 @@ def _production(monkeypatch, storage_uri):
     monkeypatch.setattr(settings, "app_env", "production")
     monkeypatch.setattr(settings, "google_maps_api_key", "test-placeholder")
     monkeypatch.setattr(settings, "allowed_origins", "https://app.example")
+    monkeypatch.setattr(settings, "limiter_key_secret", "k" * 32)
     monkeypatch.setattr(settings, "rate_limit_storage_uri", storage_uri)
 
 

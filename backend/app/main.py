@@ -58,8 +58,19 @@ def validate_production() -> None:
                 raise RuntimeError("Trusting all proxy addresses is prohibited")
     if settings.trusted_proxy_count:
         raise RuntimeError("TRUSTED_PROXY_COUNT is obsolete; configure TRUSTED_PROXY_IPS")
+    if settings.client_ip_source == "railway":
+        # D-1: trust the Railway edge's X-Real-IP only when actually on Railway
+        # and no TCP proxy (an edge bypass) exists; never mixed with proxy chains.
+        if not settings.railway_environment_id.strip():
+            raise RuntimeError("CLIENT_IP_SOURCE=railway requires a Railway environment")
+        if settings.railway_tcp_proxy_domain.strip():
+            raise RuntimeError("CLIENT_IP_SOURCE=railway is refused while a TCP proxy exists")
+        if settings.trusted_proxy_ips.strip():
+            raise RuntimeError("CLIENT_IP_SOURCE=railway cannot be combined with TRUSTED_PROXY_IPS")
     if settings.app_env != "production":
         return
+    if len(settings.limiter_key_secret) < 32:
+        raise RuntimeError("Production requires LIMITER_KEY_SECRET (at least 32 characters)")
     if not settings.google_maps_api_key.strip():
         raise RuntimeError("GOOGLE_MAPS_API_KEY is required")
     if not settings.rate_limit_storage_uri.startswith(("redis://", "rediss://")):

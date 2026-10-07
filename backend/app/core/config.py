@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     # Comma-separated IPs/CIDRs of the ingress proxies that sanitise
     # X-Forwarded-For; empty means forwarded headers are never trusted.
     trusted_proxy_ips: str = ""
+    # "peer" (default): the TCP peer, or TRUSTED_PROXY_IPS chains. "railway":
+    # Railway edge's X-Real-IP under the checks in app/core/limiter.py (D-1).
+    client_ip_source: Literal["peer", "railway"] = "peer"
+    # Key for HMAC-hashing client identities in rate-limit storage keys, so
+    # Redis never holds raw IPs. Required (>= 32 chars) in production.
+    limiter_key_secret: str = ""
+    # Injected by Railway (read-only facts used to validate CLIENT_IP_SOURCE).
+    railway_environment_id: str = ""
+    railway_tcp_proxy_domain: str = ""
     rate_limit_storage_uri: str = "memory://"
     provider_calls_per_day: int = Field(default=2000, ge=1)
     max_request_bytes: int = Field(default=16384, ge=1024, le=1048576)
