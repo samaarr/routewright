@@ -832,6 +832,7 @@ describe("v2 planner (browser)", () => {
     const card = await page.getByTestId("exhaustive-all_complete").innerText();
     assert.match(card, /Earliest completion among all 24 evaluated stop orders\./);
     assert.match(card, /start at Kilmainham Gaol, finish at National Gallery, done by/);
+    assert.match(card, /Times assume you are already at Kilmainham Gaol at \d\d:\d\d; getting there isn't included\./);
     assert.match(card, /Completed: 24 · Could not be evaluated: 0/);
     assert.match(card, /Finishes \d+ min earlier than your current order\./);
     assert.match(card, /not every possible connection/);

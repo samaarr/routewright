@@ -593,6 +593,10 @@ function ExhaustiveCard({
             <strong>{fmtTime(w.completion_at, tz)}</strong>.
           </p>
           <p className="text-xs text-text-secondary">Order: {w.order.map(name).join(" → ")}</p>
+          <p className="text-xs text-text-secondary" data-testid="exhaustive-start-assumption">
+            Times assume you are already at {name(w.order[0])} at {fmtTime(r.start_at, tz)}; getting there isn&apos;t
+            included.
+          </p>
           {r.original?.status === "complete" && r.original.completion_at ? (
             <p className="text-xs text-text-secondary" data-testid="exhaustive-original">
               Your current order would be done by {fmtTime(r.original.completion_at, tz)}.
