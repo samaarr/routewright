@@ -1,17 +1,21 @@
 "use client";
 
+import { useState } from "react";
 import type { Warning } from "@/lib/api-types";
 import { fmtDuration, fmtTime } from "@/lib/utils";
 import { legPosition } from "@/lib/v2/refresh.ts";
 import {
   acceptableComparison,
+  acceptableExhaustive,
   canCompare,
+  canRunExhaustive,
   progressLabel,
   refreshableTarget,
   resultIsStale,
   type PlannerState,
 } from "@/lib/v2/state.ts";
 import type {
+  VCandidateEvaluation,
   VComparisonResult,
   VFailedLeg,
   VKnownStop,
@@ -497,6 +501,230 @@ function ComparePanel({
   );
 }
 
+// ---- Experimental: test all 24 orders of four stops (2026-10-08) ------------
+
+export const EXHAUSTIVE_ASSUMPTIONS = [
+  "Any of your four stops may become the start or the finish.",
+  "Your pins are ignored in this experimental mode.",
+  "Each stop keeps its current stay.",
+  "Every order starts at its first stop at your departure time — getting to that first stop is not included.",
+  "Opening hours are shown as warnings; they never rule an order out.",
+  "Up to 72 journey lookups may be made (24 orders × 3 journeys).",
+];
+
+export const EXHAUSTIVE_SCOPE =
+  "This tries every order of your stops, not every possible connection: Google chooses each journey, and waiting longer on purpose could still change times.";
+
+function savingText(seconds: number): string {
+  if (seconds <= 0) return "Your current order already finishes as early as any order.";
+  if (seconds < 60) return "Finishes less than a minute earlier than your current order.";
+  return `Finishes ${Math.floor(seconds / 60)} min earlier than your current order.`;
+}
+
+function CandidateList({
+  candidates,
+  names,
+  tz,
+  winner,
+}: {
+  candidates: VCandidateEvaluation[];
+  names: (id: string) => string;
+  tz: string;
+  winner: VCandidateEvaluation | null;
+}) {
+  return (
+    <details className="mt-3" data-testid="exhaustive-candidates">
+      <summary className="cursor-pointer text-xs text-text-secondary">All evaluated orders ({candidates.length})</summary>
+      <ol className="mt-2 space-y-1">
+        {candidates.map((c, i) => (
+          <li key={i} className="text-xs text-text-secondary" data-testid="exhaustive-candidate">
+            <span className="text-text-primary">{c.order.map(names).join(" → ")}</span>
+            {c.is_original && <span className="ml-1 text-text-muted">(your order)</span>}
+            {winner && c.order.join() === winner.order.join() && <span className="ml-1 text-accent">(earliest)</span>}
+            {" — "}
+            {c.status === "complete" && c.completion_at
+              ? `done by ${fmtTime(c.completion_at, tz)}`
+              : FAILURE_TEXT[c.failure_reason ?? ""] ?? "Could not be evaluated."}
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
+function ExhaustiveCard({
+  state,
+  onAccept,
+  onDismiss,
+}: {
+  state: PlannerState;
+  onAccept: () => void;
+  onDismiss: () => void;
+}) {
+  const x = state.exhaustive;
+  if (!x) return null;
+  const r = x.result;
+  const tz = r.winner_plan?.timezone ?? state.result?.plan.timezone ?? state.draft.city?.timezone ?? "UTC";
+  const names = stopNames(r.winner_plan, state.result?.plan);
+  const name = (id: string) => names.get(id) ?? id;
+  const acceptable = acceptableExhaustive(state) !== null;
+  const w = r.winner;
+  const notReached = r.requested_orders - r.evaluated_orders;
+  return (
+    <section
+      aria-label="All-orders test result"
+      data-testid={`exhaustive-${r.status}`}
+      className="mb-4 rounded-md border border-accent-faint bg-accent-soft/40 px-3 py-3"
+    >
+      <p className="text-xs font-medium uppercase tracking-wide text-accent">Experimental · all 24 orders</p>
+      <p className="mt-1 text-body-strong text-text-primary" data-testid="exhaustive-headline">
+        {r.message}
+      </p>
+      <p className="mt-1 text-xs text-text-muted">{EXHAUSTIVE_SCOPE}</p>
+      <p className="mt-1 text-xs text-text-secondary" data-testid="exhaustive-counts">
+        Completed: {r.complete_orders} · Could not be evaluated: {r.failed_orders}
+        {notReached > 0 ? ` · Not reached: ${notReached}` : ""}
+      </p>
+      {w && w.completion_at && (
+        <div className="mt-2" data-testid="exhaustive-winner">
+          <p className="text-sm text-text-primary">
+            {r.search_complete ? "Earliest finish" : "Best so far (not offered for use)"}: start at{" "}
+            <strong>{name(w.order[0])}</strong>, finish at <strong>{name(w.order[w.order.length - 1])}</strong>, done by{" "}
+            <strong>{fmtTime(w.completion_at, tz)}</strong>.
+          </p>
+          <p className="text-xs text-text-secondary">Order: {w.order.map(name).join(" → ")}</p>
+          {r.original?.status === "complete" && r.original.completion_at ? (
+            <p className="text-xs text-text-secondary" data-testid="exhaustive-original">
+              Your current order would be done by {fmtTime(r.original.completion_at, tz)}.
+              {r.saving_seconds !== null && <> {savingText(r.saving_seconds)}</>}
+            </p>
+          ) : (
+            <p className="text-xs text-text-secondary" data-testid="exhaustive-original">
+              Your current order couldn&apos;t be completed in this test, so no saving is shown.
+            </p>
+          )}
+          {r.winner_basis === "distance" && (
+            <p className="text-xs text-text-muted">
+              Several orders finish at the same time; this one has the shortest straight-line path (a tie-breaker, not
+              the distance actually travelled).
+            </p>
+          )}
+          {r.hours_warnings.length > 0 && (
+            <ul className="mt-1 space-y-0.5" data-testid="exhaustive-warnings">
+              {r.hours_warnings.map((wn, i) => (
+                <li key={i} className="text-xs text-warning-strong">
+                  {wn.message}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="mt-2 rounded-md bg-pane-bg/60 px-2 py-1" data-testid="exhaustive-winner-timeline">
+            <Items items={w.timeline} tz={tz} warnings={r.winner_plan?.warnings ?? []} />
+          </div>
+        </div>
+      )}
+      <CandidateList candidates={r.candidates} names={name} tz={tz} winner={w} />
+      <div className="mt-3 flex gap-2">
+        {acceptable && (
+          <button
+            type="button"
+            onClick={onAccept}
+            className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white"
+          >
+            Use this order
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="rounded-md border border-border-default px-4 py-2 text-sm font-medium text-text-primary hover:border-border-strong"
+        >
+          {acceptable ? "Keep my order" : "Close"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ExhaustivePanel({
+  state,
+  onRun,
+  onCancel,
+  onAccept,
+  onDismiss,
+}: {
+  state: PlannerState;
+  onRun: () => void;
+  onCancel: () => void;
+  onAccept: () => void;
+  onDismiss: () => void;
+}) {
+  const [explaining, setExplaining] = useState(false);
+  const op = state.operation;
+  if (op.kind === "running" && op.purpose === "exhaustive") {
+    return (
+      <div className="mb-4 flex items-center gap-2 rounded-md border border-accent-faint bg-accent-soft/40 px-3 py-3">
+        <p role="status" aria-live="polite" className="flex-1 text-sm text-text-secondary" data-testid="exhaustive-progress">
+          {progressLabel(op)}
+        </p>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md border border-border-default px-3 py-1.5 text-sm font-medium text-text-primary hover:border-border-strong"
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+  if (state.exhaustive) return <ExhaustiveCard state={state} onAccept={onAccept} onDismiss={onDismiss} />;
+  if (op.kind === "running" || !canRunExhaustive(state)) return null;
+  if (!explaining) {
+    return (
+      <div className="mb-4">
+        <button
+          type="button"
+          onClick={() => setExplaining(true)}
+          className="rounded-md border border-accent px-3 py-1.5 text-sm font-medium text-accent hover:bg-accent-soft"
+        >
+          Test all 24 orders
+        </button>
+        <span className="ml-2 text-xs text-text-muted">Experimental</span>
+      </div>
+    );
+  }
+  return (
+    <section aria-label="Test all 24 orders" data-testid="exhaustive-explain" className="mb-4 rounded-md border border-accent-faint px-3 py-3">
+      <p className="text-xs font-medium uppercase tracking-wide text-accent">Experimental · test all 24 orders</p>
+      <ul className="mt-2 list-disc space-y-0.5 pl-5 text-xs text-text-secondary">
+        {EXHAUSTIVE_ASSUMPTIONS.map((a) => (
+          <li key={a}>{a}</li>
+        ))}
+      </ul>
+      <p className="mt-2 text-xs text-text-muted">{EXHAUSTIVE_SCOPE}</p>
+      <div className="mt-3 flex gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setExplaining(false);
+            onRun();
+          }}
+          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white"
+        >
+          Start the test
+        </button>
+        <button
+          type="button"
+          onClick={() => setExplaining(false)}
+          className="rounded-md border border-border-default px-4 py-2 text-sm font-medium text-text-primary hover:border-border-strong"
+        >
+          Not now
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export default function TimelineV2({
   state,
   onRefresh,
@@ -504,6 +732,9 @@ export default function TimelineV2({
   onCompare,
   onAccept,
   onDismiss,
+  onExhaustive = () => {},
+  onExhaustiveAccept = () => {},
+  onExhaustiveDismiss = () => {},
 }: {
   state: PlannerState;
   onRefresh: (legIndex: number) => void;
@@ -511,6 +742,9 @@ export default function TimelineV2({
   onCompare: () => void;
   onAccept: () => void;
   onDismiss: () => void;
+  onExhaustive?: () => void;
+  onExhaustiveAccept?: () => void;
+  onExhaustiveDismiss?: () => void;
 }) {
   const { operation, result, notice } = state;
   const stale = resultIsStale(state);
@@ -572,6 +806,16 @@ export default function TimelineV2({
 
       {plan && !refreshing && !planning && (
         <ComparePanel state={state} onCompare={onCompare} onCancel={onCancel} onAccept={onAccept} onDismiss={onDismiss} />
+      )}
+
+      {plan && !refreshing && !planning && (
+        <ExhaustivePanel
+          state={state}
+          onRun={onExhaustive}
+          onCancel={onCancel}
+          onAccept={onExhaustiveAccept}
+          onDismiss={onExhaustiveDismiss}
+        />
       )}
 
       {plan && !refreshing && (

@@ -26,10 +26,11 @@ import type {
   VPlannedLeg,
   VSelectedCity,
   VComparisonResult,
+  VExhaustiveResult,
   VSelectedPlace,
   VStreamEvent,
 } from "./validate.ts";
-import type { PlanStreamRequest, RefreshStreamRequest } from "./client.ts";
+import type { ExhaustiveStreamRequest, PlanStreamRequest, RefreshStreamRequest } from "./client.ts";
 
 export const MAX_STOPS = 12;
 export const MAX_STAY_MINUTES = 720;
@@ -65,7 +66,8 @@ export type Operation =
       kind: "running";
       // "refresh" recomputes the suffix of the current plan from leg k (D21);
       // "compare" checks one alternative order against a fresh original (Step 8).
-      purpose: "plan" | "refresh" | "compare";
+      // "exhaustive" is the experimental all-24-orders search (2026-10-08).
+      purpose: "plan" | "refresh" | "compare" | "exhaustive";
       refresh: RefreshTarget | null;
       operationId: string;
       revision: number;
@@ -74,6 +76,8 @@ export type Operation =
       totalLegs: number | null;
       stops: VKnownStop[];
       legs: (VPlannedLeg | VFailedLeg)[];
+      // Exhaustive search only: orders finished so far (from real events).
+      orders?: { evaluated: number; complete: number; failed: number; total: number };
     };
 
 export type Notice =
@@ -92,6 +96,9 @@ export interface PlannerState {
   // Latest comparison outcome for the current inputs (cleared by any edit,
   // Plan or Refresh). Only a "recommended" one can be accepted.
   comparison: { result: VComparisonResult; revision: number } | null;
+  // Latest exhaustive search for the current inputs (cleared like comparison).
+  // The displayed plan never changes until its winner is explicitly accepted.
+  exhaustive: { result: VExhaustiveResult; revision: number } | null;
   notice: Notice;
 }
 
@@ -115,6 +122,9 @@ export type Action =
   | { type: "compareStarted"; operationId: string }
   | { type: "comparisonAccepted" }
   | { type: "comparisonDismissed" }
+  | { type: "exhaustiveStarted"; operationId: string }
+  | { type: "exhaustiveAccepted" }
+  | { type: "exhaustiveDismissed" }
   | { type: "streamEvent"; operationId: string; event: VStreamEvent }
   | { type: "streamEnded"; operationId: string; end: StreamEnd }
   | { type: "planFailed"; operationId: string; code: string; message: string; instanceIds?: string[]; role?: string | null }
@@ -137,6 +147,7 @@ export function initialState(ids: [string, string]): PlannerState {
     operation: { kind: "idle" },
     result: null,
     comparison: null,
+    exhaustive: null,
     notice: null,
   };
 }
@@ -148,6 +159,9 @@ export const REFRESH_INCOMPLETE = "Refresh incomplete — showing previous timin
 export const COMPARE_CANCELLED = "Comparison cancelled — your plan is unchanged.";
 export const COMPARE_INCOMPLETE = "Comparison didn't finish — your plan is unchanged.";
 const COMPARE_STOPPED_BY_EDIT = "Comparison stopped because the trip details changed — your plan is unchanged.";
+export const EXHAUSTIVE_CANCELLED = "Search cancelled — your plan is unchanged.";
+export const EXHAUSTIVE_INCOMPLETE = "The search didn't finish — your plan is unchanged.";
+const EXHAUSTIVE_STOPPED_BY_EDIT = "Search stopped because the trip details changed — your plan is unchanged.";
 const REFRESH_STOPPED_BY_EDIT =
   "Refresh stopped because the trip details changed — showing previous timings. Press Plan when ready.";
 
@@ -164,13 +178,16 @@ function edited(state: PlannerState, draft: Draft): PlannerState {
       ? REFRESH_STOPPED_BY_EDIT
       : op.purpose === "compare"
         ? COMPARE_STOPPED_BY_EDIT
-        : STOPPED_BY_EDIT;
+        : op.purpose === "exhaustive"
+          ? EXHAUSTIVE_STOPPED_BY_EDIT
+          : STOPPED_BY_EDIT;
   return {
     ...state,
     draft,
     revision: state.revision + 1,
     operation: { kind: "idle" },
     comparison: null, // input edits invalidate any suggestion
+    exhaustive: null,
     notice: wasRunning ? { kind: "cancelled", message } : state.notice?.kind === "error" ? null : state.notice,
   };
 }
@@ -263,6 +280,7 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
         ...state,
         notice: null,
         comparison: null,
+        exhaustive: null,
         operation: {
           kind: "running",
           purpose: "plan",
@@ -283,6 +301,7 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
         ...state,
         notice: null,
         comparison: null,
+        exhaustive: null,
         operation: {
           kind: "running",
           purpose: "refresh",
@@ -303,6 +322,7 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
         ...state,
         notice: null,
         comparison: null,
+        exhaustive: null,
         operation: {
           kind: "running",
           purpose: "compare",
@@ -316,6 +336,31 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
           legs: [],
         },
       };
+    case "exhaustiveStarted":
+      if (!canRunExhaustive(state)) return state;
+      return {
+        ...state,
+        notice: null,
+        comparison: null,
+        exhaustive: null,
+        operation: {
+          kind: "running",
+          purpose: "exhaustive",
+          refresh: null,
+          operationId: action.operationId,
+          revision: state.revision,
+          phase: null,
+          completedLegs: 0,
+          totalLegs: null,
+          stops: [],
+          legs: [],
+          orders: { evaluated: 0, complete: 0, failed: 0, total: 24 },
+        },
+      };
+    case "exhaustiveDismissed":
+      return state.exhaustive ? { ...state, exhaustive: null } : state;
+    case "exhaustiveAccepted":
+      return acceptExhaustive(state);
     case "comparisonDismissed":
       return state.comparison ? { ...state, comparison: null } : state;
     case "comparisonAccepted":
@@ -338,6 +383,14 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
             ...state,
             operation: { ...op, legs: [...op.legs, e.leg], completedLegs: e.completed_legs, totalLegs: e.total_legs },
           };
+        case "exhaustive_progress":
+          if (op.purpose !== "exhaustive") return state;
+          // Counts only ever grow; a regressing or replayed event is ignored.
+          if (op.orders && e.evaluated < op.orders.evaluated) return state;
+          return {
+            ...state,
+            operation: { ...op, orders: { evaluated: e.evaluated, complete: e.complete, failed: e.failed, total: e.total } },
+          };
         default:
           return state;
       }
@@ -349,6 +402,7 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
       const idle = { ...state, operation: { kind: "idle" } as const };
       if (op.purpose === "refresh") return endRefresh(state, idle, op.revision, end);
       if (op.purpose === "compare") return endCompare(state, idle, op.revision, end);
+      if (op.purpose === "exhaustive") return endExhaustive(state, idle, op.operationId, op.revision, end);
       if (end.kind === "aborted") return { ...idle, notice: { kind: "cancelled", message: CANCELLED } };
       if (end.kind === "incomplete") {
         return {
@@ -390,6 +444,7 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
           return { ...idle, notice: { kind: "cancelled", message: CANCELLED } };
         case "refresh":
         case "comparison":
+        case "exhaustive":
           return state; // impossible: validated per stream kind
       }
       return state;
@@ -418,7 +473,9 @@ export function reducer(state: PlannerState, action: Action): PlannerState {
             ? REFRESH_CANCELLED
             : state.operation.purpose === "compare"
               ? COMPARE_CANCELLED
-              : CANCELLED,
+              : state.operation.purpose === "exhaustive"
+                ? EXHAUSTIVE_CANCELLED
+                : CANCELLED,
         },
       };
   }
@@ -474,6 +531,7 @@ function endRefresh(
       return { ...idle, notice: { kind: "cancelled", message: REFRESH_CANCELLED } };
     case "plan":
     case "comparison":
+    case "exhaustive":
       return incomplete; // impossible: validated per stream kind
   }
 }
@@ -516,6 +574,132 @@ function endCompare(state: PlannerState, idle: PlannerState, revision: number, e
     default:
       return { ...idle, notice: { kind: "incomplete", message: COMPARE_INCOMPLETE } };
   }
+}
+
+/**
+ * Outcome of the exhaustive search. The displayed plan is never replaced here:
+ * the result is stored for review, and only an explicit acceptance of a
+ * finished search's winner changes the plan. Cancellation, interrupted or
+ * malformed streams, timeouts and errors keep the previous plan.
+ */
+function endExhaustive(
+  state: PlannerState,
+  idle: PlannerState,
+  operationId: string,
+  revision: number,
+  end: StreamEnd,
+): PlannerState {
+  if (end.kind === "aborted") return { ...idle, notice: { kind: "cancelled", message: EXHAUSTIVE_CANCELLED } };
+  if (end.kind === "incomplete") return { ...idle, notice: { kind: "incomplete", message: EXHAUSTIVE_INCOMPLETE } };
+  const ev = end.event;
+  if (ev.operation_id !== operationId || ev.input_revision !== revision) return state;
+  const outcome = ev.outcome;
+  switch (outcome.outcome_type) {
+    case "exhaustive":
+      if (outcome.result.operation_id !== operationId || outcome.result.input_revision !== revision) {
+        return { ...idle, notice: { kind: "incomplete", message: EXHAUSTIVE_INCOMPLETE } };
+      }
+      return { ...idle, notice: null, exhaustive: { result: outcome.result, revision } };
+    case "timeout":
+      return { ...idle, notice: { kind: "timeout", message: `${outcome.message} Your plan is unchanged.` } };
+    case "error":
+      return {
+        ...idle,
+        notice: {
+          kind: "error",
+          code: outcome.code,
+          message: `${outcome.message} Your plan is unchanged.`,
+          instanceIds: outcome.details?.instance_ids ?? [],
+          role: outcome.details?.role ?? null,
+        },
+      };
+    case "cancelled":
+      return { ...idle, notice: { kind: "cancelled", message: EXHAUSTIVE_CANCELLED } };
+    default:
+      return { ...idle, notice: { kind: "incomplete", message: EXHAUSTIVE_INCOMPLETE } };
+  }
+}
+
+/** Instance ID -> resolved stay of the current plan, or null if any is missing. */
+function planStays(state: PlannerState): Map<string, number> | null {
+  const plan = state.result?.plan;
+  if (!plan) return null;
+  const stays = new Map<string, number>();
+  for (const item of plan.timeline) if (item.item_type === "stop") stays.set(item.instance_id, item.stay_minutes);
+  return state.draft.stops.every((s) => stays.has(s.id)) ? stays : null;
+}
+
+/**
+ * "Test all 24 orders" (experimental) is offered only on a current, complete
+ * plan of exactly four distinct destinations whose resolved stays are known.
+ */
+export function canRunExhaustive(state: PlannerState): boolean {
+  const r = state.result;
+  const stops = state.draft.stops;
+  return (
+    r !== null &&
+    !resultIsStale(state) &&
+    r.plan.result_type === "complete" &&
+    stops.length === 4 &&
+    new Set(stops.map((s) => s.selected?.place_id)).size === 4 &&
+    planStays(state) !== null &&
+    readiness(state).ready
+  );
+}
+
+/** The experiment request: current inputs with every stay made explicit from
+ *  the plan's resolved durations (no positional defaulting server-side). */
+export function exhaustiveRequest(state: PlannerState): Omit<ExhaustiveStreamRequest, "operation_id" | "input_revision"> | null {
+  const ready = readiness(state);
+  const stays = planStays(state);
+  if (!canRunExhaustive(state) || !ready.ready || !stays) return null;
+  return {
+    ...ready.request,
+    stops: ready.request.stops.map((s) => ({ ...s, stay_minutes: stays.get(s.instance_id)! })),
+  };
+}
+
+/** The finished search whose winner can be accepted now, or null. Interrupted
+ *  searches show their best-so-far order but are never acceptable. */
+export function acceptableExhaustive(state: PlannerState): VExhaustiveResult | null {
+  const x = state.exhaustive;
+  if (!x || x.revision !== state.revision || state.operation.kind === "running") return null;
+  const r = x.result;
+  return r.search_complete && r.winner && r.winner.status === "complete" && r.winner_plan ? r : null;
+}
+
+/**
+ * "Use this order" for the experiment: atomically apply the winner's verified
+ * timeline, order and explicit stays with no network call. Pins are kept by
+ * stop identity: an end stays pinned only if the same stop is still there;
+ * new endpoints are never silently pinned.
+ */
+function acceptExhaustive(state: PlannerState): PlannerState {
+  const r = acceptableExhaustive(state);
+  if (!r || !r.winner || !r.winner_plan) return state;
+  const order = r.winner.order;
+  const byId = new Map(state.draft.stops.map((s) => [s.id, s]));
+  const stays = new Map(
+    r.winner_plan.timeline.flatMap((i) => (i.item_type === "stop" ? [[i.instance_id, i.stay_minutes] as const] : [])),
+  );
+  if (order.length !== byId.size || order.some((id) => !byId.has(id) || !stays.has(id))) return state;
+  const before = state.draft.stops.map((s) => s.id);
+  const stops = order.map((id) => ({ ...byId.get(id)!, stayMinutes: stays.get(id)! }));
+  const revision = state.revision + 1;
+  return {
+    ...state,
+    draft: {
+      ...state.draft,
+      stops,
+      pinFirst: state.draft.pinFirst && order[0] === before[0],
+      pinLast: state.draft.pinLast && order[order.length - 1] === before[before.length - 1],
+    },
+    revision,
+    result: { plan: r.winner_plan, revision },
+    exhaustive: null,
+    comparison: null,
+    notice: null,
+  };
 }
 
 /** Compare is offered on a current, complete plan with at least three stops. */
@@ -655,6 +839,11 @@ function journeys(n: number): string {
 
 export function progressLabel(op: Operation): string | null {
   if (op.kind !== "running") return null;
+  if (op.purpose === "exhaustive") {
+    if (op.phase === null || op.phase === "verification") return "Checking your places…";
+    const o = op.orders ?? { evaluated: 0, complete: 0, failed: 0, total: 24 };
+    return `Evaluated ${o.evaluated} of ${o.total} orders (${o.complete} completed, ${o.failed} failed)…`;
+  }
   if (op.purpose === "compare") {
     const n = op.totalLegs === null ? "" : `: journey ${Math.min(op.completedLegs + 1, op.totalLegs)} of ${op.totalLegs}`;
     if (op.phase === null || op.phase === "verification") return "Checking your places…";

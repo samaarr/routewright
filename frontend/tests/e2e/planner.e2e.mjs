@@ -33,6 +33,8 @@ const PLACES = {
   P_glen: { label: "Glendalough", lat: 53.0107, lng: -6.329 },
   P_x: { label: "X Bar", lat: 53.345, lng: -6.26 },
   P_trin: { label: "Trinity Street", lat: 53.344, lng: -6.263 },
+  P_kil: { label: "Kilmainham Gaol", lat: 53.3419, lng: -6.3097 },
+  P_gallery: { label: "National Gallery", lat: 53.3409, lng: -6.2525 },
 };
 
 let server;
@@ -44,6 +46,7 @@ let suggestDelays; // query -> ms
 let pendingPlan; // resolve fn for a held stream
 let refreshMode; // how the mocked refresh stream answers
 let compareMode; // how the mocked comparison stream answers
+let exhaustiveMode; // how the mocked exhaustive stream answers
 let slow; // local HTTPS server that streams refresh events progressively
 let releaseRefresh; // lets a progressive refresh stream send its terminal event
 let refreshGate; // created before each test so release can never precede the server's wait
@@ -209,6 +212,41 @@ function compareEvents(req, mode) {
   return events;
 }
 
+// A consistent exhaustive result built from the request, as the backend would:
+// all 24 orders from the same start; the order visiting the 3rd stop first is fastest.
+function permutations(xs) {
+  if (xs.length <= 1) return [xs];
+  return xs.flatMap((x, i) => permutations([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p]));
+}
+
+function exhaustiveEvents(req) {
+  const op = { operation_id: req.operation_id, input_revision: req.input_revision };
+  const ev = (type, extra) => ({ ...op, type, ...extra });
+  const ids = req.stops.map((s) => s.instance_id);
+  const fastest = [ids[2], ids[0], ids[1], ids[3]];
+  const orders = [ids, ...permutations(ids).filter((o) => o.join() !== ids.join())];
+  const start = Date.parse("2026-10-21T09:00:00Z");
+  const candidates = orders.map((order, i) => {
+    const minutes = order.join() === fastest.join() ? 10 : 20 + (i % 3);
+    const plan = comparePlan(req, order, minutes, "exh");
+    const done = plan.timeline.at(-1).depart_at;
+    return { order, is_original: i === 0, status: "complete", completion_at: done, elapsed_seconds: (Date.parse(done) - start) / 1000,
+      distance_m: 2000 + i, failure_reason: null, failure_message: null, timeline: plan.timeline, routing_calls: 3 };
+  });
+  const winner = candidates.find((c) => c.order.join() === fastest.join());
+  const events = [ev("operation_start", { phases: ["verification", "exhaustive_search"] }), ev("phase_start", { phase: "verification" }),
+    ev("phase_complete", { phase: "verification" }), ev("phase_start", { phase: "exhaustive_search" })];
+  candidates.forEach((_, i) => events.push(ev("exhaustive_progress", { evaluated: i + 1, complete: i + 1, failed: 0, total: 24 })));
+  events.push(ev("phase_complete", { phase: "exhaustive_search" }));
+  const result = { ...op, status: "all_complete", message: "Earliest completion among all 24 evaluated stop orders.", search_complete: true,
+    requested_orders: 24, evaluated_orders: 24, complete_orders: 24, failed_orders: 0, interruption_reason: null,
+    start_at: new Date(start).toISOString(), original_order: ids, original: candidates[0], winner, winner_basis: "completion",
+    winner_plan: comparePlan(req, fastest, 10, "exh"), saving_seconds: (Date.parse(candidates[0].completion_at) - Date.parse(winner.completion_at)) / 1000,
+    hours_warnings: [], candidates, routing_calls: 72, routing_budget: 72, deadline_seconds: 240 };
+  events.push(ev("terminal", { outcome: { outcome_type: "exhaustive", result } }));
+  return events;
+}
+
 async function apiRoute(route) {
   const req = route.request();
   if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors() });
@@ -226,7 +264,7 @@ async function apiRoute(route) {
   if (path === "/api/v2/suggest/places") {
     const q = body.query.toLowerCase();
     if (suggestDelays[q]) await new Promise((r) => setTimeout(r, suggestDelays[q]));
-    const pick = q === "trin" ? ["P_trin"] : q.startsWith("tri") ? ["P_trinity"] : q.startsWith("gui") ? ["P_guinness"] : q.startsWith("glen") ? ["P_glen"] : q === "x" ? ["P_x"] : [];
+    const pick = q === "trin" ? ["P_trin"] : q.startsWith("tri") ? ["P_trinity"] : q.startsWith("gui") ? ["P_guinness"] : q.startsWith("glen") ? ["P_glen"] : q === "x" ? ["P_x"] : q.startsWith("kil") ? ["P_kil"] : q.startsWith("nat") ? ["P_gallery"] : [];
     if (!pick.length) return json(route, 200, { status: "no_matches", suggestions: [] });
     return json(route, 200, { status: "ok", suggestions: pick.map((id) => ({ place_id: id, primary_text: PLACES[id].label, secondary_text: "Dublin" })) });
   }
@@ -252,6 +290,14 @@ async function apiRoute(route) {
     }
     const lines = compareEvents(body, compareMode).map((e) => JSON.stringify(e));
     const text = compareMode === "truncated" ? lines.slice(0, -1).join("\n") + "\n" : lines.join("\n") + "\n";
+    return route.fulfill({ status: 200, headers: cors({ "content-type": "application/x-ndjson" }), body: text });
+  }
+  if (path === "/api/v2/optimise-exhaustive/stream") {
+    if (exhaustiveMode === "hang") {
+      await new Promise((resolve) => { pendingPlan = resolve; });
+      return route.abort().catch(() => {});
+    }
+    const text = exhaustiveEvents(body).map((e) => JSON.stringify(e)).join("\n") + "\n";
     return route.fulfill({ status: 200, headers: cors({ "content-type": "application/x-ndjson" }), body: text });
   }
   if (path === "/api/v2/refresh/stream") {
@@ -358,6 +404,7 @@ describe("v2 planner (browser)", () => {
     planMode = "complete";
     refreshMode = "ok";
     compareMode = "recommended";
+    exhaustiveMode = "finished";
     refreshGate = new Promise((resolve) => { releaseRefresh = resolve; });
     suggestDelays = {};
     pendingPlan = null;
@@ -756,5 +803,64 @@ describe("v2 planner (browser)", () => {
     await page.getByTestId("comparison-recommended").waitFor();
     await page.getByRole("button", { name: "Map", exact: true }).filter({ visible: true }).click();
     assert.equal(count("/api/optimise") + count("/api/refresh-leg") + count("/api/plan"), 0);
+  });
+  // ---- Experimental: test all 24 orders (2026-10-08) -----------------------------
+  async function planFourStops() {
+    await fillReadyDraft(); // Trinity College, Guinness Storehouse
+    await page.getByRole("button", { name: "+ Add another stop" }).filter({ visible: true }).click();
+    await chooseStop(3, "kilmainham", "Kilmainham Gaol");
+    await page.getByRole("button", { name: "+ Add another stop" }).filter({ visible: true }).click();
+    await chooseStop(4, "national", "National Gallery");
+    await planButton().click();
+    await page.getByTestId("current-result").waitFor();
+  }
+
+  test("test all 24 orders: explained first, real result, Use this order with no network calls", async () => {
+    await planFourStops();
+    const planBefore = await page.getByTestId("current-result").innerText();
+    await page.getByRole("button", { name: "Test all 24 orders" }).click();
+    const explain = await page.getByTestId("exhaustive-explain").innerText();
+    for (const phrase of [/may become the start or the finish/, /pins are ignored/i, /keeps its current stay/, /getting to that first stop is not included/, /warnings/, /Up to 72 journey lookups/]) {
+      assert.match(explain, phrase);
+    }
+    assert.equal(log.filter((r) => r.path === "/api/v2/optimise-exhaustive/stream").length, 0); // nothing sent yet
+    await page.getByRole("button", { name: "Start the test" }).click();
+    await page.getByTestId("exhaustive-all_complete").waitFor();
+    const req = log.filter((r) => r.path === "/api/v2/optimise-exhaustive/stream")[0].body;
+    assert.deepEqual(req.stops.map((s) => s.stay_minutes), [0, 60, 60, 0]); // the plan's resolved stays, explicit
+    assert.equal("fixed_first" in req || "fixed_last" in req, false);
+    const card = await page.getByTestId("exhaustive-all_complete").innerText();
+    assert.match(card, /Earliest completion among all 24 evaluated stop orders\./);
+    assert.match(card, /start at Kilmainham Gaol, finish at National Gallery, done by/);
+    assert.match(card, /Completed: 24 · Could not be evaluated: 0/);
+    assert.match(card, /Finishes \d+ min earlier than your current order\./);
+    assert.match(card, /not every possible connection/);
+    assert.doesNotMatch(card, /optimal|best possible|guarantee/i);
+    assert.equal(await page.getByTestId("exhaustive-candidate").count(), 24);
+    assert.equal(await page.getByTestId("current-result").innerText(), planBefore); // plan unchanged until accepted
+    const before = log.length;
+    await page.getByRole("button", { name: "Use this order" }).click();
+    await page.getByTestId("exhaustive-all_complete").waitFor({ state: "detached" });
+    assert.equal(log.length, before); // acceptance made no network requests
+    assert.equal(await stopBox(1).inputValue(), "Kilmainham Gaol");
+    assert.equal(await stopBox(4).inputValue(), "National Gallery");
+    const stays = await page.locator('input[aria-label^="Stay at stop"]').filter({ visible: true }).evaluateAll((els) => els.map((e) => e.value));
+    assert.deepEqual(stays, ["60", "0", "60", "0"]); // stays travel with their stops
+    assert.match(await page.getByTestId("current-result").innerText(), /Kilmainham Gaol[\s\S]*Trinity College[\s\S]*Guinness Storehouse[\s\S]*National Gallery/);
+  });
+
+  test("test all 24 orders: Cancel stops the request and keeps the plan", async () => {
+    await planFourStops();
+    const planBefore = await page.getByTestId("current-result").innerText();
+    exhaustiveMode = "hang";
+    await page.getByRole("button", { name: "Test all 24 orders" }).click();
+    await page.getByRole("button", { name: "Start the test" }).click();
+    await page.getByTestId("exhaustive-progress").waitFor();
+    const aborted = page.waitForEvent("requestfailed", (r) => r.url().endsWith("/api/v2/optimise-exhaustive/stream"));
+    await page.getByTestId("exhaustive-progress").locator("..").getByRole("button", { name: "Cancel" }).click();
+    await aborted;
+    assert.equal(await page.getByTestId("plan-notice").innerText(), "Search cancelled — your plan is unchanged.");
+    assert.equal(await page.getByTestId("current-result").innerText(), planBefore);
+    assert.equal(await page.getByRole("button", { name: "Use this order" }).count(), 0);
   });
 });

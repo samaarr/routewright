@@ -13,10 +13,11 @@
 // v1 results into a v2 plan.
 
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ApiError, messageFor, streamCompare, streamPlan, streamRefresh } from "@/lib/v2/client.ts";
+import { ApiError, messageFor, streamCompare, streamExhaustive, streamPlan, streamRefresh } from "@/lib/v2/client.ts";
 import type { StreamEnd } from "@/lib/v2/ndjson.ts";
 import {
   compareRequest,
+  exhaustiveRequest,
   initialState,
   readiness,
   reducer,
@@ -159,6 +160,23 @@ export default function PlannerPage() {
     );
   }
 
+  // Experimental: evaluate all 24 orders of four stops (2026-10-08).
+  function startExhaustive() {
+    const r = exhaustiveRequest(state);
+    if (!r) return;
+    const { operationId, signal } = begin();
+    dispatch({ type: "exhaustiveStarted", operationId });
+    focusTimeline();
+    follow(
+      operationId,
+      streamExhaustive(
+        { ...r, operation_id: operationId, input_revision: state.revision },
+        (event) => dispatch({ type: "streamEvent", operationId, event }),
+        signal,
+      ),
+    );
+  }
+
   const pins: MapPin[] = useMemo(() => {
     const current = state.result && !resultIsStale(state) ? state.result.plan : null;
     if (current) {
@@ -183,6 +201,9 @@ export default function PlannerPage() {
       onCompare={startCompare}
       onAccept={() => dispatch({ type: "comparisonAccepted" })}
       onDismiss={() => dispatch({ type: "comparisonDismissed" })}
+      onExhaustive={startExhaustive}
+      onExhaustiveAccept={() => dispatch({ type: "exhaustiveAccepted" })}
+      onExhaustiveDismiss={() => dispatch({ type: "exhaustiveDismissed" })}
     />
   );
   const mapPane = (

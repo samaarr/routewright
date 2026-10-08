@@ -28,7 +28,13 @@ export class ValidationError extends Error {
 
 // ---- Narrowed shapes (discriminators always present) -------------------------
 
-export type PhaseName = "verification" | "routing" | "candidate" | "original_route" | "alternative_route";
+export type PhaseName =
+  | "verification"
+  | "routing"
+  | "candidate"
+  | "original_route"
+  | "alternative_route"
+  | "exhaustive_search";
 export type VKnownStop = KnownStop & { item_type: "stop" };
 export type VPlannedLeg = PlannedLeg & { item_type: "leg" };
 export type VFailedLeg = FailedLeg & { item_type: "failed_leg" };
@@ -71,7 +77,7 @@ export type VRefreshPartial = RefreshCommon & {
 export type VRefreshResult = VRefreshComplete | VRefreshPartial;
 
 /** Which operation a stream belongs to; decides which terminal results are valid. */
-export type StreamKind = "plan" | "refresh" | "compare";
+export type StreamKind = "plan" | "refresh" | "compare" | "exhaustive";
 
 export type ComparisonStatus =
   | "no_different_order"
@@ -102,10 +108,50 @@ export interface VComparisonResult {
   routing_calls: number;
 }
 
+/** Experimental exhaustive four-stop search (2026-10-08). */
+export interface VCandidateEvaluation {
+  order: string[];
+  is_original: boolean;
+  status: "complete" | "failed" | "interrupted";
+  completion_at: string | null;
+  elapsed_seconds: number | null;
+  distance_m: number;
+  failure_reason: string | null;
+  failure_message: string | null;
+  timeline: VTimelineItem[];
+  routing_calls: number;
+}
+
+export interface VExhaustiveResult {
+  operation_id: string;
+  input_revision: number;
+  status: "all_complete" | "some_failed" | "interrupted";
+  message: string;
+  search_complete: boolean;
+  requested_orders: number;
+  evaluated_orders: number;
+  complete_orders: number;
+  failed_orders: number;
+  interruption_reason: string | null;
+  start_at: string;
+  original_order: string[];
+  original: VCandidateEvaluation | null;
+  winner: VCandidateEvaluation | null;
+  winner_basis: "completion" | "distance" | "original" | "instance_order" | null;
+  winner_plan: VCompletePlan | null;
+  saving_seconds: number | null;
+  hours_warnings: Warning[];
+  candidates: VCandidateEvaluation[];
+  routing_calls: number;
+  routing_budget: number;
+  deadline_seconds: number;
+}
+
 export type VOutcome =
   | { outcome_type: "plan"; result: VPlanResult }
   | { outcome_type: "refresh"; result: VRefreshResult }
   | { outcome_type: "comparison"; result: VComparisonResult }
+  | { outcome_type: "exhaustive"; result: VExhaustiveResult }
   | {
       outcome_type: "timeout";
       phase: PhaseName;
@@ -132,6 +178,7 @@ export type VStreamEvent =
       completed_legs: number;
       total_legs: number;
     })
+  | (EventBase & { type: "exhaustive_progress"; evaluated: number; complete: number; failed: number; total: number })
   | (EventBase & { type: "terminal"; outcome: VOutcome });
 
 export interface VSuggestion {
@@ -243,7 +290,14 @@ function isoTime(o: Obj, key: string, path: string): string {
 // ---- Domain validators ---------------------------------------------------------
 
 const MODES = ["transit", "walking", "driving"] as const;
-const PHASES = ["verification", "routing", "candidate", "original_route", "alternative_route"] as const;
+const PHASES = [
+  "verification",
+  "routing",
+  "candidate",
+  "original_route",
+  "alternative_route",
+  "exhaustive_search",
+] as const;
 const HOURS_STATUSES = [
   "open",
   "closed_on_arrival",
@@ -516,6 +570,108 @@ export function comparisonResult(v: unknown, path = "comparison"): VComparisonRe
   return r;
 }
 
+const EXHAUSTIVE_ORDERS = 24;
+const EXHAUSTIVE_BUDGET = 72;
+
+function candidateEvaluation(v: unknown, path: string): VCandidateEvaluation {
+  const o = obj(v, path);
+  const status = oneOf(o, "status", path, ["complete", "failed", "interrupted"] as const);
+  const order = strArray(o, "order", path);
+  if (order.length !== 4 || new Set(order).size !== 4) throw new ValidationError(`${path}.order`, "expected 4 distinct stops");
+  const timeline = arr(o, "timeline", path, 20).map((x, i) => timelineItem(x, `${path}.timeline[${i}]`));
+  const c: VCandidateEvaluation = {
+    order,
+    is_original: bool(o, "is_original", path, false),
+    status,
+    completion_at: o.completion_at === undefined || o.completion_at === null ? null : isoTime(o, "completion_at", path),
+    elapsed_seconds: o.elapsed_seconds === undefined || o.elapsed_seconds === null ? null : int(o, "elapsed_seconds", path, 0, 7 * 86400),
+    distance_m: int(o, "distance_m", path, 0, 50_000_000),
+    failure_reason: optStr(o, "failure_reason", path),
+    failure_message: optStr(o, "failure_message", path),
+    timeline,
+    routing_calls: int(o, "routing_calls", path, 0, 3),
+  };
+  const stops = timeline.flatMap((i) => (i.item_type === "stop" ? [i.instance_id] : []));
+  if (status === "complete") {
+    // A complete order: every stop known, in this order, with a completion time.
+    if (c.completion_at === null || c.elapsed_seconds === null || c.failure_reason !== null) {
+      throw new ValidationError(path, "complete order needs a completion time and no failure");
+    }
+    if (timeline.some((i) => i.item_type === "failed_leg" || i.item_type === "unknown_stop")) {
+      throw new ValidationError(path, "complete order contains unknown items");
+    }
+    if (stops.join("\u0000") !== order.join("\u0000")) throw new ValidationError(path, "timeline order mismatch");
+  } else if (c.completion_at !== null || c.elapsed_seconds !== null || c.failure_reason === null) {
+    throw new ValidationError(path, "an unfinished order has a failure and no completion time");
+  }
+  return c;
+}
+
+export function exhaustiveResult(v: unknown, path = "exhaustive"): VExhaustiveResult {
+  const o = obj(v, path);
+  const status = oneOf(o, "status", path, ["all_complete", "some_failed", "interrupted"] as const);
+  const opt = (key: string) =>
+    o[key] === undefined || o[key] === null ? null : candidateEvaluation(o[key], `${path}.${key}`);
+  const plan = o.winner_plan === undefined || o.winner_plan === null ? null : planResult(o.winner_plan, `${path}.winner_plan`);
+  if (plan && plan.result_type !== "complete") throw new ValidationError(`${path}.winner_plan`, "expected a complete plan");
+  const r: VExhaustiveResult = {
+    operation_id: str(o, "operation_id", path),
+    input_revision: int(o, "input_revision", path),
+    status,
+    message: str(o, "message", path),
+    search_complete: bool(o, "search_complete", path, false),
+    requested_orders: int(o, "requested_orders", path, EXHAUSTIVE_ORDERS, EXHAUSTIVE_ORDERS),
+    evaluated_orders: int(o, "evaluated_orders", path, 0, EXHAUSTIVE_ORDERS),
+    complete_orders: int(o, "complete_orders", path, 0, EXHAUSTIVE_ORDERS),
+    failed_orders: int(o, "failed_orders", path, 0, EXHAUSTIVE_ORDERS),
+    interruption_reason: optStr(o, "interruption_reason", path),
+    start_at: isoTime(o, "start_at", path),
+    original_order: strArray(o, "original_order", path),
+    original: opt("original"),
+    winner: opt("winner"),
+    winner_basis:
+      o.winner_basis === undefined || o.winner_basis === null
+        ? null
+        : oneOf(o, "winner_basis", path, ["completion", "distance", "original", "instance_order"] as const),
+    winner_plan: plan && plan.result_type === "complete" ? plan : null,
+    saving_seconds: o.saving_seconds === undefined || o.saving_seconds === null ? null : int(o, "saving_seconds", path, -7 * 86400, 7 * 86400),
+    hours_warnings: o.hours_warnings === undefined ? [] : arr(o, "hours_warnings", path, 50).map((x, i) => warning(x, `${path}.hours_warnings[${i}]`)),
+    candidates: arr(o, "candidates", path, EXHAUSTIVE_ORDERS).map((x, i) => candidateEvaluation(x, `${path}.candidates[${i}]`)),
+    routing_calls: int(o, "routing_calls", path, 0, EXHAUSTIVE_BUDGET),
+    routing_budget: int(o, "routing_budget", path, EXHAUSTIVE_BUDGET, EXHAUSTIVE_BUDGET),
+    deadline_seconds: int(o, "deadline_seconds", path, 1, 600),
+  };
+  // Internal consistency; anything off is malformed and never applied.
+  const complete = r.candidates.filter((c) => c.status === "complete").length;
+  const failed = r.candidates.filter((c) => c.status === "failed").length;
+  if (complete !== r.complete_orders || failed !== r.failed_orders || r.evaluated_orders !== complete + failed) {
+    throw new ValidationError(path, "counts do not match the candidates");
+  }
+  const searchComplete = r.evaluated_orders === EXHAUSTIVE_ORDERS && r.interruption_reason === null;
+  if (r.search_complete !== searchComplete || (status === "interrupted") === r.search_complete) {
+    throw new ValidationError(path, "search completeness is inconsistent");
+  }
+  if (status === "all_complete" && r.failed_orders !== 0) throw new ValidationError(path, "all_complete with failures");
+  if (status === "some_failed" && r.failed_orders === 0) throw new ValidationError(path, "some_failed without failures");
+  const sortedIds = [...r.original_order].sort().join("\u0000");
+  if (r.original_order.length !== 4) throw new ValidationError(`${path}.original_order`, "expected 4 stops");
+  if (r.candidates.some((c) => [...c.order].sort().join("\u0000") !== sortedIds)) {
+    throw new ValidationError(path, "a candidate has different stops");
+  }
+  if (r.winner && r.winner.status !== "complete") throw new ValidationError(path, "winner must be complete");
+  if (r.winner_plan) {
+    if (!r.search_complete || !r.winner) throw new ValidationError(path, "only a finished search can offer a plan");
+    const ids = r.winner_plan.timeline.flatMap((i) => (i.item_type === "stop" ? [i.instance_id] : []));
+    if (ids.join("\u0000") !== r.winner.order.join("\u0000")) throw new ValidationError(path, "winner plan order mismatch");
+  } else if (r.search_complete && r.winner) {
+    throw new ValidationError(path, "a finished search with a winner must carry its plan");
+  }
+  if (r.saving_seconds !== null && (r.original?.status !== "complete" || !r.winner)) {
+    throw new ValidationError(path, "saving needs a complete original and a winner");
+  }
+  return r;
+}
+
 function outcome(v: unknown, path: string, kind: StreamKind): VOutcome {
   const o = obj(v, path);
   switch (o.outcome_type) {
@@ -528,10 +684,13 @@ function outcome(v: unknown, path: string, kind: StreamKind): VOutcome {
     case "comparison":
       if (kind !== "compare") throw new ValidationError(`${path}.outcome_type`, "comparison outcome in another stream");
       return { outcome_type: "comparison", result: comparisonResult(o.result, `${path}.result`) };
+    case "exhaustive":
+      if (kind !== "exhaustive") throw new ValidationError(`${path}.outcome_type`, "exhaustive outcome in another stream");
+      return { outcome_type: "exhaustive", result: exhaustiveResult(o.result, `${path}.result`) };
     case "timeout": {
       let partial: VPartialPlan | VRefreshPartial | null = null;
       if (o.partial !== undefined && o.partial !== null) {
-        if (kind === "compare") throw new ValidationError(`${path}.partial`, "comparison timeouts carry no plan");
+        if (kind === "compare" || kind === "exhaustive") throw new ValidationError(`${path}.partial`, "comparison timeouts carry no plan");
         const p = kind === "plan" ? planResult(o.partial, `${path}.partial`) : refreshResult(o.partial, `${path}.partial`);
         if (p.result_type !== "partial" && p.result_type !== "refresh_partial") {
           throw new ValidationError(`${path}.partial`, "expected a partial result");
@@ -603,6 +762,15 @@ export function streamEvent(v: unknown, path = "event", kind: StreamKind = "plan
         completed_legs: completed,
         total_legs: total,
       };
+    }
+    case "exhaustive_progress": {
+      if (kind !== "exhaustive") throw new ValidationError(`${path}.type`, "exhaustive progress in another stream");
+      const total = int(o, "total", path, EXHAUSTIVE_ORDERS, EXHAUSTIVE_ORDERS);
+      const evaluated = int(o, "evaluated", path, 0, total);
+      const complete = int(o, "complete", path, 0, total);
+      const failed = int(o, "failed", path, 0, total);
+      if (complete + failed !== evaluated) throw new ValidationError(path, "progress counts disagree");
+      return { ...base, type: "exhaustive_progress", evaluated, complete, failed, total };
     }
     case "terminal":
       return { ...base, type: "terminal", outcome: outcome(o.outcome, `${path}.outcome`, kind) };

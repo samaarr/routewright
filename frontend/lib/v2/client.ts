@@ -273,3 +273,20 @@ export function streamRefresh(
 ): Promise<StreamEnd> {
   return streamOperation("/api/v2/refresh/stream", request, "refresh", onEvent, signal);
 }
+
+/**
+ * Experimental exhaustive four-stop search (2026-10-08). Every stop carries
+ * an explicit stay (copied from the current plan's resolved durations); pins
+ * do not apply and are not sent. Same stream semantics as streamPlan.
+ */
+export interface ExhaustiveStreamRequest extends Omit<PlanStreamRequest, "stops"> {
+  stops: (PlanStreamRequest["stops"][number] & { stay_minutes: number })[];
+}
+
+export function streamExhaustive(
+  request: ExhaustiveStreamRequest,
+  onEvent: (event: VStreamEvent) => void,
+  signal: AbortSignal,
+): Promise<StreamEnd> {
+  return streamOperation("/api/v2/optimise-exhaustive/stream", request, "exhaustive", onEvent, signal);
+}
