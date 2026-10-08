@@ -8,7 +8,8 @@ database, separate service or archive is used.
 
 Fields (all bounded / low-cardinality):
     event        "operation"
-    operation    plan | refresh | compare | suggest_city | suggest_place |
+    operation    plan | refresh | compare | compare_exhaustive | suggest_city |
+                 suggest_place |
                  select_city | select_place
     transport    json | stream
     outcome      a fixed category (see OUTCOMES)
@@ -39,6 +40,7 @@ OperationType = Literal[
     "plan",
     "refresh",
     "compare",
+    "compare_exhaustive",
     "suggest_city",
     "suggest_place",
     "select_city",

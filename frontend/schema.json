@@ -20,6 +20,141 @@
       "title": "CancelledOutcome",
       "type": "object"
     },
+    "CandidateEvaluation": {
+      "description": "One stop order evaluated from the shared start instant.\n\n``complete``: every leg routed; ``completion_at`` is the end of the last\nvisit (its arrival plus its stay). ``failed``: a leg had no usable route\n(no_route / arrival_unknown); the valid prefix is kept and later stops are\nunknown. ``interrupted``: the search stopped during this order\n(cancellation, deadline, quota, usage controls or provider failure).\n``distance_m`` is the straight-line (haversine) path length, used only to\nbreak exact completion ties; it is not transit distance.",
+      "properties": {
+        "order": {
+          "description": "Stop instance IDs in visiting order.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Order",
+          "type": "array"
+        },
+        "is_original": {
+          "title": "Is Original",
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "failed",
+            "interrupted"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "completion_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completion At"
+        },
+        "elapsed_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "completion_at minus the shared start instant.",
+          "title": "Elapsed Seconds"
+        },
+        "distance_m": {
+          "description": "Straight-line path length, metres (tie-break only).",
+          "title": "Distance M",
+          "type": "integer"
+        },
+        "failure_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "no_route",
+                "arrival_unknown",
+                "provider_temporary",
+                "quota_exceeded",
+                "provider_capacity",
+                "place_invalid",
+                "place_temporary",
+                "deadline_exceeded",
+                "cancelled"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Reason"
+        },
+        "failure_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Message"
+        },
+        "timeline": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "failed_leg": "#/$defs/FailedLeg",
+                "leg": "#/$defs/PlannedLeg",
+                "stop": "#/$defs/KnownStop",
+                "unknown_stop": "#/$defs/UnknownStop"
+              },
+              "propertyName": "item_type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/KnownStop"
+              },
+              {
+                "$ref": "#/$defs/PlannedLeg"
+              },
+              {
+                "$ref": "#/$defs/FailedLeg"
+              },
+              {
+                "$ref": "#/$defs/UnknownStop"
+              }
+            ]
+          },
+          "title": "Timeline",
+          "type": "array"
+        },
+        "routing_calls": {
+          "title": "Routing Calls",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "order",
+        "is_original",
+        "status",
+        "distance_m",
+        "timeline",
+        "routing_calls"
+      ],
+      "title": "CandidateEvaluation",
+      "type": "object"
+    },
     "ComparisonOutcome": {
       "description": "Terminal outcome for a comparison operation.",
       "properties": {
@@ -441,6 +576,268 @@
       "title": "ErrorOutcome",
       "type": "object"
     },
+    "ExhaustiveOutcome": {
+      "description": "Terminal outcome for the exhaustive experiment.",
+      "properties": {
+        "outcome_type": {
+          "const": "exhaustive",
+          "default": "exhaustive",
+          "title": "Outcome Type",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/ExhaustiveResult"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "ExhaustiveOutcome",
+      "type": "object"
+    },
+    "ExhaustiveProgressEvent": {
+      "description": "Emitted after each order of the exhaustive experiment finishes.",
+      "properties": {
+        "operation_id": {
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "input_revision": {
+          "title": "Input Revision",
+          "type": "integer"
+        },
+        "type": {
+          "const": "exhaustive_progress",
+          "default": "exhaustive_progress",
+          "title": "Type",
+          "type": "string"
+        },
+        "evaluated": {
+          "description": "Orders evaluated so far (complete + failed).",
+          "title": "Evaluated",
+          "type": "integer"
+        },
+        "complete": {
+          "title": "Complete",
+          "type": "integer"
+        },
+        "failed": {
+          "title": "Failed",
+          "type": "integer"
+        },
+        "total": {
+          "default": 24,
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operation_id",
+        "input_revision",
+        "evaluated",
+        "complete",
+        "failed"
+      ],
+      "title": "ExhaustiveProgressEvent",
+      "type": "object"
+    },
+    "ExhaustiveResult": {
+      "description": "Terminal result of the exhaustive four-stop experiment.\n\n``search_complete`` is true only when every one of the 24 orders reached a\nterminal state (complete or failed). ``winner`` is the complete order with\nthe earliest completion (ties: straight-line distance, then the original\norder, then instance-ID order); for an interrupted search it is the best\nso far and ``winner_plan`` is null (not acceptable). ``saving_seconds`` is\nexact and present only when the original order is complete.",
+      "properties": {
+        "result_type": {
+          "const": "exhaustive",
+          "default": "exhaustive",
+          "title": "Result Type",
+          "type": "string"
+        },
+        "operation_id": {
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "input_revision": {
+          "title": "Input Revision",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "all_complete",
+            "some_failed",
+            "interrupted"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "search_complete": {
+          "title": "Search Complete",
+          "type": "boolean"
+        },
+        "requested_orders": {
+          "default": 24,
+          "title": "Requested Orders",
+          "type": "integer"
+        },
+        "evaluated_orders": {
+          "title": "Evaluated Orders",
+          "type": "integer"
+        },
+        "complete_orders": {
+          "title": "Complete Orders",
+          "type": "integer"
+        },
+        "failed_orders": {
+          "title": "Failed Orders",
+          "type": "integer"
+        },
+        "interruption_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "no_route",
+                "arrival_unknown",
+                "provider_temporary",
+                "quota_exceeded",
+                "provider_capacity",
+                "place_invalid",
+                "place_temporary",
+                "deadline_exceeded",
+                "cancelled"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Interruption Reason"
+        },
+        "start_at": {
+          "description": "Shared start instant at each first destination.",
+          "format": "date-time",
+          "title": "Start At",
+          "type": "string"
+        },
+        "original_order": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Original Order",
+          "type": "array"
+        },
+        "original": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateEvaluation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "winner": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateEvaluation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "winner_basis": {
+          "anyOf": [
+            {
+              "enum": [
+                "completion",
+                "distance",
+                "original",
+                "instance_order"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Winner Basis"
+        },
+        "winner_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompletePlan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Only for a terminal search with a complete winner."
+        },
+        "saving_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Saving Seconds"
+        },
+        "hours_warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "title": "Hours Warnings",
+          "type": "array"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/CandidateEvaluation"
+          },
+          "title": "Candidates",
+          "type": "array"
+        },
+        "routing_calls": {
+          "title": "Routing Calls",
+          "type": "integer"
+        },
+        "routing_budget": {
+          "default": 72,
+          "title": "Routing Budget",
+          "type": "integer"
+        },
+        "deadline_seconds": {
+          "default": 240,
+          "title": "Deadline Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operation_id",
+        "input_revision",
+        "status",
+        "message",
+        "search_complete",
+        "evaluated_orders",
+        "complete_orders",
+        "failed_orders",
+        "start_at",
+        "original_order",
+        "candidates",
+        "routing_calls"
+      ],
+      "title": "ExhaustiveResult",
+      "type": "object"
+    },
     "FailedLeg": {
       "description": "A leg that could not be routed \u2014 terminates the valid timeline prefix.\n\nStops that follow a FailedLeg have unknown arrival/departure times and\nare represented as UnknownStop. There is no invented fallback duration.",
       "properties": {
@@ -849,7 +1246,8 @@
               "routing",
               "candidate",
               "original_route",
-              "alternative_route"
+              "alternative_route",
+              "exhaustive_search"
             ],
             "type": "string"
           },
@@ -996,7 +1394,8 @@
             "routing",
             "candidate",
             "original_route",
-            "alternative_route"
+            "alternative_route",
+            "exhaustive_search"
           ],
           "title": "Phase",
           "type": "string"
@@ -1033,7 +1432,8 @@
             "routing",
             "candidate",
             "original_route",
-            "alternative_route"
+            "alternative_route",
+            "exhaustive_search"
           ],
           "title": "Phase",
           "type": "string"
@@ -1617,6 +2017,7 @@
               "cancelled": "#/$defs/CancelledOutcome",
               "comparison": "#/$defs/ComparisonOutcome",
               "error": "#/$defs/ErrorOutcome",
+              "exhaustive": "#/$defs/ExhaustiveOutcome",
               "plan": "#/$defs/PlanOutcome",
               "refresh": "#/$defs/RefreshOutcome",
               "timeout": "#/$defs/TimeoutOutcome"
@@ -1632,6 +2033,9 @@
             },
             {
               "$ref": "#/$defs/ComparisonOutcome"
+            },
+            {
+              "$ref": "#/$defs/ExhaustiveOutcome"
             },
             {
               "$ref": "#/$defs/CancelledOutcome"
@@ -1669,7 +2073,8 @@
             "routing",
             "candidate",
             "original_route",
-            "alternative_route"
+            "alternative_route",
+            "exhaustive_search"
           ],
           "title": "Phase",
           "type": "string"
@@ -1897,11 +2302,23 @@
       ],
       "default": null
     },
+    "exhaustive_result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExhaustiveResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "stream_event": {
       "anyOf": [
         {
           "discriminator": {
             "mapping": {
+              "exhaustive_progress": "#/$defs/ExhaustiveProgressEvent",
               "leg_progress": "#/$defs/LegProgressEvent",
               "leg_ready": "#/$defs/LegReadyEvent",
               "operation_start": "#/$defs/OperationStartEvent",
@@ -1932,6 +2349,9 @@
               "$ref": "#/$defs/PhaseCompleteEvent"
             },
             {
+              "$ref": "#/$defs/ExhaustiveProgressEvent"
+            },
+            {
               "$ref": "#/$defs/TerminalEvent"
             }
           ]
@@ -1951,6 +2371,7 @@
               "cancelled": "#/$defs/CancelledOutcome",
               "comparison": "#/$defs/ComparisonOutcome",
               "error": "#/$defs/ErrorOutcome",
+              "exhaustive": "#/$defs/ExhaustiveOutcome",
               "plan": "#/$defs/PlanOutcome",
               "refresh": "#/$defs/RefreshOutcome",
               "timeout": "#/$defs/TimeoutOutcome"
@@ -1966,6 +2387,9 @@
             },
             {
               "$ref": "#/$defs/ComparisonOutcome"
+            },
+            {
+              "$ref": "#/$defs/ExhaustiveOutcome"
             },
             {
               "$ref": "#/$defs/CancelledOutcome"

@@ -174,6 +174,72 @@ export type IneligibleInstanceIds = string[];
  * Routing calls issued by this comparison.
  */
 export type RoutingCalls = number;
+export type ResultType5 = "exhaustive";
+export type OperationId5 = string;
+export type InputRevision5 = number;
+export type Status1 = "all_complete" | "some_failed" | "interrupted";
+export type Message2 = string;
+export type SearchComplete = boolean;
+export type RequestedOrders = number;
+export type EvaluatedOrders = number;
+export type CompleteOrders = number;
+export type FailedOrders = number;
+export type InterruptionReason =
+  | (
+      | "no_route"
+      | "arrival_unknown"
+      | "provider_temporary"
+      | "quota_exceeded"
+      | "provider_capacity"
+      | "place_invalid"
+      | "place_temporary"
+      | "deadline_exceeded"
+      | "cancelled"
+    )
+  | null;
+/**
+ * Shared start instant at each first destination.
+ */
+export type StartAt = string;
+export type OriginalOrder1 = string[];
+/**
+ * Stop instance IDs in visiting order.
+ */
+export type Order = string[];
+export type IsOriginal = boolean;
+export type Status2 = "complete" | "failed" | "interrupted";
+export type CompletionAt = string | null;
+/**
+ * completion_at minus the shared start instant.
+ */
+export type ElapsedSeconds = number | null;
+/**
+ * Straight-line path length, metres (tie-break only).
+ */
+export type DistanceM = number;
+export type FailureReason3 =
+  | (
+      | "no_route"
+      | "arrival_unknown"
+      | "provider_temporary"
+      | "quota_exceeded"
+      | "provider_capacity"
+      | "place_invalid"
+      | "place_temporary"
+      | "deadline_exceeded"
+      | "cancelled"
+    )
+  | null;
+export type FailureMessage1 = string | null;
+export type Timeline2 = (KnownStop | PlannedLeg | FailedLeg | UnknownStop)[];
+export type RoutingCalls1 = number;
+export type WinnerBasis = ("completion" | "distance" | "original" | "instance_order") | null;
+export type SavingSeconds1 = number | null;
+export type HoursWarnings = Warning[];
+export type Candidates = CandidateEvaluation[];
+export type RoutingCalls2 = number;
+export type RoutingBudget = number;
+export type DeadlineSeconds = number;
 export type StreamEvent =
   | (
       | OperationStartEvent
@@ -182,28 +248,32 @@ export type StreamEvent =
       | StopReadyEvent
       | LegReadyEvent
       | PhaseCompleteEvent
+      | ExhaustiveProgressEvent
       | TerminalEvent
     )
   | null;
-export type OperationId5 = string;
-export type InputRevision5 = number;
-export type Type = "operation_start";
-export type Phases = ("verification" | "routing" | "candidate" | "original_route" | "alternative_route")[];
 export type OperationId6 = string;
 export type InputRevision6 = number;
-export type Type1 = "phase_start";
-export type Phase = "verification" | "routing" | "candidate" | "original_route" | "alternative_route";
+export type Type = "operation_start";
+export type Phases = (
+  "verification" | "routing" | "candidate" | "original_route" | "alternative_route" | "exhaustive_search"
+)[];
 export type OperationId7 = string;
 export type InputRevision7 = number;
+export type Type1 = "phase_start";
+export type Phase =
+  "verification" | "routing" | "candidate" | "original_route" | "alternative_route" | "exhaustive_search";
+export type OperationId8 = string;
+export type InputRevision8 = number;
 export type Type2 = "leg_progress";
 export type LegIndex2 = number;
 export type TotalLegs = number;
-export type OperationId8 = string;
-export type InputRevision8 = number;
-export type Type3 = "stop_ready";
-export type StopIndex = number;
 export type OperationId9 = string;
 export type InputRevision9 = number;
+export type Type3 = "stop_ready";
+export type StopIndex = number;
+export type OperationId10 = string;
+export type InputRevision10 = number;
 export type Type4 = "leg_ready";
 export type LegIndex3 = number;
 export type Leg = PlannedLeg | FailedLeg;
@@ -212,29 +282,48 @@ export type Leg = PlannedLeg | FailedLeg;
  */
 export type CompletedLegs = number;
 export type TotalLegs1 = number;
-export type OperationId10 = string;
-export type InputRevision10 = number;
-export type Type5 = "phase_complete";
-export type Phase1 = "verification" | "routing" | "candidate" | "original_route" | "alternative_route";
 export type OperationId11 = string;
 export type InputRevision11 = number;
-export type Type6 = "terminal";
+export type Type5 = "phase_complete";
+export type Phase1 =
+  "verification" | "routing" | "candidate" | "original_route" | "alternative_route" | "exhaustive_search";
+export type OperationId12 = string;
+export type InputRevision12 = number;
+export type Type6 = "exhaustive_progress";
+/**
+ * Orders evaluated so far (complete + failed).
+ */
+export type Evaluated = number;
+export type Complete = number;
+export type Failed = number;
+export type Total = number;
+export type OperationId13 = string;
+export type InputRevision13 = number;
+export type Type7 = "terminal";
 export type Outcome =
-  PlanOutcome | RefreshOutcome | ComparisonOutcome | CancelledOutcome | TimeoutOutcome | ErrorOutcome;
+  | PlanOutcome
+  | RefreshOutcome
+  | ComparisonOutcome
+  | ExhaustiveOutcome
+  | CancelledOutcome
+  | TimeoutOutcome
+  | ErrorOutcome;
 export type OutcomeType = "plan";
 export type Result = CompletePlan | PartialPlan;
 export type OutcomeType1 = "refresh";
 export type Result1 = RefreshComplete | RefreshPartial;
 export type OutcomeType2 = "comparison";
-export type OutcomeType3 = "cancelled";
+export type OutcomeType3 = "exhaustive";
+export type OutcomeType4 = "cancelled";
 export type Reason = string;
-export type OutcomeType4 = "timeout";
-export type Phase2 = "verification" | "routing" | "candidate" | "original_route" | "alternative_route";
-export type Message2 = string;
-export type Partial = (PartialPlan | RefreshPartial) | null;
-export type OutcomeType5 = "error";
-export type Code1 = string;
+export type OutcomeType5 = "timeout";
+export type Phase2 =
+  "verification" | "routing" | "candidate" | "original_route" | "alternative_route" | "exhaustive_search";
 export type Message3 = string;
+export type Partial = (PartialPlan | RefreshPartial) | null;
+export type OutcomeType6 = "error";
+export type Code1 = string;
+export type Message4 = string;
 export type Role = ("city" | "stop") | null;
 export type Reason1 = string | null;
 export type PlaceId2 = string | null;
@@ -242,8 +331,17 @@ export type InstanceIds = string[] | null;
 export type MovedPlaceId = string | null;
 export type RetryAfterSeconds = number | null;
 export type OperationOutcome =
-  (PlanOutcome | RefreshOutcome | ComparisonOutcome | CancelledOutcome | TimeoutOutcome | ErrorOutcome) | null;
-export type Status1 = "ok" | "no_matches";
+  | (
+      | PlanOutcome
+      | RefreshOutcome
+      | ComparisonOutcome
+      | ExhaustiveOutcome
+      | CancelledOutcome
+      | TimeoutOutcome
+      | ErrorOutcome
+    )
+  | null;
+export type Status3 = "ok" | "no_matches";
 export type PlaceId3 = string;
 export type PrimaryText = string;
 export type SecondaryText = string | null;
@@ -282,6 +380,7 @@ export interface ContractRoot {
   plan_result?: PlanResult;
   refresh_result?: RefreshResult;
   comparison_result?: ComparisonResult | null;
+  exhaustive_result?: ExhaustiveResult | null;
   stream_event?: StreamEvent;
   operation_outcome?: OperationOutcome;
   known_stop?: KnownStop | null;
@@ -538,14 +637,83 @@ export interface ComparisonResult {
   [k: string]: unknown;
 }
 /**
+ * Terminal result of the exhaustive four-stop experiment.
+ *
+ * ``search_complete`` is true only when every one of the 24 orders reached a
+ * terminal state (complete or failed). ``winner`` is the complete order with
+ * the earliest completion (ties: straight-line distance, then the original
+ * order, then instance-ID order); for an interrupted search it is the best
+ * so far and ``winner_plan`` is null (not acceptable). ``saving_seconds`` is
+ * exact and present only when the original order is complete.
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "ExhaustiveResult".
+ */
+export interface ExhaustiveResult {
+  result_type?: ResultType5;
+  operation_id: OperationId5;
+  input_revision: InputRevision5;
+  status: Status1;
+  message: Message2;
+  search_complete: SearchComplete;
+  requested_orders?: RequestedOrders;
+  evaluated_orders: EvaluatedOrders;
+  complete_orders: CompleteOrders;
+  failed_orders: FailedOrders;
+  interruption_reason?: InterruptionReason;
+  start_at: StartAt;
+  original_order: OriginalOrder1;
+  original?: CandidateEvaluation | null;
+  winner?: CandidateEvaluation | null;
+  winner_basis?: WinnerBasis;
+  /**
+   * Only for a terminal search with a complete winner.
+   */
+  winner_plan?: CompletePlan | null;
+  saving_seconds?: SavingSeconds1;
+  hours_warnings?: HoursWarnings;
+  candidates: Candidates;
+  routing_calls: RoutingCalls2;
+  routing_budget?: RoutingBudget;
+  deadline_seconds?: DeadlineSeconds;
+  [k: string]: unknown;
+}
+/**
+ * One stop order evaluated from the shared start instant.
+ *
+ * ``complete``: every leg routed; ``completion_at`` is the end of the last
+ * visit (its arrival plus its stay). ``failed``: a leg had no usable route
+ * (no_route / arrival_unknown); the valid prefix is kept and later stops are
+ * unknown. ``interrupted``: the search stopped during this order
+ * (cancellation, deadline, quota, usage controls or provider failure).
+ * ``distance_m`` is the straight-line (haversine) path length, used only to
+ * break exact completion ties; it is not transit distance.
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "CandidateEvaluation".
+ */
+export interface CandidateEvaluation {
+  order: Order;
+  is_original: IsOriginal;
+  status: Status2;
+  completion_at?: CompletionAt;
+  elapsed_seconds?: ElapsedSeconds;
+  distance_m: DistanceM;
+  failure_reason?: FailureReason3;
+  failure_message?: FailureMessage1;
+  timeline: Timeline2;
+  routing_calls: RoutingCalls1;
+  [k: string]: unknown;
+}
+/**
  * First event in a stream — announces phases and operation identity.
  *
  * This interface was referenced by `ContractRoot`'s JSON-Schema
  * via the `definition` "OperationStartEvent".
  */
 export interface OperationStartEvent {
-  operation_id: OperationId5;
-  input_revision: InputRevision5;
+  operation_id: OperationId6;
+  input_revision: InputRevision6;
   type?: Type;
   phases?: Phases;
   [k: string]: unknown;
@@ -557,8 +725,8 @@ export interface OperationStartEvent {
  * via the `definition` "PhaseStartEvent".
  */
 export interface PhaseStartEvent {
-  operation_id: OperationId6;
-  input_revision: InputRevision6;
+  operation_id: OperationId7;
+  input_revision: InputRevision7;
   type?: Type1;
   phase: Phase;
   [k: string]: unknown;
@@ -570,8 +738,8 @@ export interface PhaseStartEvent {
  * via the `definition` "LegProgressEvent".
  */
 export interface LegProgressEvent {
-  operation_id: OperationId7;
-  input_revision: InputRevision7;
+  operation_id: OperationId8;
+  input_revision: InputRevision8;
   type?: Type2;
   leg_index: LegIndex2;
   total_legs: TotalLegs;
@@ -584,8 +752,8 @@ export interface LegProgressEvent {
  * via the `definition` "StopReadyEvent".
  */
 export interface StopReadyEvent {
-  operation_id: OperationId8;
-  input_revision: InputRevision8;
+  operation_id: OperationId9;
+  input_revision: InputRevision9;
   type?: Type3;
   stop_index: StopIndex;
   stop: KnownStop;
@@ -598,8 +766,8 @@ export interface StopReadyEvent {
  * via the `definition` "LegReadyEvent".
  */
 export interface LegReadyEvent {
-  operation_id: OperationId9;
-  input_revision: InputRevision9;
+  operation_id: OperationId10;
+  input_revision: InputRevision10;
   type?: Type4;
   leg_index: LegIndex3;
   leg: Leg;
@@ -614,10 +782,26 @@ export interface LegReadyEvent {
  * via the `definition` "PhaseCompleteEvent".
  */
 export interface PhaseCompleteEvent {
-  operation_id: OperationId10;
-  input_revision: InputRevision10;
+  operation_id: OperationId11;
+  input_revision: InputRevision11;
   type?: Type5;
   phase: Phase1;
+  [k: string]: unknown;
+}
+/**
+ * Emitted after each order of the exhaustive experiment finishes.
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "ExhaustiveProgressEvent".
+ */
+export interface ExhaustiveProgressEvent {
+  operation_id: OperationId12;
+  input_revision: InputRevision12;
+  type?: Type6;
+  evaluated: Evaluated;
+  complete: Complete;
+  failed: Failed;
+  total?: Total;
   [k: string]: unknown;
 }
 /**
@@ -627,9 +811,9 @@ export interface PhaseCompleteEvent {
  * via the `definition` "TerminalEvent".
  */
 export interface TerminalEvent {
-  operation_id: OperationId11;
-  input_revision: InputRevision11;
-  type?: Type6;
+  operation_id: OperationId13;
+  input_revision: InputRevision13;
+  type?: Type7;
   outcome: Outcome;
   [k: string]: unknown;
 }
@@ -667,6 +851,17 @@ export interface ComparisonOutcome {
   [k: string]: unknown;
 }
 /**
+ * Terminal outcome for the exhaustive experiment.
+ *
+ * This interface was referenced by `ContractRoot`'s JSON-Schema
+ * via the `definition` "ExhaustiveOutcome".
+ */
+export interface ExhaustiveOutcome {
+  outcome_type?: OutcomeType3;
+  result: ExhaustiveResult;
+  [k: string]: unknown;
+}
+/**
  * Terminal outcome when the operation was cancelled.
  *
  * A client that cancels by disconnecting cannot receive this; the server
@@ -677,7 +872,7 @@ export interface ComparisonOutcome {
  * via the `definition` "CancelledOutcome".
  */
 export interface CancelledOutcome {
-  outcome_type?: OutcomeType3;
+  outcome_type?: OutcomeType4;
   reason: Reason;
   [k: string]: unknown;
 }
@@ -692,9 +887,9 @@ export interface CancelledOutcome {
  * via the `definition` "TimeoutOutcome".
  */
 export interface TimeoutOutcome {
-  outcome_type?: OutcomeType4;
+  outcome_type?: OutcomeType5;
   phase: Phase2;
-  message: Message2;
+  message: Message3;
   partial?: Partial;
   [k: string]: unknown;
 }
@@ -708,9 +903,9 @@ export interface TimeoutOutcome {
  * via the `definition` "ErrorOutcome".
  */
 export interface ErrorOutcome {
-  outcome_type?: OutcomeType5;
+  outcome_type?: OutcomeType6;
   code: Code1;
-  message: Message3;
+  message: Message4;
   details?: ErrorDetails | null;
   [k: string]: unknown;
 }
@@ -736,7 +931,7 @@ export interface ErrorDetails {
  * via the `definition` "SuggestionsResponse".
  */
 export interface SuggestionsResponse {
-  status: Status1;
+  status: Status3;
   suggestions?: Suggestions;
   [k: string]: unknown;
 }

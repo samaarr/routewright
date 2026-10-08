@@ -49,13 +49,22 @@ from starlette.types import Message
 from app.core.deadline import DeadlineExceededError, DeadlineScope
 from app.core.limiter import OPTIMISE_LIMITS, PLAN_LIMITS, REFRESH_LIMITS, limiter, request_cost
 from app.core.opmetrics import OperationMetrics, OperationType
-from app.models.request import ComparisonRequest, ItineraryRequest, RefreshRequest
+from app.models.request import (
+    ComparisonRequest,
+    ExhaustiveRequest,
+    ItineraryRequest,
+    RefreshRequest,
+)
 from app.models.response import (
+    CandidateEvaluation,
     ComparisonOutcome,
     ComparisonResult,
     CompletePlan,
     ErrorDetails,
     ErrorOutcome,
+    ExhaustiveOutcome,
+    ExhaustiveProgressEvent,
+    ExhaustiveResult,
     FailedLeg,
     KnownStop,
     OperationOutcome,
@@ -77,6 +86,7 @@ from app.models.response import (
     Warning,
     WarningSeverity,
 )
+from app.services import exhaustive
 from app.services.adapter import GooglePlacesAdapter, GoogleRoutesAdapter
 from app.services.area import (
     AREA_UNAVAILABLE_MESSAGE,
@@ -672,6 +682,142 @@ async def execute_compare(
 
 
 # ---------------------------------------------------------------------------
+# Experimental exhaustive search over four stops (2026-10-08)
+# ---------------------------------------------------------------------------
+
+
+def _exhaustive_message(search: exhaustive.SearchOutcome) -> str:
+    total = exhaustive.ORDER_COUNT
+    if not search.search_complete:
+        return f"Search incomplete: evaluated {search.evaluated} of {total} orders."
+    done, failed = len(search.complete), len(search.failed)
+    if failed == 0:
+        return f"Earliest completion among all {total} evaluated stop orders."
+    if done == 0:
+        return f"No order could be completed; {failed} could not be evaluated."
+    return f"Earliest completion among {done} completed orders; {failed} could not be evaluated."
+
+
+def _candidate_model(e: exhaustive.Evaluation) -> CandidateEvaluation:
+    return CandidateEvaluation(
+        order=list(e.ids),
+        is_original=e.is_original,
+        status=e.status,
+        completion_at=e.completion_at,
+        elapsed_seconds=e.elapsed_seconds,
+        distance_m=round(e.distance_m),
+        failure_reason=e.failure_reason,
+        failure_message=e.failure_message,
+        timeline=e.timeline,
+        routing_calls=e.routing_calls,
+    )
+
+
+async def execute_exhaustive(
+    req: ExhaustiveRequest,
+    *,
+    departure_utc: datetime,
+    places: PlacesAdapter,
+    routes: RoutesAdapter,
+    emitter: ProgressEmitter,
+    ctx: OperationContext,
+    deadline: DeadlineScope,
+) -> ExhaustiveResult:
+    """Verify the city and four stops once, then evaluate all 24 orders.
+
+    Verification errors (invalid selection, timezone conflict, temporary
+    place failure) are raised before any routing, as for planning. The
+    search itself never raises for routing problems: it returns an explicit
+    result whose ``status`` says whether every order was evaluated.
+    """
+    op, rev = ctx.operation_id, ctx.input_revision
+    await emitter.emit(
+        OperationStartEvent(
+            operation_id=op, input_revision=rev, phases=["verification", "exhaustive_search"]
+        )
+    )
+    await emitter.emit(PhaseStartEvent(operation_id=op, input_revision=rev, phase="verification"))
+    itinerary = await verify_itinerary(req, places, ctx, deadline)
+    await emitter.emit(
+        PhaseCompleteEvent(operation_id=op, input_revision=rev, phase="verification")
+    )
+    stops = itinerary.stops
+    stays = exhaustive.resolve_experiment_stays(req)
+
+    async def progress(search: exhaustive.SearchOutcome) -> None:
+        await emitter.emit(
+            ExhaustiveProgressEvent(
+                operation_id=op,
+                input_revision=rev,
+                evaluated=search.evaluated,
+                complete=len(search.complete),
+                failed=len(search.failed),
+                total=exhaustive.ORDER_COUNT,
+            )
+        )
+
+    await emitter.emit(
+        PhaseStartEvent(operation_id=op, input_revision=rev, phase="exhaustive_search")
+    )
+    search = await exhaustive.optimise_exhaustive_four(
+        stops,
+        stays,
+        departure_utc,
+        mode=req.mode,
+        routes=routes,
+        ctx=ctx,
+        deadline=deadline,
+        trip_timezone=itinerary.timezone,
+        on_progress=progress,
+    )
+    await emitter.emit(
+        PhaseCompleteEvent(operation_id=op, input_revision=rev, phase="exhaustive_search")
+    )
+
+    ranked, basis = exhaustive.rank_complete_candidates(search.evaluations)
+    winner = ranked[0] if ranked else None
+    original = search.evaluations[0] if search.evaluations else None
+    saving = None
+    if winner and original and original.status == "complete":
+        assert original.completion_at is not None and winner.completion_at is not None
+        saving = int((original.completion_at - winner.completion_at).total_seconds())
+    winner_plan = None
+    if winner is not None and search.search_complete:
+        assembled = _assemble_plan(req, itinerary, list(winner.order), winner.timeline)
+        if not isinstance(assembled, CompletePlan):
+            raise RuntimeError("a complete winner must assemble into a complete plan")
+        winner_plan = assembled
+    if search.search_complete:
+        status = "all_complete" if not search.failed else "some_failed"
+    else:
+        status = "interrupted"
+    return ExhaustiveResult(
+        operation_id=op,
+        input_revision=rev,
+        status=status,
+        message=_exhaustive_message(search),
+        search_complete=search.search_complete,
+        requested_orders=exhaustive.ORDER_COUNT,
+        evaluated_orders=search.evaluated,
+        complete_orders=len(search.complete),
+        failed_orders=len(search.failed),
+        interruption_reason=search.interruption_reason,
+        start_at=departure_utc,
+        original_order=[s.instance_id for s in stops],
+        original=_candidate_model(original) if original else None,
+        winner=_candidate_model(winner) if winner else None,
+        winner_basis=basis,
+        winner_plan=winner_plan,
+        saving_seconds=saving,
+        hours_warnings=_hours_warnings(winner.timeline) if winner else [],
+        candidates=[_candidate_model(e) for e in search.evaluations],
+        routing_calls=search.routing_calls,
+        routing_budget=exhaustive.ROUTING_BUDGET,
+        deadline_seconds=int(exhaustive.DEADLINE_SECONDS),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Aggregate operational metrics (Step 9, D46): bounded categories only
 # ---------------------------------------------------------------------------
 
@@ -692,6 +838,11 @@ def _result_category(result: object) -> tuple[str, str | None]:
         if result.failure_reason == "deadline_exceeded":
             return "timeout", "deadline_exceeded"
         return "partial", result.failure_reason
+    if isinstance(result, ExhaustiveResult):
+        # Like comparisons, results are not split by outcome (D46).
+        if result.status == "interrupted":
+            return "incomplete", result.interruption_reason
+        return "compared", None
     if isinstance(result, ComparisonResult):
         failure = None
         if result.status == "original_incomplete" and isinstance(result.original, PartialPlan):
@@ -701,7 +852,7 @@ def _result_category(result: object) -> tuple[str, str | None]:
 
 
 def _outcome_category(outcome: OperationOutcome) -> tuple[str, str | None]:
-    if isinstance(outcome, PlanOutcome | RefreshOutcome | ComparisonOutcome):
+    if isinstance(outcome, PlanOutcome | RefreshOutcome | ComparisonOutcome | ExhaustiveOutcome):
         return _result_category(outcome.result)
     if isinstance(outcome, TimeoutOutcome):
         return "timeout", "deadline_exceeded"
@@ -901,8 +1052,19 @@ class PlanStream:
         if self.metrics is not None:
             self.metrics.activate()  # provider calls in this task count toward it
         try:
-            result: PlanResult | RefreshResult | ComparisonResult
-            if isinstance(self.req, ComparisonRequest):
+            result: PlanResult | RefreshResult | ComparisonResult | ExhaustiveResult
+            if isinstance(self.req, ExhaustiveRequest):
+                assert self.departure_utc is not None
+                result = await execute_exhaustive(
+                    self.req,
+                    departure_utc=self.departure_utc,
+                    places=self.places,
+                    routes=self.routes,
+                    emitter=self.emitter,
+                    ctx=self.ctx,
+                    deadline=self.deadline,
+                )
+            elif isinstance(self.req, ComparisonRequest):
                 assert self.departure_utc is not None
                 result = await execute_compare(
                     self.req,
@@ -942,6 +1104,8 @@ class PlanStream:
                 outcome = RefreshOutcome(result=result)
             elif isinstance(result, ComparisonResult):
                 outcome = ComparisonOutcome(result=result)
+            elif isinstance(result, ExhaustiveResult):
+                outcome = ExhaustiveOutcome(result=result)
             else:
                 outcome = PlanOutcome(result=result)
         except asyncio.CancelledError:
@@ -1139,6 +1303,48 @@ async def compare_v2_stream(request: Request, req: ComparisonRequest) -> Streami
     deadline = DeadlineScope()
     ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
     metrics = OperationMetrics(_stream_operation(req), "stream", len(req.stops))
+    try:
+        departure_utc = _validated_departure(req)
+    except HTTPException as exc:
+        metrics.finish(*_failure_category(exc))
+        raise
+    stream = PlanStream(
+        req,
+        departure_utc=departure_utc,
+        places=places_adapter(),
+        routes=routes_adapter(),
+        ctx=ctx,
+        deadline=deadline,
+        receive=request.receive,
+        metrics=metrics,
+    )
+    return StreamingResponse(
+        stream.events(),
+        media_type=NDJSON_MEDIA_TYPE,
+        headers={"X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Experimental exhaustive endpoint (2026-10-08)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/optimise-exhaustive/stream")
+@limiter.shared_limit(OPTIMISE_LIMITS, scope=_COMPARE_V2_SCOPE, cost=request_cost)
+async def optimise_exhaustive_stream(request: Request, req: ExhaustiveRequest) -> StreamingResponse:
+    """Experimental: evaluate all 24 orders of exactly four stops.
+
+    Shares the comparison rate-limit scope. Its own 240-second deadline covers
+    verification, capacity waits and routing (existing 60-second operations
+    are unchanged); at most 72 routing calls. Phases: verification,
+    exhaustive_search; progress events after each order; terminal
+    ExhaustiveOutcome (or timeout/error). One open stream holds one admission
+    slot for up to 240 s.
+    """
+    deadline = DeadlineScope(deadline_seconds=exhaustive.DEADLINE_SECONDS)
+    ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
+    metrics = OperationMetrics("compare_exhaustive", "stream", len(req.stops))
     try:
         departure_utc = _validated_departure(req)
     except HTTPException as exc:

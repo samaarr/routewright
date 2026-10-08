@@ -231,6 +231,36 @@ class ComparisonRequest(ItineraryRequest):
     """
 
 
+EXHAUSTIVE_STOP_COUNT = 4
+
+
+class ExhaustiveRequest(ItineraryRequest):
+    """Experimental exhaustive search over every order of exactly four stops.
+
+    Approved 2026-10-08 as an experiment that supersedes the one-candidate
+    comparison rules only within this flow. Every one of the 4! = 24 orders
+    starts at its own first destination at the same departure instant
+    (travel to that first destination is not included), visits each
+    destination once with the stay given here, and is ranked by when the
+    last visit ends. Pins do not apply, so ``fixed_first``/``fixed_last``
+    must be false. Every stop carries an explicit ``stay_minutes`` (the
+    client copies the current plan's resolved durations); nothing is
+    defaulted by position.
+    """
+
+    @model_validator(mode="after")
+    def exhaustive_constraints(self) -> Self:
+        if len(self.stops) != EXHAUSTIVE_STOP_COUNT:
+            raise ValueError("The exhaustive experiment needs exactly 4 stops")
+        if len({s.selection.place_id for s in self.stops}) != EXHAUSTIVE_STOP_COUNT:
+            raise ValueError("The exhaustive experiment needs 4 distinct destinations")
+        if any(s.stay_minutes is None for s in self.stops):
+            raise ValueError("Every stop needs an explicit stay_minutes for the experiment")
+        if self.fixed_first or self.fixed_last:
+            raise ValueError("Pins do not apply to the exhaustive experiment")
+        return self
+
+
 # ---------------------------------------------------------------------------
 # City/place suggestion and selection requests (D34-D36)
 # ---------------------------------------------------------------------------

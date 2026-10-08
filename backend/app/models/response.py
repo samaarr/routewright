@@ -301,7 +301,12 @@ class RefreshOutcome(BaseModel):
 # verification, candidate (local distance search), original_route and
 # alternative_route so progress identifies which itinerary is being checked.
 PhaseName: TypeAlias = Literal[
-    "verification", "routing", "candidate", "original_route", "alternative_route"
+    "verification",
+    "routing",
+    "candidate",
+    "original_route",
+    "alternative_route",
+    "exhaustive_search",
 ]
 
 
@@ -372,6 +377,87 @@ class ComparisonResult(BaseModel):
     routing_calls: int = Field(..., description="Routing calls issued by this comparison.")
 
 
+TimelineItem: TypeAlias = Annotated[
+    KnownStop | PlannedLeg | FailedLeg | UnknownStop, Field(discriminator="item_type")
+]
+
+# Experimental exhaustive search over the 24 orders of four stops (2026-10-08).
+CandidateStatus: TypeAlias = Literal["complete", "failed", "interrupted"]
+ExhaustiveStatus: TypeAlias = Literal["all_complete", "some_failed", "interrupted"]
+WinnerBasis: TypeAlias = Literal["completion", "distance", "original", "instance_order"]
+
+
+class CandidateEvaluation(BaseModel):
+    """One stop order evaluated from the shared start instant.
+
+    ``complete``: every leg routed; ``completion_at`` is the end of the last
+    visit (its arrival plus its stay). ``failed``: a leg had no usable route
+    (no_route / arrival_unknown); the valid prefix is kept and later stops are
+    unknown. ``interrupted``: the search stopped during this order
+    (cancellation, deadline, quota, usage controls or provider failure).
+    ``distance_m`` is the straight-line (haversine) path length, used only to
+    break exact completion ties; it is not transit distance.
+    """
+
+    order: list[str] = Field(..., description="Stop instance IDs in visiting order.")
+    is_original: bool
+    status: CandidateStatus
+    completion_at: datetime | None = None
+    elapsed_seconds: int | None = Field(
+        default=None, description="completion_at minus the shared start instant."
+    )
+    distance_m: int = Field(..., description="Straight-line path length, metres (tie-break only).")
+    failure_reason: PlanFailureReason | None = None
+    failure_message: str | None = None
+    timeline: list[TimelineItem]
+    routing_calls: int
+
+
+class ExhaustiveResult(BaseModel):
+    """Terminal result of the exhaustive four-stop experiment.
+
+    ``search_complete`` is true only when every one of the 24 orders reached a
+    terminal state (complete or failed). ``winner`` is the complete order with
+    the earliest completion (ties: straight-line distance, then the original
+    order, then instance-ID order); for an interrupted search it is the best
+    so far and ``winner_plan`` is null (not acceptable). ``saving_seconds`` is
+    exact and present only when the original order is complete.
+    """
+
+    result_type: Literal["exhaustive"] = "exhaustive"
+    operation_id: str
+    input_revision: int
+    status: ExhaustiveStatus
+    message: str
+    search_complete: bool
+    requested_orders: int = 24
+    evaluated_orders: int
+    complete_orders: int
+    failed_orders: int
+    interruption_reason: PlanFailureReason | None = None
+    start_at: datetime = Field(..., description="Shared start instant at each first destination.")
+    original_order: list[str]
+    original: CandidateEvaluation | None = None
+    winner: CandidateEvaluation | None = None
+    winner_basis: WinnerBasis | None = None
+    winner_plan: CompletePlan | None = Field(
+        default=None, description="Only for a terminal search with a complete winner."
+    )
+    saving_seconds: int | None = None
+    hours_warnings: list[Warning] = Field(default_factory=list)
+    candidates: list[CandidateEvaluation]
+    routing_calls: int
+    routing_budget: int = 72
+    deadline_seconds: int = 240
+
+
+class ExhaustiveOutcome(BaseModel):
+    """Terminal outcome for the exhaustive experiment."""
+
+    outcome_type: Literal["exhaustive"] = "exhaustive"
+    result: ExhaustiveResult
+
+
 class ComparisonOutcome(BaseModel):
     """Terminal outcome for a comparison operation."""
 
@@ -423,6 +509,7 @@ OperationOutcome: TypeAlias = Annotated[
     PlanOutcome
     | RefreshOutcome
     | ComparisonOutcome
+    | ExhaustiveOutcome
     | CancelledOutcome
     | TimeoutOutcome
     | ErrorOutcome,
@@ -489,6 +576,16 @@ class PhaseCompleteEvent(_BaseEvent):
     phase: PhaseName
 
 
+class ExhaustiveProgressEvent(_BaseEvent):
+    """Emitted after each order of the exhaustive experiment finishes."""
+
+    type: Literal["exhaustive_progress"] = "exhaustive_progress"
+    evaluated: int = Field(..., description="Orders evaluated so far (complete + failed).")
+    complete: int
+    failed: int
+    total: int = 24
+
+
 class TerminalEvent(_BaseEvent):
     """Final event in a stream — carries the complete operation outcome."""
 
@@ -503,6 +600,7 @@ StreamEvent: TypeAlias = Annotated[
     | StopReadyEvent
     | LegReadyEvent
     | PhaseCompleteEvent
+    | ExhaustiveProgressEvent
     | TerminalEvent,
     Field(discriminator="type"),
 ]
@@ -581,6 +679,7 @@ class ContractRoot(BaseModel):
     plan_result: PlanResult | None = None
     refresh_result: RefreshResult | None = None
     comparison_result: ComparisonResult | None = None
+    exhaustive_result: ExhaustiveResult | None = None
     stream_event: StreamEvent | None = None
     operation_outcome: OperationOutcome | None = None
     known_stop: KnownStop | None = None

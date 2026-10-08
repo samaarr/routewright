@@ -28,7 +28,8 @@ def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     a = math.sin(d_lat / 2) ** 2 + (
         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(d_lng / 2) ** 2
     )
-    return r * 2 * math.asin(math.sqrt(a))
+    # Rounding can push ``a`` a hair outside [0, 1]; clamp before the root.
+    return r * 2 * math.asin(math.sqrt(min(1.0, max(0.0, a))))
 
 
 def _path_length(places: list[GeocodedPlace], order: list[int]) -> float:
