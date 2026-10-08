@@ -1021,6 +1021,34 @@ mid-call cancellation, production Redis fail-closed, runtime `id`, Map ID
 value, log retention, Upstash usage, billing confirmation. Public launch is
 gated on the server-key IP-restriction review and free-tier enforcement.
 
+## Experiment — exhaustive four-stop optimiser (2026-10-08, local only)
+
+Commits (not pushed): `d21bdc8` backend + contracts, `851ff2f` UI,
+`b2adde0` result-card start assumption. Design and assumptions: TODO.md
+"Approved experiment".
+
+- Backend: `ExhaustiveRequest` (4 distinct stops, explicit stays, pins
+  rejected); `services/exhaustive.py` (generate_orders,
+  resolve_experiment_stays, geographic_path_metres, evaluate_order via the
+  shared plan_sequential, rank_complete_candidates, optimise_exhaustive_four
+  with a 72-call RoutingBudget); `execute_exhaustive` + streaming endpoint
+  with its own 240 s DeadlineScope, comparison rate-limit scope and
+  `exhaustive_progress` events; metrics operation `compare_exhaustive`
+  (results not split, D46). Haversine now clamps rounding.
+- Frontend: validated contracts, `streamExhaustive`, reducer purpose
+  `exhaustive` (progress counts, stored result, atomic acceptance with zero
+  network calls, pins by identity, edits/late events/cancel keep the plan),
+  "Test all 24 orders" panel with assumptions before running, progress +
+  Cancel, results, candidate list.
+
+Checks (actual): backend 450 passed, 4 skipped (Redis env unset); ruff,
+format, mypy clean; 24 new backend tests. Frontend: unit 99 (11 new),
+browser 33 (2 new) on Node 22 and 23, type-check, lint, types drift, smoke,
+bundle check, audit. Panel screenshots reviewed at desktop width.
+
+Not done: live run (needs approval; uses up to 72 of 100 daily Compute
+Routes), mobile screenshot review of the result card, deployment.
+
 ## Next action
 
 1. Closed-prototype use and feedback.

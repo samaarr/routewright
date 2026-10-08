@@ -82,6 +82,47 @@ first, then this decision register. Later explicit superseding decisions take
 precedence over earlier wording. Unchecked approved decisions are not evidence
 that application code has been implemented.
 
+## Approved experiment — exhaustive four-stop optimiser (2026-10-08)
+
+New approved direction for an **experimental flow only**. Within this flow it
+supersedes the one-candidate comparison rules (single distance-based
+candidate, pinned endpoints, five-minute recommendation threshold).
+Planning, refresh and the standard comparison are unchanged.
+
+- Exactly four distinct destinations (stable instance IDs); every visiting
+  order is evaluated: 4! = 24, the original first, then the rest in a fixed
+  permutation order.
+- Every order starts **at its own first destination at the same supplied
+  departure instant**; travel to that first destination is **not included**.
+  This is stated before running and repeated on the result.
+- Endpoints unrestricted; existing pins do not apply (requests with pins are
+  rejected). On acceptance pins are kept by stop identity only.
+- Stays are explicit per instance (copied from the current plan's resolved
+  durations) and identical in every order; no positional defaulting.
+- Opening hours are assessed and shown as warnings; they never reject,
+  penalise or reorder candidates. No automatic changes to departure, stays
+  or destinations.
+- Completion C(p) = Google-backed arrival at the last stop (incl. final walk)
+  + its stay; ranking: earliest C(p), then straight-line path length
+  (tie-break only, millimetre precision), then the original order, then
+  instance-ID order. No threshold; exact saving vs the original when the
+  original is complete.
+- Budgets: own routing guard of **72 calls** (24 × 3), counted when issued, no
+  retries, no cross-candidate caching, original not recalculated separately;
+  own **240-second deadline** (60-second operations unchanged); comparison
+  rate-limit scope; global provider budget, Redis controls, concurrency and
+  Google quotas all still apply.
+- no_route / arrival_unknown fail one order; cancellation, deadline, quota,
+  usage controls/capacity and provider errors interrupt the search, reported
+  as "Search incomplete" with best-so-far only (not acceptable).
+- Wording never claims globally optimal transit routing: Google chooses each
+  journey; the search exhausts stop orders, not connections or deliberate
+  waiting.
+- **Live run not yet approved.** One run can use up to 72 Compute Routes calls
+  plus 1 Place Details Pro and 4 Place Details Enterprise; the production
+  daily ComputeRoutes quota is **100**, so one run consumes most of a day's
+  quota and a second run the same day would exceed it. Quotas unchanged.
+
 ## Approved decisions
 
 - [ ] **1. Calculate journey legs sequentially.** Request the first leg, calculate

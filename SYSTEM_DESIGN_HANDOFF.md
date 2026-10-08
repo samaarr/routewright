@@ -199,6 +199,17 @@ mode against TLS Redis. Existing live
 deployment found: `routewright.vercel.app` (old build) calling
 `routewright-production.up.railway.app` (returns 502). Nothing deployed.
 
+## Experimental exhaustive optimiser (2026-10-08)
+
+Approved experiment: "Test all 24 orders" for exactly four distinct stops,
+POST /api/v2/optimise-exhaustive/stream (backend/app/services/exhaustive.py).
+Supersedes the one-candidate rules only inside this flow; the standard
+comparison, planning and refresh are unchanged. Assumptions, budgets (72
+routing calls, 240 s), ranking and wording: TODO.md "Approved experiment".
+Implemented and tested locally (mocked providers only); not pushed or
+deployed; a controlled live run needs separate approval (one run can use up
+to 72 of the 100 daily Compute Routes quota).
+
 ## Next work
 
 Read TODO.md's remaining-decisions section, consolidate overlapping technical
