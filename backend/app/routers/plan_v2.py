@@ -47,7 +47,14 @@ from fastapi.responses import StreamingResponse
 from starlette.types import Message
 
 from app.core.deadline import DeadlineExceededError, DeadlineScope
-from app.core.limiter import OPTIMISE_LIMITS, PLAN_LIMITS, REFRESH_LIMITS, limiter, request_cost
+from app.core.limiter import (
+    OPTIMISE_LIMITS,
+    PLAN_LIMITS,
+    REFRESH_LIMITS,
+    is_tester,
+    limiter,
+    request_cost,
+)
 from app.core.opmetrics import OperationMetrics, OperationType
 from app.models.request import (
     ComparisonRequest,
@@ -1342,9 +1349,20 @@ async def optimise_exhaustive_stream(request: Request, req: ExhaustiveRequest) -
     ExhaustiveOutcome (or timeout/error). One open stream holds one admission
     slot for up to 240 s.
     """
+    metrics = OperationMetrics("compare_exhaustive", "stream", len(req.stops))
+    if not is_tester(request):
+        # Experiment limited to the configured tester allowlist; checked
+        # before any validation or provider call. Fails closed when empty.
+        metrics.finish("rejected", "experiment_not_available")
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "experiment_not_available",
+                "message": "This experimental feature is only available to testers.",
+            },
+        )
     deadline = DeadlineScope(deadline_seconds=exhaustive.DEADLINE_SECONDS)
     ctx = OperationContext(operation_id=req.operation_id, input_revision=req.input_revision)
-    metrics = OperationMetrics("compare_exhaustive", "stream", len(req.stops))
     try:
         departure_utc = _validated_departure(req)
     except HTTPException as exc:
@@ -1365,3 +1383,14 @@ async def optimise_exhaustive_stream(request: Request, req: ExhaustiveRequest) -
         media_type=NDJSON_MEDIA_TYPE,
         headers={"X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/experiments")
+async def experiments(request: Request) -> dict[str, bool]:
+    """Which experimental features this client may use (no provider calls).
+
+    Reveals only whether the requesting client is on the tester allowlist.
+    The UI uses it to decide whether to offer "Test all 24 orders"; the
+    experiment endpoint enforces the same check itself.
+    """
+    return {"exhaustive_four": is_tester(request)}

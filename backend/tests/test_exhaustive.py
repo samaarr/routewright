@@ -393,6 +393,17 @@ async def test_final_walk_and_final_stay_count_in_completion(
 
 # --- endpoint --------------------------------------------------------------------------
 
+TESTER = "198.51.100.23"
+
+
+@pytest.fixture
+def tester(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """A client on the configured tester allowlist (peer identity)."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "rate_limit_whitelist_ips", TESTER)
+    return TestClient(app, client=(TESTER, 4321))
+
 
 def _body(order: str = "ACBD", **kw: Any) -> dict[str, Any]:
     body = _payload(
@@ -420,7 +431,9 @@ def test_endpoint_rejects_invalid_experiment_requests(
     assert resp.status_code == 422
 
 
-def test_stream_reports_progress_and_terminal_result(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stream_reports_progress_and_terminal_result(
+    monkeypatch: pytest.MonkeyPatch, tester: TestClient
+) -> None:
     routes = Routes()
     seen: dict[str, float] = {}
     real_scope = plan_v2.DeadlineScope
@@ -432,7 +445,7 @@ def test_stream_reports_progress_and_terminal_result(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(plan_v2, "DeadlineScope", scope)
     monkeypatch.setattr(plan_v2, "places_adapter", lambda: FakePlaces())
     monkeypatch.setattr(plan_v2, "routes_adapter", lambda: routes)
-    resp = TestClient(app).post("/api/v2/optimise-exhaustive/stream", json=_body())
+    resp = tester.post("/api/v2/optimise-exhaustive/stream", json=_body())
     assert resp.status_code == 200
     events = [json.loads(line) for line in resp.text.splitlines()]
     assert events[0]["phases"] == ["verification", "exhaustive_search"]
@@ -498,3 +511,105 @@ async def test_disconnect_stops_the_search_mid_flight() -> None:
     await asyncio.wait_for(cancelled.wait(), 5)  # the in-flight call was cancelled
     assert len(routes.calls) == 5
     assert all(e["type"] != "terminal" for e in received)
+
+
+# --- tester allowlist (experiment only; fails closed) ---------------------------------
+
+
+class _NoProvider:
+    """Any provider use is a test failure: rejection must happen first."""
+
+    async def fetch_details(self, *a: Any, **kw: Any) -> Any:
+        raise AssertionError("provider called")
+
+    async def fetch_leg(self, **kw: Any) -> Any:
+        raise AssertionError("provider called")
+
+
+@pytest.fixture
+def no_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(plan_v2, "places_adapter", lambda: _NoProvider())
+    monkeypatch.setattr(plan_v2, "routes_adapter", lambda: _NoProvider())
+
+
+def _allow(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "rate_limit_whitelist_ips", value)
+
+
+@pytest.mark.parametrize("allowlist", ["", " , ", "0.0.0.0/0,not-an-ip", "203.0.113.200"])
+def test_experiment_fails_closed_for_non_testers(
+    monkeypatch: pytest.MonkeyPatch, no_provider: None, allowlist: str
+) -> None:
+    _allow(monkeypatch, allowlist)
+    client = TestClient(app, client=(TESTER, 4321))
+    resp = client.post("/api/v2/optimise-exhaustive/stream", json=_body())
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["error"] == "experiment_not_available"
+    assert client.get("/api/v2/experiments").json() == {"exhaustive_four": False}
+
+
+def test_rejection_precedes_departure_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    _allow(monkeypatch, "")
+    past = _body()
+    past["departure"]["local_date"] = "2020-01-01"
+    client = TestClient(app, client=(TESTER, 1))
+    resp = client.post("/api/v2/optimise-exhaustive/stream", json=past)
+    assert resp.status_code == 403  # not 422: the departure is never evaluated
+
+
+def test_other_flows_are_not_gated(monkeypatch: pytest.MonkeyPatch) -> None:
+    _allow(monkeypatch, "")
+    past = _body()
+    past["departure"]["local_date"] = "2020-01-01"
+    client = TestClient(app, client=(TESTER, 1))
+    assert client.post("/api/v2/compare/stream", json=past).status_code == 422  # reached validation
+    assert client.post("/api/v2/plan", json=past).status_code == 422
+
+
+def test_tester_by_peer_with_ipv6_normalisation(monkeypatch: pytest.MonkeyPatch) -> None:
+    _allow(monkeypatch, "2001:DB8:0::23")
+    client = TestClient(app, client=("2001:db8::23", 1))
+    assert client.get("/api/v2/experiments").json() == {"exhaustive_four": True}
+
+
+@pytest.fixture
+def railway(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "client_ip_source", "railway")
+    monkeypatch.setattr(settings, "railway_environment_id", "env-1")
+    monkeypatch.setattr(settings, "railway_tcp_proxy_domain", "")
+    monkeypatch.setattr(settings, "trusted_proxy_ips", "")
+
+
+EDGE_HEADERS = {"x-railway-edge": "railway/europe-west4", "x-railway-request-id": "r1"}
+GLOBAL_TESTER = "93.184.216.34"  # Railway mode accepts only globally routable addresses
+
+
+def test_tester_identified_by_verified_railway_edge_header(
+    monkeypatch: pytest.MonkeyPatch, railway: None
+) -> None:
+    _allow(monkeypatch, GLOBAL_TESTER)
+    client = TestClient(app, client=("10.250.0.7", 1))  # Railway internal peer
+    ok = client.get("/api/v2/experiments", headers={"x-real-ip": GLOBAL_TESTER, **EDGE_HEADERS})
+    assert ok.json() == {"exhaustive_four": True}
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"x-real-ip": GLOBAL_TESTER},  # forged: no edge markers
+        {"x-forwarded-for": GLOBAL_TESTER, **EDGE_HEADERS},  # forwarded headers ignored
+        {"x-real-ip": f"{GLOBAL_TESTER}, 1.1.1.1", **EDGE_HEADERS},  # malformed
+    ],
+)
+def test_forged_identity_headers_never_grant_tester_access(
+    monkeypatch: pytest.MonkeyPatch, railway: None, no_provider: None, headers: dict[str, str]
+) -> None:
+    _allow(monkeypatch, GLOBAL_TESTER)
+    client = TestClient(app, client=("10.250.0.7", 1))
+    assert client.get("/api/v2/experiments", headers=headers).json() == {"exhaustive_four": False}
+    resp = client.post("/api/v2/optimise-exhaustive/stream", json=_body(), headers=headers)
+    assert resp.status_code == 403

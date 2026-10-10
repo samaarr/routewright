@@ -290,3 +290,21 @@ export function streamExhaustive(
 ): Promise<StreamEnd> {
   return streamOperation("/api/v2/optimise-exhaustive/stream", request, "exhaustive", onEvent, signal);
 }
+
+/**
+ * Experimental features this client may use (backend tester allowlist).
+ * Fails closed: any error, non-2xx or malformed body means "not available".
+ * The experiment endpoint enforces the same check itself.
+ */
+export async function getExperiments(signal?: AbortSignal): Promise<{ exhaustive_four: boolean }> {
+  try {
+    const res = await fetch(`${BASE}/api/v2/experiments`, { signal });
+    if (!res.ok) return { exhaustive_four: false };
+    const body = (await res.json()) as unknown;
+    const ok =
+      typeof body === "object" && body !== null && (body as Record<string, unknown>).exhaustive_four === true;
+    return { exhaustive_four: ok };
+  } catch {
+    return { exhaustive_four: false };
+  }
+}

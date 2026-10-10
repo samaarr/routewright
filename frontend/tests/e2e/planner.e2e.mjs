@@ -47,6 +47,7 @@ let pendingPlan; // resolve fn for a held stream
 let refreshMode; // how the mocked refresh stream answers
 let compareMode; // how the mocked comparison stream answers
 let exhaustiveMode; // how the mocked exhaustive stream answers
+let experimentsAllowed; // what the mocked tester-allowlist check answers
 let slow; // local HTTPS server that streams refresh events progressively
 let releaseRefresh; // lets a progressive refresh stream send its terminal event
 let refreshGate; // created before each test so release can never precede the server's wait
@@ -292,6 +293,7 @@ async function apiRoute(route) {
     const text = compareMode === "truncated" ? lines.slice(0, -1).join("\n") + "\n" : lines.join("\n") + "\n";
     return route.fulfill({ status: 200, headers: cors({ "content-type": "application/x-ndjson" }), body: text });
   }
+  if (path === "/api/v2/experiments") return json(route, 200, { exhaustive_four: experimentsAllowed });
   if (path === "/api/v2/optimise-exhaustive/stream") {
     if (exhaustiveMode === "progressive") return route.continue({ url: `https://127.0.0.1:${slow.port}${path}` });
     if (exhaustiveMode === "hang") {
@@ -407,6 +409,7 @@ describe("v2 planner (browser)", () => {
     refreshMode = "ok";
     compareMode = "recommended";
     exhaustiveMode = "finished";
+    experimentsAllowed = true;
     refreshGate = new Promise((resolve) => { releaseRefresh = resolve; });
     suggestDelays = {};
     pendingPlan = null;
@@ -420,14 +423,15 @@ describe("v2 planner (browser)", () => {
     await city().pressSequentially("Dub", { delay: 40 });
     await page.getByRole("option", { name: /Dublin/ }).waitFor();
     assert.equal(count("/api/v2/suggest/cities"), 1);
-    assert.equal(log[0].body.query, "Dub");
-    assert.match(log[0].body.session_token, /^[A-Za-z0-9_-]{8,64}$/);
+    const search = log.find((r) => r.path === "/api/v2/suggest/cities");
+    assert.equal(search.body.query, "Dub");
+    assert.match(search.body.session_token, /^[A-Za-z0-9_-]{8,64}$/);
     assert.equal(count("/api/v2/select/city"), 0); // suggestions alone select nothing
     await page.getByRole("option", { name: /Dublin/ }).click();
     await page.getByTestId("city-context").filter({ visible: true }).waitFor();
     assert.equal(count("/api/v2/select/city"), 1);
     const sel = log.find((r) => r.path === "/api/v2/select/city");
-    assert.equal(sel.body.session_token, log[0].body.session_token); // concludes the session
+    assert.equal(sel.body.session_token, search.body.session_token); // concludes the session
     assert.match(await page.getByTestId("city-context").filter({ visible: true }).innerText(), /Europe\/Dublin/);
     await city().press("End");
     await city().pressSequentially("x");
@@ -911,5 +915,13 @@ describe("v2 planner (browser)", () => {
     await use.click();
     await vis("exhaustive-all_complete").waitFor({ state: "detached" });
     assert.equal(log.length, before);
+  });
+  test("test all 24 orders is not offered to clients outside the tester allowlist", async () => {
+    experimentsAllowed = false;
+    await page.reload();
+    await planFourStops();
+    assert.equal(await page.getByRole("button", { name: "Compare with another order" }).count(), 1); // other flows intact
+    assert.equal(await page.getByRole("button", { name: "Test all 24 orders" }).count(), 0);
+    assert.equal(count("/api/v2/optimise-exhaustive/stream"), 0);
   });
 });

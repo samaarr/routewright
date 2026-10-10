@@ -660,12 +660,14 @@ function ExhaustiveCard({
 
 function ExhaustivePanel({
   state,
+  available,
   onRun,
   onCancel,
   onAccept,
   onDismiss,
 }: {
   state: PlannerState;
+  available: boolean;
   onRun: () => void;
   onCancel: () => void;
   onAccept: () => void;
@@ -690,7 +692,7 @@ function ExhaustivePanel({
     );
   }
   if (state.exhaustive) return <ExhaustiveCard state={state} onAccept={onAccept} onDismiss={onDismiss} />;
-  if (op.kind === "running" || !canRunExhaustive(state)) return null;
+  if (!available || op.kind === "running" || !canRunExhaustive(state)) return null;
   if (!explaining) {
     return (
       <div className="mb-4">
@@ -744,6 +746,7 @@ export default function TimelineV2({
   onCompare,
   onAccept,
   onDismiss,
+  exhaustiveAvailable = false,
   onExhaustive = () => {},
   onExhaustiveAccept = () => {},
   onExhaustiveDismiss = () => {},
@@ -754,6 +757,7 @@ export default function TimelineV2({
   onCompare: () => void;
   onAccept: () => void;
   onDismiss: () => void;
+  exhaustiveAvailable?: boolean;
   onExhaustive?: () => void;
   onExhaustiveAccept?: () => void;
   onExhaustiveDismiss?: () => void;
@@ -823,6 +827,7 @@ export default function TimelineV2({
       {plan && !refreshing && !planning && (
         <ExhaustivePanel
           state={state}
+          available={exhaustiveAvailable}
           onRun={onExhaustive}
           onCancel={onCancel}
           onAccept={onExhaustiveAccept}

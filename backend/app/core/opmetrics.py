@@ -90,6 +90,7 @@ FAILURES = frozenset(
         "planned_departure_unsupported",
         "invalid_query",
         "provider_unavailable",
+        "experiment_not_available",
         "internal_error",
         "other",
     }

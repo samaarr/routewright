@@ -1,6 +1,6 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { ApiError, streamPlan, suggestCities } from "../../lib/v2/client.ts";
+import { ApiError, getExperiments, streamPlan, suggestCities } from "../../lib/v2/client.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -69,4 +69,17 @@ test("pre-stream HTTP errors throw with the server's code", async () => {
   respond(422, { detail: { error: "departure_nonexistent", message: "skipped" } });
   const err = await streamPlan({ operation_id: "op", input_revision: 0 } as never, () => {}, new AbortController().signal).catch((e) => e);
   assert.ok(err instanceof ApiError && err.kind === "departure" && err.message === "skipped");
+});
+
+test("experiment availability fails closed", async () => {
+  respond(200, { exhaustive_four: true });
+  assert.deepEqual(await getExperiments(), { exhaustive_four: true });
+  for (const [status, body] of [[200, { exhaustive_four: "yes" }], [200, {}], [403, { exhaustive_four: true }], [500, "boom"], [200, "not json"]] as const) {
+    respond(status, body);
+    assert.deepEqual(await getExperiments(), { exhaustive_four: false }, `${status} ${JSON.stringify(body)}`);
+  }
+  globalThis.fetch = async () => {
+    throw new TypeError("network down");
+  };
+  assert.deepEqual(await getExperiments(), { exhaustive_four: false });
 });

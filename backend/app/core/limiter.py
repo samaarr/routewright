@@ -102,6 +102,37 @@ def limiter_key(request: Request) -> str:
     return digest.hexdigest()[:32]
 
 
+def _tester_addresses() -> set[str]:
+    """The configured tester allowlist (RATE_LIMIT_WHITELIST_IPS), normalised.
+
+    Entries that are not single IP addresses are ignored, never widened.
+    """
+    addresses: set[str] = set()
+    for value in settings.rate_limit_whitelist_ips.split(","):
+        try:
+            addresses.add(str(ip_address(value.strip())))
+        except ValueError:
+            continue
+    return addresses
+
+
+def is_tester(request: Request) -> bool:
+    """Experimental features are limited to the configured tester allowlist.
+
+    Uses the verified client identity (_client_ip: TCP peer, trusted proxy
+    chains or the checked Railway edge header — never raw forwarded headers).
+    Fails closed: with no tester configured, nobody qualifies.
+    """
+    testers = _tester_addresses()
+    if not testers:
+        return False
+    try:
+        identity = str(ip_address(_client_ip(request)))
+    except ValueError:
+        return False
+    return identity in testers
+
+
 def request_cost(request: Request) -> int:
     """Stable exempt identity; no fresh UUID counters per request."""
     whitelist = {v.strip() for v in settings.rate_limit_whitelist_ips.split(",") if v.strip()}
