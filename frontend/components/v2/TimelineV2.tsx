@@ -9,6 +9,7 @@ import {
   acceptableExhaustive,
   canCompare,
   canRunExhaustive,
+  exhaustivePinChanges,
   progressLabel,
   refreshableTarget,
   resultIsStale,
@@ -628,7 +629,14 @@ function ExhaustiveCard({
         </div>
       )}
       <CandidateList candidates={r.candidates} names={name} tz={tz} winner={w} />
-      <div className="mt-3 flex gap-2">
+      {acceptable &&
+        exhaustivePinChanges(state).map((c) => (
+          <p key={c.end} className="mt-2 text-xs text-warning-strong" data-testid={`exhaustive-pin-${c.end}`}>
+            {name(c.clearedId)} is pinned as your {c.end} stop but won&apos;t be {c.end} in this order, so using it clears
+            that pin. The new {c.end} stop, {name(c.newEndpointId)}, won&apos;t be pinned.
+          </p>
+        ))}
+      <div className="mt-3 flex flex-wrap gap-2">
         {acceptable && (
           <button
             type="button"

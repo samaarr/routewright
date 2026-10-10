@@ -293,6 +293,7 @@ async function apiRoute(route) {
     return route.fulfill({ status: 200, headers: cors({ "content-type": "application/x-ndjson" }), body: text });
   }
   if (path === "/api/v2/optimise-exhaustive/stream") {
+    if (exhaustiveMode === "progressive") return route.continue({ url: `https://127.0.0.1:${slow.port}${path}` });
     if (exhaustiveMode === "hang") {
       await new Promise((resolve) => { pendingPlan = resolve; });
       return route.abort().catch(() => {});
@@ -330,9 +331,10 @@ function startSlowServer() {
     req.on("data", (c) => { raw += c; });
     req.on("end", async () => {
       const body = JSON.parse(raw);
-      log.push({ path: "/api/v2/refresh/stream", body });
+      const exhaustivePath = req.url === "/api/v2/optimise-exhaustive/stream";
+      log.push({ path: exhaustivePath ? req.url : "/api/v2/refresh/stream", body });
       res.writeHead(200, cors({ "content-type": "application/x-ndjson" }));
-      const events = refreshEvents(body, "ok");
+      const events = exhaustivePath ? exhaustiveEvents(body) : refreshEvents(body, "ok");
       for (const e of events.slice(0, -1)) {
         res.write(JSON.stringify(e) + "\n");
         await new Promise((r) => setTimeout(r, 30));
@@ -812,7 +814,7 @@ describe("v2 planner (browser)", () => {
     await page.getByRole("button", { name: "+ Add another stop" }).filter({ visible: true }).click();
     await chooseStop(4, "national", "National Gallery");
     await planButton().click();
-    await page.getByTestId("current-result").waitFor();
+    await page.getByTestId("current-result").filter({ visible: true }).waitFor();
   }
 
   test("test all 24 orders: explained first, real result, Use this order with no network calls", async () => {
@@ -839,6 +841,12 @@ describe("v2 planner (browser)", () => {
     assert.doesNotMatch(card, /optimal|best possible|guarantee/i);
     assert.equal(await page.getByTestId("exhaustive-candidate").count(), 24);
     assert.equal(await page.getByTestId("current-result").innerText(), planBefore); // plan unchanged until accepted
+    // Pins (on by default): Trinity College stops being first, so its pin is cleared; National Gallery stays last.
+    assert.match(
+      await page.getByTestId("exhaustive-pin-first").innerText(),
+      /Trinity College is pinned as your first stop but won't be first in this order, so using it clears that pin\. The new first stop, Kilmainham Gaol, won't be pinned\./,
+    );
+    assert.equal(await page.getByTestId("exhaustive-pin-last").count(), 0);
     const before = log.length;
     await page.getByRole("button", { name: "Use this order" }).click();
     await page.getByTestId("exhaustive-all_complete").waitFor({ state: "detached" });
@@ -847,6 +855,9 @@ describe("v2 planner (browser)", () => {
     assert.equal(await stopBox(4).inputValue(), "National Gallery");
     const stays = await page.locator('input[aria-label^="Stay at stop"]').filter({ visible: true }).evaluateAll((els) => els.map((e) => e.value));
     assert.deepEqual(stays, ["60", "0", "60", "0"]); // stays travel with their stops
+    const pins = await page.locator("button[aria-pressed]").filter({ hasText: /Pinned|Unpinned/ }).filter({ visible: true })
+      .evaluateAll((els) => els.map((e) => e.getAttribute("aria-pressed")));
+    assert.deepEqual(pins, ["false", "true"]); // new first stop not pinned; same last stop keeps its pin
     assert.match(await page.getByTestId("current-result").innerText(), /Kilmainham Gaol[\s\S]*Trinity College[\s\S]*Guinness Storehouse[\s\S]*National Gallery/);
   });
 
@@ -863,5 +874,42 @@ describe("v2 planner (browser)", () => {
     assert.equal(await page.getByTestId("plan-notice").innerText(), "Search cancelled — your plan is unchanged.");
     assert.equal(await page.getByTestId("current-result").innerText(), planBefore);
     assert.equal(await page.getByRole("button", { name: "Use this order" }).count(), 0);
+  });
+  test("test all 24 orders at mobile width: explanation, live progress, candidate list and result fit", async () => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const vis = (id) => page.getByTestId(id).filter({ visible: true });
+    const overflow = () => page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+    const fits = async (testId) => {
+      const box = await page.getByTestId(testId).filter({ visible: true }).boundingBox();
+      assert.ok(box && box.x >= 0 && box.x + box.width <= 390, `${testId} fits the viewport`);
+    };
+    await planFourStops(); // Plan switches the mobile view to the Plan tab
+    exhaustiveMode = "progressive";
+    await page.getByRole("button", { name: "Test all 24 orders" }).click();
+    await vis("exhaustive-explain").waitFor();
+    await fits("exhaustive-explain");
+    assert.equal(await overflow(), false);
+    await page.getByRole("button", { name: "Start the test" }).click();
+    const progress = vis("exhaustive-progress");
+    await progress.filter({ hasText: "Evaluated 24 of 24 orders (24 completed, 0 failed)…" }).waitFor();
+    await fits("exhaustive-progress");
+    assert.equal(await progress.locator("..").getByRole("button", { name: "Cancel" }).isVisible(), true);
+    assert.equal(await vis("current-result").isVisible(), true); // plan stays visible
+    assert.equal(await overflow(), false);
+    releaseRefresh(); // the server now sends the terminal result
+    await vis("exhaustive-all_complete").waitFor();
+    await fits("exhaustive-all_complete");
+    await vis("exhaustive-candidates").locator("summary").click();
+    assert.equal(await vis("exhaustive-candidate").first().isVisible(), true);
+    assert.equal(await vis("exhaustive-candidate").count(), 24);
+    assert.equal(await overflow(), false);
+    const use = page.getByRole("button", { name: "Use this order" });
+    await use.scrollIntoViewIfNeeded();
+    const box = await use.boundingBox();
+    assert.ok(box && box.x + box.width <= 390);
+    const before = log.length;
+    await use.click();
+    await vis("exhaustive-all_complete").waitFor({ state: "detached" });
+    assert.equal(log.length, before);
   });
 });

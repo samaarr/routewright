@@ -8,6 +8,7 @@ import {
   EXHAUSTIVE_INCOMPLETE,
   acceptableExhaustive,
   canRunExhaustive,
+  exhaustivePinChanges,
   exhaustiveRequest,
   initialState,
   progressLabel,
@@ -253,4 +254,30 @@ test("starting another operation supersedes the search", () => {
   const s = reducer(started(), { type: "planStarted", operationId: "op-plan-2" });
   assert.equal(s.operation.kind === "running" && s.operation.purpose, "plan");
   assert.equal(progress(s, 2, 2, 0), s); // its progress no longer applies
+});
+
+test("pin changes are disclosed before acceptance and match what acceptance does", () => {
+  const s0 = started();
+  const s = end(s0, finished(s0.revision)); // a,b,c,d -> c,a,b,d with both pins on
+  assert.deepEqual(exhaustivePinChanges(s), [{ end: "first", clearedId: "a", newEndpointId: "c" }]);
+  const accepted = reducer(s, { type: "exhaustiveAccepted" });
+  assert.equal(accepted.draft.pinFirst, false); // disclosed: cleared, new first not pinned
+  assert.equal(accepted.draft.pinLast, true); // "d" still last: not mentioned, kept
+
+  const unpinned = { ...s, draft: { ...s.draft, pinFirst: false } };
+  assert.deepEqual(exhaustivePinChanges(unpinned), []); // nothing pinned, nothing to clear
+
+  const both = permutations(ORIGINAL).find((o) => o[0] !== "a" && o[3] !== "d")!;
+  const r = finished(s0.revision);
+  const flipped = { ...r, winner: complete(both, 10), winner_plan: plan(both, s0.revision, "op-x", 10),
+    candidates: r.candidates.map((c) => (c.order.join() === both.join() ? complete(both, 10) : c.order.join() === WINNER.join() ? complete(WINNER, 20) : c)) };
+  const sBoth = end(s0, flipped);
+  assert.deepEqual(exhaustivePinChanges(sBoth).map((c) => [c.end, c.clearedId, c.newEndpointId]), [
+    ["first", "a", both[0]],
+    ["last", "d", both[3]],
+  ]);
+  const acceptedBoth = reducer(sBoth, { type: "exhaustiveAccepted" });
+  assert.equal(acceptedBoth.draft.pinFirst || acceptedBoth.draft.pinLast, false);
+
+  assert.deepEqual(exhaustivePinChanges(end(started(), interrupted(started().revision))), []); // not acceptable
 });

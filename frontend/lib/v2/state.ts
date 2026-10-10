@@ -702,6 +702,35 @@ function acceptExhaustive(state: PlannerState): PlannerState {
   };
 }
 
+/**
+ * What accepting the experiment's winner does to the endpoint pins, so the
+ * card can disclose it before "Use this order". Pins are kept by stop
+ * identity: a pinned stop that stops being an endpoint loses its pin, and the
+ * stop that becomes the new endpoint is not pinned.
+ */
+export interface PinChange {
+  end: "first" | "last";
+  /** The pinned stop that will no longer be at this end (its pin is cleared). */
+  clearedId: string;
+  /** The stop that becomes this end, left unpinned. */
+  newEndpointId: string;
+}
+
+export function exhaustivePinChanges(state: PlannerState): PinChange[] {
+  const r = acceptableExhaustive(state);
+  if (!r || !r.winner) return [];
+  const before = state.draft.stops.map((s) => s.id);
+  const after = r.winner.order;
+  const changes: PinChange[] = [];
+  if (state.draft.pinFirst && after[0] !== before[0]) {
+    changes.push({ end: "first", clearedId: before[0], newEndpointId: after[0] });
+  }
+  if (state.draft.pinLast && after[after.length - 1] !== before[before.length - 1]) {
+    changes.push({ end: "last", clearedId: before[before.length - 1], newEndpointId: after[after.length - 1] });
+  }
+  return changes;
+}
+
 /** Compare is offered on a current, complete plan with at least three stops. */
 export function canCompare(state: PlannerState): boolean {
   const r = state.result;
