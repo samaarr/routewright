@@ -118,6 +118,8 @@ Planning, refresh and the standard comparison are unchanged.
 - Wording never claims globally optimal transit routing: Google chooses each
   journey; the search exhausts stop orders, not connections or deliberate
   waiting.
+- Access limited to the tester allowlist (verified client IP; fails closed
+  when none configured); enforced on the backend, mirrored in the UI.
 - **Live run not yet approved.** One run can use up to 72 Compute Routes calls
   plus 1 Place Details Pro and 4 Place Details Enterprise; the production
   daily ComputeRoutes quota is **100**, so one run consumes most of a day's

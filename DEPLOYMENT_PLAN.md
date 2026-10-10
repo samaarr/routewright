@@ -71,10 +71,20 @@ has been logged since that deployment. `197e443` (pin-change disclosure,
 mobile coverage) is local only; the live UI lacks the disclosure until it
 is pushed.
 
-**App-side usage today:** 0 Google calls since the deployment (no metrics
-lines; Upstash holds no limit or provider-budget keys). Google's own
-remaining quota cannot be read from here (no Cloud Console/gcloud access);
-other uses of the same project would not appear in these logs.
+**Usage today: UNKNOWN.** Absent metrics lines and expired Redis keys do
+not establish zero usage (corrected 2026-10-10). The run requires Google
+headroom confirmed in the Cloud Console: 75 ComputeRoutes, 15 GetPlace
+requests, 10 Autocomplete requests and 2 map loads.
+
+**Access (2026-10-10, `d6edef5`, local):** the experiment endpoint is
+limited to the tester allowlist (`RATE_LIMIT_WHITELIST_IPS`) using the
+verified client identity; it fails closed when no tester is configured, and
+the UI offers the button only after `GET /api/v2/experiments` confirms it.
+Before the run, the tester's public IP must be on the allowlist (a 429 seen
+from this workstation on 2026-10-07 suggests its address was not) and
+`GET /api/v2/experiments` from the tester's browser must return true
+(no provider calls). Allowlisted testers keep their existing per-IP
+rate-limit exemption.
 
 **Run:** Dublin, transit, a future weekday 10:00, four ordinary distinct
 venues (Trinity College, Kilmainham Gaol, National Gallery of Ireland,
@@ -90,8 +100,9 @@ Guinness Storehouse); select, plan, then "Test all 24 orders" once.
 Preconditions (owner reads Google Cloud → APIs & Services → Quotas, today
 in Pacific time): ComputeRoutes remaining ≥ 75 of 100; GetPlaceRequest
 ≥ 15; AutocompletePlacesRequest ≥ 10; Map loads ≥ 2. Do not raise quotas.
-No retries; stop on any quota error. Decide first whether to push
-`197e443` so the run exercises the reviewed UI. A second run the same day
+Run once: no automatic retries, no quota increases; stop on any quota
+error. Push `197e443`, `fccbf22` and `d6edef5` (approval required) so the
+run exercises the reviewed, tester-only build. A second run the same day
 would exceed the ComputeRoutes quota.
 
 ## 1. Decision record

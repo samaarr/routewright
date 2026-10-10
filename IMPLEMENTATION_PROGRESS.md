@@ -1063,9 +1063,16 @@ Routes), mobile screenshot review of the result card, deployment.
 - Checks: unit 100, browser 34 on Node 22 and 23, type-check, lint;
   backend experiment tests 24/24.
 - Found: `8d3d184` was pushed and auto-deployed (Railway `5d6537c7`,
-  Vercel); experiment reachable in production, unused so far. Controlled
-  live run prepared in DEPLOYMENT_PLAN.md (≤ 75 Compute Routes incl. the
-  3-call initial plan); Google's remaining quota must be read in the Console.
+  Vercel); the experiment is reachable in production. Usage since then is
+  UNKNOWN — absent logs and expired Redis keys do not establish zero usage
+  (corrected). Controlled live run prepared in DEPLOYMENT_PLAN.md (≤ 75
+  Compute Routes incl. the 3-call initial plan); headroom must be confirmed
+  in the Google Cloud Console.
+- Tester-only access (`d6edef5`, local): backend 403 for anyone not on the
+  tester allowlist (verified client identity, fails closed when empty),
+  `GET /api/v2/experiments` for the UI; 11 backend tests (mutation-checked),
+  client and browser tests. Backend 461 passed, 4 skipped; frontend unit
+  101, browser 35 on Node 22 and 23.
 
 ## Next action
 
