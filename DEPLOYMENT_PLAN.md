@@ -61,6 +61,39 @@ code. Suggestion (not applied): Railway "wait for CI" and watch paths
 
 ---
 
+## Controlled live run of the exhaustive experiment — prepared 2026-10-10 (NOT RUN)
+
+**Deployment state (observed 2026-10-10):** `8d3d184` (experiment backend, UI
+and records) was pushed and auto-deployed — Railway `5d6537c7` (2026-10-09
+07:20 UTC) and a Vercel production build ~20 h earlier; CI green. The
+experiment is therefore already reachable in production, but no operation
+has been logged since that deployment. `197e443` (pin-change disclosure,
+mobile coverage) is local only; the live UI lacks the disclosure until it
+is pushed.
+
+**App-side usage today:** 0 Google calls since the deployment (no metrics
+lines; Upstash holds no limit or provider-budget keys). Google's own
+remaining quota cannot be read from here (no Cloud Console/gcloud access);
+other uses of the same project would not appear in these logs.
+
+**Run:** Dublin, transit, a future weekday 10:00, four ordinary distinct
+venues (Trinity College, Kilmainham Gaol, National Gallery of Ireland,
+Guinness Storehouse); select, plan, then "Test all 24 orders" once.
+
+| Step | Compute Routes | Place Details | Autocomplete | Map loads |
+|------|---------------:|--------------:|-------------:|----------:|
+| Selection (city + 4 stops) | – | 5 (1 Pro, 4 Essentials) | ~5 | 1 |
+| Initial plan | 3 | 5 (1 Pro, 4 Enterprise) | – | – |
+| Exhaustive run | ≤ 72 | 5 (1 Pro, 4 Enterprise) | – | – |
+| **Total (max)** | **≤ 75** | **15** | **~5–10** | **1–2** |
+
+Preconditions (owner reads Google Cloud → APIs & Services → Quotas, today
+in Pacific time): ComputeRoutes remaining ≥ 75 of 100; GetPlaceRequest
+≥ 15; AutocompletePlacesRequest ≥ 10; Map loads ≥ 2. Do not raise quotas.
+No retries; stop on any quota error. Decide first whether to push
+`197e443` so the run exercises the reviewed UI. A second run the same day
+would exceed the ComputeRoutes quota.
+
 ## 1. Decision record
 
 ### Approved (2026-10-06)

@@ -1049,6 +1049,24 @@ bundle check, audit. Panel screenshots reviewed at desktop width.
 Not done: live run (needs approval; uses up to 72 of 100 daily Compute
 Routes), mobile screenshot review of the result card, deployment.
 
+### Experiment review (2026-10-10)
+- Mobile (390 px): explanation, live progress (streamed from the local test
+  server), expanded 24-row candidate list, result and acceptance — no
+  horizontal overflow; screenshots reviewed. New browser test.
+- Acceptance now discloses pin changes (`exhaustivePinChanges`): a pinned
+  endpoint that stops being an endpoint loses its pin; the new endpoint is
+  not pinned. Unit + browser assertions (`197e443`, local).
+- Original-order tie preference covered by
+  `test_ranking_completion_then_distance_then_original_then_instance_ids`
+  and `test_equal_completion_prefers_shorter_path_then_original`; both fail
+  when the preference is removed from the ranking key (mutation check).
+- Checks: unit 100, browser 34 on Node 22 and 23, type-check, lint;
+  backend experiment tests 24/24.
+- Found: `8d3d184` was pushed and auto-deployed (Railway `5d6537c7`,
+  Vercel); experiment reachable in production, unused so far. Controlled
+  live run prepared in DEPLOYMENT_PLAN.md (≤ 75 Compute Routes incl. the
+  3-call initial plan); Google's remaining quota must be read in the Console.
+
 ## Next action
 
 1. Closed-prototype use and feedback.
